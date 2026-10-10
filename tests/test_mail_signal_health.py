@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from dashboard import server
+from _installed_client_payload import copy_client_library
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,7 +46,10 @@ def retired_signals(tmp_path, monkeypatch):
     # Execute the real delivery functions once; no service/lock or watch loop.
     source = source[:source.index('if command -v fswatch &>/dev/null; then')]
     source = source.replace('\nacquire_lock\n', '\n# fixture: no service lock\n')
-    runner = tmp_path / 'watch-once.sh'
+    install_root = home / '.agentstack'
+    copy_client_library(install_root)
+    runner = install_root / 'hooks/watch-once.sh'
+    runner.parent.mkdir(parents=True, exist_ok=True)
     runner.write_text(source + '\nprocess_existing_signals\nwait\n')
     def call(*args):
         return subprocess.run([str(wrapper), *args], capture_output=True, text=True, timeout=10, check=True)
