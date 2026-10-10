@@ -49,15 +49,42 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def legacy_policy():
+    """Read the existing shell's numeric declarations; do not duplicate defaults.
+
+    Only these data assignments are read, never executed. The old watcher body
+    stays byte-identical and remains the source of its delivery bounds.
+    """
+    import re
+    source=(Path(__file__).resolve().parents[2]/'hooks/watch_agent_mail_signals.sh').read_text()
+    def number(pattern):
+        found=re.search(pattern,source,re.M)
+        if found is None:raise ValueError('LEGACY_DELIVERY_POLICY_UNAVAILABLE')
+        return int(found.group(1))
+    cooldown=number(r'^RETRY_COOLDOWN=(\d+)')
+    poll=number(r'^POLL_INTERVAL=(\d+)')
+    scan=number(r'Linux\) SCAN_INTERVAL_DEFAULT=(\d+)') if sys.platform.startswith('linux') else number(r'\*\) SCAN_INTERVAL_DEFAULT=(\d+)')
+    configured=os.environ.get('AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL','')
+    if configured.isdecimal() and int(configured)>=1:scan=int(configured)
+    default=number(r'HEADLESS_REPLY_TIMEOUT="\$\{AGENTSTACK_HEADLESS_REPLY_TIMEOUT:-(\d+)\}"')
+    timeout=os.environ.get('AGENTSTACK_HEADLESS_REPLY_TIMEOUT','')
+    timeout=int(timeout) if timeout.isdecimal() and 1<=int(timeout)<=default else default
+    return {'max_attempts':None,'lease':timeout+cooldown,'backoff':lambda n:cooldown,
+            'poll':poll,'scan':scan,'coalesce':0,'wakes_per_hour':None,'process_timeout':timeout}
+
+
 def policy(channel, route_kind=None):
-    """One channel selector, preserving the legacy delivery bounds."""
+    """One channel selector using the existing configuration readers."""
     if route_kind == 'codex-app' or channel == 'codex-app':
-        return {'max_attempts': 5, 'lease': 900, 'backoff': lambda n: min(300, 2 ** n),
-                'poll': .25, 'coalesce': 2, 'wakes_per_hour': 12}
-    timeout = os.environ.get('AGENTSTACK_HEADLESS_REPLY_TIMEOUT', '300')
-    timeout = int(timeout) if timeout.isdecimal() and 1 <= int(timeout) <= 300 else 300
-    return {'max_attempts': None, 'lease': timeout + 30, 'backoff': lambda n: 30,
-            'poll': 30, 'coalesce': 0, 'wakes_per_hour': None}
+        source=Path(__file__).resolve().parents[2]/'integrations/codex_app/src'
+        if str(source) not in sys.path:sys.path.insert(0,str(source))
+        from agentstack_codex_app.daemon import wake_timing_settings
+        values=wake_timing_settings(os.environ)
+        return {'max_attempts':values['wake_max_attempts'],'lease':values['wake_lease_seconds'],
+                'backoff':lambda n:min(values['wake_max_backoff_seconds'],values['wake_base_backoff_seconds']*2**(n-1)),
+                'poll':values['wake_poll_seconds'],'coalesce':values['wake_coalesce_seconds'],
+                'wakes_per_hour':values['wake_limit_per_hour'],'process_timeout':values['wake_timeout_seconds']}
+    return legacy_policy()
 
 
 def format_notification(message):
@@ -256,6 +283,10 @@ class RuntimeDelivery:
         except self.error as exc:
             return False, str(exc)
 
+    def ending_incomplete(self, row):
+        return (row['phase']=='ended' and (row.get('operator_resolution') or {}).get('action')=='confirmed-ended'
+                and any(not live.get('ended') for _,live in self.live_rows(row['launch_id'])))
+
     def status(self, launch_id):
         with self.client.operation_mutex():
             saved = self.launch()
@@ -265,8 +296,8 @@ class RuntimeDelivery:
             phase = saved['phase']
             live = any(not row.get('ended') for _, row in self.live_rows(launch_id))
             ready = verified and phase == 'running' and live
-            unknown = phase in ('exec-unknown', 'abandoned')
-            observation = 'verified-running' if ready else ('verified-ended' if phase == 'ended' else ('verified-not-executed' if phase in ('planned','gated','cancelled') else 'unknown'))
+            unknown = phase in ('exec-unknown', 'abandoned') or self.ending_incomplete(saved)
+            observation = 'verified-running' if ready else ('verified-ended' if phase == 'ended' and not unknown else ('verified-not-executed' if phase in ('planned','gated','cancelled') else 'unknown'))
             return {'ok':True, 'state_sha256':self.state_digest('launch',launch_id,saved),
                     'operator_required':unknown, 'next_operations':['launch-resolve'] if unknown else (['launch-retry','launch-cancel'] if phase in ('planned','gated') else []),
                     'current':self.status_current(), 'remote_owner_verified':verified, 'reason':reason or saved['error'],
@@ -278,6 +309,7 @@ class RuntimeDelivery:
         with c.operation_mutex():
             if self.launch_path.exists() or self.launch_path.is_symlink():
                 previous = self.launch()
+                if self.ending_incomplete(previous):self.fail('LAUNCH_PENDING_CONFLICT')
                 if previous['phase'] not in ('ended', 'cancelled'):
                     self.fail('LAUNCH_OUTCOME_UNKNOWN' if previous['phase'] in ('exec-unknown','abandoned') else 'LAUNCH_PENDING_CONFLICT')
             cwd = Path(cwd or os.getcwd()).resolve(strict=True)
@@ -338,6 +370,7 @@ class RuntimeDelivery:
             self.save(self.launch_path,row,'launch_intent')
             if phase == 'ended':
                 for name, live in lives:
+                    if live.get('ended'):continue
                     self.api['atomic_json'](c.runtime_dir/'live-sessions'/name,{**live,'ended':True})
             return self.status(row['launch_id'])
 
@@ -347,13 +380,16 @@ class RuntimeDelivery:
             args['message_ids']=[mid]
         return self.client.call('fetch_inbox', args)
 
-    def captured_matches(self, intent):
+    def captured_owner_matches(self, intent):
         current = self.current()
-        return all(intent.get(k) == current[k] for k in ('expected_server_instance_id','candidate_generation','authority_epoch','agent_id','credential_generation','launch_id'))
+        return all(intent.get(k) == current[k] for k in ('expected_server_instance_id','candidate_generation','authority_epoch','agent_id','credential_generation'))
 
-    def completion(self, path, intent):
+    def captured_matches(self, intent):
+        return self.captured_owner_matches(intent) and intent.get('launch_id')==self.current()['launch_id']
+
+    def completion(self, path, intent, *, previous_launch=False):
         c = self.client
-        if not self.captured_matches(intent):
+        if not (self.captured_owner_matches(intent) if previous_launch else self.captured_matches(intent)):
             self.fail('DELIVERY_ROUTE_CHANGED')
         intent['phase']='callback-pending'
         self.save(path,intent,'delivery_intent')
@@ -381,37 +417,37 @@ class RuntimeDelivery:
         path.unlink()
         return {'ok':True,'message_id':intent['message_id'],'state':'complete'}
 
-    def prepare(self, mid, channel, *, admissible=True, admission_reason=None):
+    def prepare(self, mid, channel, *, admissible=True, admission_reason=None, exclude_self=False):
         c=self.client
         with self.message(mid) as path:
             previous = self.local(path,'delivery_intent') if path.exists() or path.is_symlink() else None
-            if previous and not self.captured_matches(previous):
-                self.fail('DELIVERY_ROUTE_CHANGED')
-            if previous and previous['phase'] in ('external-confirmed','callback-pending'):
-                self.completion(path,previous)
-                return self.prepared_result(mid,'noop')
-            if not admissible or os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1':
-                return self.prepared_result(mid,'retry-wait')
-            messages=self.pending_messages(mid)
-            if not messages:
-                if previous:path.unlink()
-                return self.prepared_result(mid,'noop')
-            if not notification_eligible(messages[0]):return self.prepared_result(mid,'retry-wait')
-            stamp=datetime.now(timezone.utc)
+            minimum=os.environ.get('AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE','low').lower()
             if previous:
-                if previous['phase']=='blocked' and previous['error']!='WAKE_RATE_LIMITED':return self.prepared_result(mid,'blocked',previous)
+                if previous['phase']=='blocked' and previous['error'] not in ('WAKE_RATE_LIMITED','BELOW_MIN_IMPORTANCE'):
+                    return self.prepared_result(mid,'blocked',previous)
+                if not self.captured_owner_matches(previous):
+                    previous.update(phase='blocked',error='DELIVERY_ROUTE_CHANGED')
+                    self.save(path,previous,'delivery_intent')
+                    return self.prepared_result(mid,'blocked',previous)
+                if previous['phase'] in ('external-confirmed','callback-pending'):
+                    self.completion(path,previous,previous_launch=True)
+                    return self.prepared_result(mid,'noop')
+                if not self.captured_matches(previous):
+                    # An old launch is evidence of possible delivery, not a
+                    # poison pill for the next session's notification stream.
+                    previous.update(**self.current(),phase='planned',error=None,
+                        next_attempt_at=None,attempt_expires_at=None,duplicate_possible=True)
+                    self.save(path,previous,'delivery_intent')
+                if previous['phase']=='blocked' and previous['error']=='WAKE_RATE_LIMITED' and admission_reason=='WAKE_RATE_LIMITED':
+                    return self.prepared_result(mid,'blocked',previous)
+                if previous['phase']=='blocked' and previous['error']=='BELOW_MIN_IMPORTANCE' and previous.get('notify_min_importance')==minimum:
+                    return self.prepared_result(mid,'blocked',previous)
+                stamp=datetime.now(timezone.utc)
                 times=[datetime.fromisoformat(previous[k]) for k in ('next_attempt_at','attempt_expires_at') if previous.get(k)]
                 if times and stamp < max(times):return self.prepared_result(mid,'retry-wait',previous)
-            if admission_reason is not None:
-                if admission_reason != 'WAKE_RATE_LIMITED' or channel != 'codex-app':
-                    self.fail('ARGUMENTS_UNSUPPORTED')
-                row = previous or {'kind':'orrery-global-delivery-intent-v1', **self.current(),
-                    'message_id':mid, 'attempt_id':str(uuid.uuid4()), 'attempt_count':0,
-                    'channel':channel, 'duplicate_possible':False, 'operator_resolution':None}
-                row.update(phase='blocked', error=admission_reason,
-                    next_attempt_at=None, attempt_expires_at=None)
-                self.save(path,row,'delivery_intent')
-                return self.prepared_result(mid,'blocked',row)
+            if not admissible or os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1':
+                return self.prepared_result(mid,'retry-wait')
+            stamp=datetime.now(timezone.utc)
             route_kind='codex-app' if c.registration_metadata().get('program')=='codex-app' else None
             selected=policy(channel,route_kind)
             count=previous['attempt_count'] if previous else 0
@@ -419,6 +455,23 @@ class RuntimeDelivery:
                 previous.update(phase='blocked',error='DELIVERY_ATTEMPTS_EXHAUSTED')
                 self.save(path,previous,'delivery_intent')
                 return self.prepared_result(mid,'blocked',previous)
+            messages=self.pending_messages(mid)
+            if not messages:
+                if previous:path.unlink()
+                return self.prepared_result(mid,'noop')
+            base=previous or {'kind':'orrery-global-delivery-intent-v1',**self.current(),
+                'message_id':mid,'attempt_id':str(uuid.uuid4()),'attempt_count':0,
+                'channel':channel,'duplicate_possible':False,'operator_resolution':None,
+                'next_attempt_at':None,'attempt_expires_at':None}
+            reason=('SELF_MESSAGE' if exclude_self and messages[0].get('sender',{}).get('agent_id')==c.identity['agent_id'] else
+                    'BELOW_MIN_IMPORTANCE' if not notification_eligible(messages[0]) else admission_reason)
+            if reason is not None:
+                if reason not in ('SELF_MESSAGE','BELOW_MIN_IMPORTANCE','WAKE_RATE_LIMITED'):
+                    self.fail('ARGUMENTS_UNSUPPORTED')
+                base.update(phase='blocked',error=reason,next_attempt_at=None,attempt_expires_at=None)
+                if reason=='BELOW_MIN_IMPORTANCE':base['notify_min_importance']=minimum
+                self.save(path,base,'delivery_intent')
+                return self.prepared_result(mid,'blocked',base)
             launch=self.launch()
             if launch['phase']!='running':return self.prepared_result(mid,'retry-wait')
             row={'kind':'orrery-global-delivery-intent-v1',**self.current(), 'message_id':mid,
@@ -445,7 +498,7 @@ class RuntimeDelivery:
                 self.save(path,row,'delivery_intent')
                 return self.completion(path,row)
             row['error']='KNOWN_NOT_SUBMITTED' if known_failure else 'DELIVERY_OUTCOME_UNKNOWN'
-            row['duplicate_possible']=not known_failure
+            row['duplicate_possible']=row['duplicate_possible'] or not known_failure
             if known_failure:row['attempt_expires_at']=None
             self.save(path,row,'delivery_intent')
             return {'ok':True,'message_id':mid,'state':'retry-planned'}
@@ -558,13 +611,15 @@ class RuntimeDelivery:
         return runpy.run_path(str(helper))['_transcript_header_session_id'](Path(transcript))
 
     def generated_config(self, path, value):
-        # Native provider formats have no ORRERY role marker. They are immutable
-        # derived output: an existing different value is never overwritten.
-        if path.exists() or path.is_symlink():
-            if self.read(path) != value:
-                self.fail('OUTPUT_SCHEMA_INVALID')
-            return
-        self.api['atomic_json'](path, value, before_replace=lambda: self.fail('OUTPUT_SCHEMA_INVALID') if path.exists() or path.is_symlink() else None)
+        # These fixed native files are wholly derived, never user settings.
+        # Recompute under C so interpreter/wrapper updates cannot strand a root.
+        with self.client.operation_mutex():
+            try:previous=self.api['read_private'](path) if path.exists() or path.is_symlink() else None
+            except (OSError,ValueError,self.error):self.fail('GENERATED_CONFIG_UNREADABLE')
+            def unchanged():
+                current=self.api['read_private'](path) if path.exists() or path.is_symlink() else None
+                if current!=previous:self.fail('GENERATED_CONFIG_CHANGED')
+            self.api['atomic_json'](path,value,before_replace=unchanged)
 
     def process_binding(self, session_id=None):
         with self.client.operation_mutex():
@@ -707,17 +762,16 @@ class RuntimeDelivery:
             import shlex
             entry = shlex.join([sys.executable,str(Path(__file__).with_name('runtime_client.py')),'entry','session-start','--context',str(c.path)])
             hooks = {'SessionStart':[{'hooks':[{'type':'command','command':entry}]}]}
-            if provider=='claude':
-                def hook(operation):
-                    return {'type':'command','command':shlex.join([sys.executable,
-                        str(Path(__file__).with_name('runtime_client.py')),'entry',operation,'--context',str(c.path)])}
-                hooks.update(PreToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('pre-edit')]}],
-                    PostToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('post-edit')]},
-                                 {'hooks':[hook('notifications')]}],
-                    SessionEnd=[{'hooks':[hook('end-session')]}])
-            settings = home / ('settings.json' if provider=='claude' else 'hooks.json')
+            def hook(operation):
+                return {'type':'command','command':shlex.join([sys.executable,
+                    str(Path(__file__).with_name('runtime_client.py')),'entry',operation,'--context',str(c.path)])}
+            hooks.update(PreToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('pre-edit')]}],
+                PostToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('post-edit')]},
+                             {'hooks':[hook('notifications')]}],
+                SessionEnd=[{'hooks':[hook('end-session')]}])
+            settings = home / 'settings.json'
             self.generated_config(settings,{'hooks':hooks})
-            if provider=='claude':args += ['--settings',str(settings)]
+            args += ['--settings',str(settings)]
         elif provider=='codex':
             self.codex_trust()
         args += tool_flags
@@ -872,14 +926,14 @@ class RuntimeDelivery:
             action=resolution['action']
             if action not in ('retry-at-least-once','confirm-external-completed','abandon-without-consuming'):
                 self.fail('ARGUMENTS_UNSUPPORTED')
-            if action!='abandon-without-consuming' and not self.captured_matches(row):self.fail('DELIVERY_ROUTE_CHANGED')
+            if action=='confirm-external-completed' and not self.captured_owner_matches(row):self.fail('DELIVERY_ROUTE_CHANGED')
             row.update(operator_resolution=resolution)
             if action=='confirm-external-completed':
                 row['phase']='external-confirmed'
             elif action=='abandon-without-consuming':
                 row.update(phase='blocked',error='OPERATOR_ABANDONED')
             else:
-                row.update(phase='planned',error=None,next_attempt_at=None,attempt_expires_at=None,duplicate_possible=True,attempt_count=0)
+                row.update(**self.current(),phase='planned',error=None,next_attempt_at=None,attempt_expires_at=None,duplicate_possible=True,attempt_count=0)
             self.save(path,row,'delivery_intent')
         return self.delivery_status(mid)
 
@@ -917,12 +971,13 @@ class RuntimeDelivery:
             if operation=='launch-retry':
                 name='orrery-'+row['launch_id']
                 probe=subprocess.run(['tmux','has-session','-t','='+name],capture_output=True,text=True,timeout=5)
-                if probe.returncode==1 and 'session' in probe.stderr.lower():
+                if probe.returncode!=0:
                     args=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(self.client.path),'execute-launch',row['launch_id'],row['receipt_nonce']]
                     created=subprocess.run(['tmux','new-session','-d','-s',name,'-c',row['cwd'],__import__('shlex').join(args)],capture_output=True,timeout=10)
-                    if created.returncode:self.fail('LAUNCH_OUTCOME_UNKNOWN')
-                elif probe.returncode!=0:
-                    self.fail('LAUNCH_OUTCOME_UNKNOWN')
+                    if created.returncode:
+                        # Another retry may have created this exact UUID session.
+                        verified=subprocess.run(['tmux','has-session','-t','='+name],capture_output=True,timeout=5)
+                        if verified.returncode:self.fail('LAUNCH_OUTCOME_UNKNOWN')
         response=definition.get('response_schema')
         if response is None:
             name,field=definition['response_ref'].split('.')
@@ -1061,7 +1116,7 @@ class RuntimeDelivery:
                 'agent_name':c.identity['name'],'message':messages[0],
                 'reply_request_id':str(uuid.uuid5(uuid.NAMESPACE_OID,c.binding['expected_server_instance_id']+':'+str(c.identity['agent_id'])+':'+str(mid)))}
             with socket.socket(socket.AF_UNIX) as stream:
-                stream.settimeout(policy('persistent')['lease']-30)
+                stream.settimeout(policy('persistent')['process_timeout'])
                 stream.connect(str(path));stream.sendall(canonical(request).encode()+b'\n')
                 data=b''
                 while not data.endswith(b'\n') and len(data)<=65536:
@@ -1108,17 +1163,33 @@ class RuntimeDelivery:
         # The existing intent recovers an acknowledgement after the server has
         # consumed its hint. There is no second completion ledger.
         for mid in self.intent_ids():
-            with self.message(mid) as path:
-                if not path.exists() and not path.is_symlink():continue
-                row=self.local(path,'delivery_intent')
-                if row['phase'] not in ('external-confirmed','callback-pending'):continue
-                if not self.captured_matches(row):self.fail('DELIVERY_ROUTE_CHANGED')
-                self.completion(path,row)
+            try:
+                with self.message(mid) as path:
+                    if not path.exists() and not path.is_symlink():continue
+                    row=self.local(path,'delivery_intent')
+                    if row['phase'] not in ('external-confirmed','callback-pending'):continue
+                    if not self.captured_owner_matches(row):
+                        row.update(phase='blocked',error='DELIVERY_ROUTE_CHANGED')
+                        self.save(path,row,'delivery_intent')
+                        continue
+                    self.completion(path,row,previous_launch=True)
+            except (self.error,OSError,ValueError) as exc:self.report_error(mid,exc)
+
+    def report_error(self, scope, exc):
+        reason=str(exc) if isinstance(exc,self.error) else 'LOCAL_STATE_UNAVAILABLE'
+        print('global-notification '+str(scope)+': '+reason,file=sys.stderr)
 
     def hook_notifications(self, channel):
         if os.environ.get('AGENTSTACK_MAIL_DISABLED')=='1':return []
-        self.reconcile_confirmed()
-        return [item for mid in self.hints() if (item:=self.prepare(mid,channel))['state']=='handoff']
+        try:self.reconcile_confirmed()
+        except (self.error,OSError,ValueError) as exc:self.report_error('reconcile',exc)
+        result=[]
+        for mid in self.hints():
+            try:
+                item=self.prepare(mid,channel)
+                if item['state']=='handoff':result.append(item)
+            except (self.error,OSError,ValueError) as exc:self.report_error(mid,exc)
+        return result
 
     def diagnostics(self):
         warnings=[]
@@ -1146,8 +1217,8 @@ class RuntimeDelivery:
             if not __import__('re').fullmatch(r'[1-9][0-9]*',folder.name):continue
             route_dir=folder
             if not (route_dir/'route.json').exists() and not (route_dir/'route.json').is_symlink():continue
-            self.api['safe_private_directory'](route_dir)
             try:
+                self.api['safe_private_directory'](route_dir)
                 with self.dir_lock(route_dir,exclusive=False):
                     route=self.local(route_dir/'route.json','runtime_route')
                     target=self.api['RuntimeClient'](c.clients_parent/route['client_name']/'runtime-client.json')
@@ -1158,8 +1229,10 @@ class RuntimeDelivery:
                 delivery.reconcile_confirmed()
                 persistent=target.profile_path.exists() and delivery.read(target.profile_path).get('execution',{}).get('interaction')=='headless'
                 for mid in delivery.hints():
-                    if persistent:delivery.deliver_persistent(mid)
-                    else:delivery.deliver_tmux(mid)
+                    try:
+                        if persistent:delivery.deliver_persistent(mid)
+                        else:delivery.deliver_tmux(mid)
+                    except (self.error,OSError,ValueError) as exc:delivery.report_error(mid,exc)
                 self._watch_errors.pop(folder.name,None)
             except (self.error,OSError,ValueError) as exc:
                 # Diagnostics are derived from the existing intent, no warning
@@ -1168,3 +1241,35 @@ class RuntimeDelivery:
                 if self._watch_errors.get(folder.name)!=reason:
                     print('global-mail-watcher: '+reason,file=sys.stderr)
                     self._watch_errors[folder.name]=reason
+
+    def watch(self, stop=None):
+        """Directory events with the legacy rescue interval, or legacy polling."""
+        import select
+        import threading
+        stop=stop or threading.Event()
+        settings=legacy_policy()
+        directory=self.client.runtime/'signals'
+        self.api['safe_private_directory'](directory)
+        events=None
+        if shutil.which('fswatch'):
+            try:
+                events=subprocess.Popen(['fswatch','-0','-r','--event','Created','--event','Updated',str(directory)],
+                    stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            except OSError:events=None
+        try:
+            while not stop.is_set():
+                self.watch_once()
+                if stop.is_set():break
+                if events is None:
+                    stop.wait(settings['poll'])
+                elif events.poll() is not None:
+                    events.stdout.close();events=None
+                else:
+                    ready,_,_=select.select([events.stdout],[],[],settings['scan'])
+                    if ready:os.read(events.stdout.fileno(),65536)
+        finally:
+            if events is not None:
+                events.terminate()
+                try:events.wait(timeout=5)
+                except subprocess.TimeoutExpired:events.kill();events.wait()
+                events.stdout.close()

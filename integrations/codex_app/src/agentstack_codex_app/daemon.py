@@ -84,14 +84,14 @@ class BridgeConfig:
     project_slug: str | None = None
     delivery_db_path: Path | None = None
     cold_wake_enabled: bool = True
-    wake_poll_seconds: float = 0.25
-    wake_coalesce_seconds: float = 2.0
-    wake_lease_seconds: float = 900.0
-    wake_base_backoff_seconds: float = 2.0
-    wake_max_backoff_seconds: float = 300.0
-    wake_max_attempts: int = 5
-    wake_limit_per_hour: int = 12
-    wake_timeout_seconds: float = 900.0
+    wake_poll_seconds: float = WakePolicy().poll_seconds
+    wake_coalesce_seconds: float = WakePolicy().coalesce_seconds
+    wake_lease_seconds: float = WakePolicy().lease_seconds
+    wake_base_backoff_seconds: float = WakePolicy().base_backoff_seconds
+    wake_max_backoff_seconds: float = WakePolicy().max_backoff_seconds
+    wake_max_attempts: int = WakePolicy().max_attempts
+    wake_limit_per_hour: int = WakePolicy().wakes_per_hour
+    wake_timeout_seconds: float = WakePolicy().process_timeout_seconds
     codex_binary: str = "codex"
     plugin_id: str = "agentstack-codex-app@agentstack-local"
     skip_git_repo_check: bool = False
@@ -155,67 +155,7 @@ class BridgeConfig:
             )
         codex_home = codex_provider_home(env)
         execution_settings = wake_execution_settings(env)
-        wake_poll_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_POLL_SECONDS",
-            0.25,
-            minimum=0.05,
-            maximum=5,
-        )
-        wake_coalesce_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_COALESCE_SECONDS",
-            2,
-            minimum=0,
-            maximum=10,
-        )
-        wake_timeout_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_TIMEOUT_SECONDS",
-            900,
-            minimum=30,
-            maximum=7200,
-        )
-        wake_lease_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_LEASE_SECONDS",
-            900,
-            minimum=30,
-            maximum=7200,
-        )
-        wake_base_backoff_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_BASE_BACKOFF_SECONDS",
-            2,
-            minimum=0.1,
-            maximum=300,
-        )
-        wake_max_backoff_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS",
-            300,
-            minimum=1,
-            maximum=3600,
-        )
-        if wake_max_backoff_seconds < wake_base_backoff_seconds:
-            raise ValueError(
-                "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS must not be "
-                "less than the base backoff"
-            )
-        wake_limit_per_hour = _env_int(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR",
-            12,
-            minimum=1,
-            maximum=120,
-        )
-        wake_max_attempts = _env_int(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_MAX_ATTEMPTS",
-            5,
-            minimum=1,
-            maximum=20,
-        )
+        timing_settings = wake_timing_settings(env)
         delivery_value = (
             env.get("AGENTSTACK_CODEX_APP_DELIVERY_DB") or ""
         ).strip()
@@ -252,19 +192,87 @@ class BridgeConfig:
                 else runtime_dir / "delivery.sqlite3"
             ),
             cold_wake_enabled=execution_settings["cold_wake_enabled"],
-            wake_poll_seconds=wake_poll_seconds,
-            wake_coalesce_seconds=wake_coalesce_seconds,
-            wake_lease_seconds=wake_lease_seconds,
-            wake_base_backoff_seconds=wake_base_backoff_seconds,
-            wake_max_backoff_seconds=wake_max_backoff_seconds,
-            wake_max_attempts=wake_max_attempts,
-            wake_limit_per_hour=wake_limit_per_hour,
-            wake_timeout_seconds=wake_timeout_seconds,
+            **timing_settings,
             codex_binary=execution_settings["codex_binary"],
             plugin_id=execution_settings["plugin_id"],
             skip_git_repo_check=execution_settings["skip_git_repo_check"],
             stale_after_seconds=stale_after_seconds,
         )
+
+
+def wake_timing_settings(env: Mapping[str, str]) -> dict[str, Any]:
+    """One reader/defaults source for legacy and global wake timing."""
+    wake_poll_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_POLL_SECONDS",
+        WakePolicy().poll_seconds,
+        minimum=0.05,
+        maximum=5,
+    )
+    wake_coalesce_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_COALESCE_SECONDS",
+        WakePolicy().coalesce_seconds,
+        minimum=0,
+        maximum=10,
+    )
+    wake_timeout_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_TIMEOUT_SECONDS",
+        WakePolicy().process_timeout_seconds,
+        minimum=30,
+        maximum=7200,
+    )
+    wake_lease_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_LEASE_SECONDS",
+        WakePolicy().lease_seconds,
+        minimum=30,
+        maximum=7200,
+    )
+    wake_base_backoff_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_BASE_BACKOFF_SECONDS",
+        WakePolicy().base_backoff_seconds,
+        minimum=0.1,
+        maximum=300,
+    )
+    wake_max_backoff_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS",
+        WakePolicy().max_backoff_seconds,
+        minimum=1,
+        maximum=3600,
+    )
+    if wake_max_backoff_seconds < wake_base_backoff_seconds:
+        raise ValueError(
+            "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS must not be "
+            "less than the base backoff"
+        )
+    wake_limit_per_hour = _env_int(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR",
+        WakePolicy().wakes_per_hour,
+        minimum=1,
+        maximum=120,
+    )
+    wake_max_attempts = _env_int(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_MAX_ATTEMPTS",
+        WakePolicy().max_attempts,
+        minimum=1,
+        maximum=20,
+    )
+    return {
+        'wake_poll_seconds':wake_poll_seconds,
+        'wake_coalesce_seconds':wake_coalesce_seconds,
+        'wake_lease_seconds':wake_lease_seconds,
+        'wake_base_backoff_seconds':wake_base_backoff_seconds,
+        'wake_max_backoff_seconds':wake_max_backoff_seconds,
+        'wake_max_attempts':wake_max_attempts,
+        'wake_limit_per_hour':wake_limit_per_hour,
+        'wake_timeout_seconds':wake_timeout_seconds,
+    }
 
 
 def wake_execution_settings(env: Mapping[str, str]) -> dict[str, Any]:

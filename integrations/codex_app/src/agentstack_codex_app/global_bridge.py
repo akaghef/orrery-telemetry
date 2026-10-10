@@ -13,7 +13,7 @@ import socket
 import threading
 import time
 
-from .daemon import BridgeConfig, BridgeDaemon, _recv_payload, _state_for_event, wake_execution_settings
+from .daemon import BridgeConfig, BridgeDaemon, _recv_payload, _state_for_event, wake_execution_settings, wake_timing_settings
 from .hook_entry import validate_event, transcript_is_codex_desktop
 from .identity_store import external_id_for
 from .wake import codex_provider_home, _resume_environment
@@ -30,7 +30,7 @@ class GlobalBridge(BridgeDaemon):
         self.config = BridgeConfig(runtime_dir=runtime,socket_path=runtime/'bridge.sock',
             spool_path=runtime/'hook-events.jsonl',retry_path=runtime/'registration-retry.jsonl',
             snapshot_path=runtime/'snapshot.json',project_key='',agent_mail_endpoint=template.endpoint,
-            codex_sessions_root=codex_provider_home()/'sessions', **wake_execution_settings(os.environ))
+            codex_sessions_root=codex_provider_home()/'sessions', **wake_execution_settings(os.environ), **wake_timing_settings(os.environ))
         self._events=queue.Queue(); self._stop=threading.Event();self._worker=None
         self._inflight={};self._history={};self._seen={}
         self._last_warning=None
@@ -154,46 +154,55 @@ class GlobalBridge(BridgeDaemon):
         now=time.monotonic()
         for key,(process,delivery,mid,attempt,started) in list(self._inflight.items()):
             code=process.poll()
-            if code is None and now-started<self.policy['lease']:continue
+            if code is None and now-started<self.policy['process_timeout']:continue
             if code is None:
                 process.terminate()
                 try:process.wait(timeout=5)
                 except Exception:process.kill();process.wait()
             try:
                 delivery.callback(mid,attempt,confirmed=code==0)
+            except (OSError,ValueError,RuntimeError) as exc:
+                delivery.report_error(mid,exc)
             finally:
                 self._inflight.pop(key,None)
         if not self.config.cold_wake_enabled or os.environ.get('AGENTSTACK_MAIL_DISABLED')=='1':return
         root=self.delivery.consumer_agent().parent.parent/'external'
-        if not root.exists():return
+        if not root.exists():
+            self._seen.clear()
+            return
+        active_seen=set()
         for folder in root.iterdir():
             if len(folder.name)!=64 or any(c not in '0123456789abcdef' for c in folder.name):continue
-            route=self.delivery.local(folder/'route.json','runtime_route')
-            client=self.api['RuntimeClient'](self.template.clients_parent/route['client_name']/'runtime-client.json')
-            delivery=self.api['runtime_delivery'](client)
-            delivery.reconcile_confirmed()
-            launch=delivery.launch()
-            lives=delivery.live_rows(launch['launch_id'])
-            if not lives:continue
-            live=lives[-1][1]
-            state=live.get('app_state')
-            if live.get('app_subagent') or state not in ('waiting','dormant'):continue
-            history=self._history.setdefault(folder.name,deque())
-            while history and now-history[0]>=3600:history.popleft()
-            rate_limited=len(history)>=self.policy['wakes_per_hour']
-            for mid in delivery.hints():
+            try:self.wake_root(folder,now,active_seen)
+            except (OSError,ValueError,RuntimeError) as exc:self.delivery.report_error(folder.name,exc)
+        self._seen={key:value for key,value in self._seen.items() if key in active_seen}
+
+    def wake_root(self, folder, now, active_seen):
+        route=self.delivery.local(folder/'route.json','runtime_route')
+        client=self.api['RuntimeClient'](self.template.clients_parent/route['client_name']/'runtime-client.json')
+        delivery=self.api['runtime_delivery'](client)
+        delivery.reconcile_confirmed()
+        launch=delivery.launch()
+        lives=delivery.live_rows(launch['launch_id'])
+        if not lives:return
+        live=lives[-1][1]
+        state=live.get('app_state')
+        if live.get('app_subagent') or state not in ('waiting','dormant'):return
+        history=self._history.setdefault(folder.name,deque())
+        while history and now-history[0]>=3600:history.popleft()
+        rate_limited=len(history)>=self.policy['wakes_per_hour']
+        hints=delivery.hints()
+        active_seen.update((folder.name,mid) for mid in hints)
+        for mid in hints:
+            try:
                 key=folder.name
                 if key in self._inflight:continue
                 seen=self._seen.setdefault((key,mid),now)
                 if now-seen<self.policy['coalesce']:continue
-                messages=delivery.pending_messages(mid)
-                if not messages or messages[0].get('sender',{}).get('agent_id')==client.identity['agent_id']:continue
-                if rate_limited:
-                    delivery.prepare(mid,'codex-app',admission_reason='WAKE_RATE_LIMITED')
-                    continue
                 # Provider configuration is admission, before handoff accounting.
                 command=self.resume_command(delivery,launch,live)
-                prepared=delivery.prepare(mid,'codex-app')
+                prepared=delivery.prepare(mid,'codex-app',exclude_self=True,
+                    admission_reason='WAKE_RATE_LIMITED' if rate_limited else None)
                 if prepared['state']!='handoff':continue
                 # Real executable discovery uses the ordinary provider command;
                 # the global proxy owner is injected without token arguments.
@@ -211,3 +220,5 @@ class GlobalBridge(BridgeDaemon):
                 history.append(now)
                 self._inflight[key]=(process,delivery,mid,prepared['attempt_id'],now)
                 break  # one resume per App root; other hints remain pending
+            except (OSError,ValueError,RuntimeError) as exc:
+                delivery.report_error(mid,exc)

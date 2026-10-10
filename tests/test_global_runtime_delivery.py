@@ -26,6 +26,15 @@ def server(monkeypatch):
         service.close();prep.close()
 
 @pytest.fixture
+def short_socket_server(monkeypatch):
+    # Keep fixture and child validation on the same short temporary base even
+    # when the runner's TMPDIR is deep. No production path limit is relaxed.
+    import tempfile
+    monkeypatch.setenv('TMPDIR','/tmp')
+    monkeypatch.setattr(tempfile,'tempdir','/tmp')
+    yield from server.__wrapped__(monkeypatch)
+
+@pytest.fixture
 def launch(server,monkeypatch):
     client=context(server,window=False)
     monkeypatch.setenv('AGENTSTACK_CLAUDE_BIN','/usr/bin/true')
@@ -239,7 +248,8 @@ def test_global_app_bridge_uses_external_reference_and_canonical_client_only(ser
     assert bridge.delivery.external_client(sid).identity['agent_id']==aid
 
 
-def test_persistent_configure_run_and_actual_bot_reply(server):
+def test_persistent_configure_run_and_actual_bot_reply(short_socket_server):
+    server=short_socket_server
     import os
     import subprocess
     import time
@@ -325,7 +335,8 @@ def test_codex_launch_reads_approved_fixed_plan_without_approving(server,monkeyp
         delivery.provider_command(row)
 
 
-def test_global_selftest_runs_real_fixed_profile_bot(server,monkeypatch,capsys):
+def test_global_selftest_runs_real_fixed_profile_bot(short_socket_server,monkeypatch,capsys):
+    server=short_socket_server
     import runpy
     client=context(server,'selftest-parent',window=False)
     monkeypatch.setenv('AGENTSTACK_HOME',str(ROOT))
@@ -338,7 +349,8 @@ def test_operator_confirm_and_importance_do_not_clear_unhanded_hints(server,laun
     client,delivery,row=launch
     mid=send(server)
     monkeypatch.setenv('AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE','urgent')
-    assert delivery.prepare(mid,'tmux')['state']=='retry-wait'
+    blocked=delivery.prepare(mid,'tmux')
+    assert blocked['state']=='blocked' and blocked['reason']=='BELOW_MIN_IMPORTANCE'
     assert delivery.pending_messages(mid)
     monkeypatch.delenv('AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE')
     notice=delivery.prepare(mid,'tmux')

@@ -1999,7 +1999,11 @@ def entry_operation(entry, argv):
             result['hookSpecificOutput'] = {'hookEventName':'SessionStart' if entry == 'session-start' else 'PostToolUse', 'additionalContext':'\n'.join(n['notification'] for n in notifications)}
     print(json.dumps(result), flush=True)
     for notice in notifications:
-        runtime_delivery(client).callback(notice['message_id'], notice['attempt_id'], confirmed=True)
+        delivery = runtime_delivery(client)
+        try:
+            delivery.callback(notice['message_id'], notice['attempt_id'], confirmed=True)
+        except (ClientError, OSError, ValueError) as exc:
+            delivery.report_error(notice['message_id'], exc)
     return 0
 
 
@@ -2060,10 +2064,7 @@ def main(argv=None):
             return 0
         if a.operation == 'watch':
             delivery = runtime_delivery(client)
-            interval = 2 if sys.platform.startswith('linux') else 30
-            while True:
-                delivery.watch_once()
-                time.sleep(interval)
+            delivery.watch()
         if a.operation == 'doctor-local':
             print(json.dumps(runtime_delivery(client).diagnostics()))
             return 0

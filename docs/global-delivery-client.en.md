@@ -21,14 +21,59 @@ Standalone and child launch/resume use the same helper. Output slots, command, c
 | planned / gated | launch-retry or launch-cancel with the current status digest |
 | exec-unknown | Explicit launch-resolve: abandon, confirmed-running or confirmed-ended |
 | running | runtime_ready requires trusted SessionStart and remote owner/window verification |
-| ended / cancelled | A new explicit launch can be prepared |
+| ended / cancelled | Prepare a new explicit launch after all confirmed-ended live writes finish |
 | abandoned | Leave the unknown process alone; resolve explicitly when evidence is available |
 
-Send typed operator JSON on stdin to agentstack-runtime-client operator-json OPERATION. Obtain state_sha256 with launch-status or delivery-status; a mutation requires expected_state_sha256 and confirm:true. The digest is derived from current context, credential, launch, live-session evidence and intent under the same mutex. A changed generation or launch invalidates the proof. Local status and abandon remain available without Mail.
+Pass JSON on stdin to `agentstack-runtime-client operator-json OPERATION`. The source schema is [local_operator_wire.operations](../packages/agentstack_mail/fixtures/global-client-4c.json). `launch-cancel`, `launch-resolve` and `resolve-delivery` require `confirm:true`; `launch-retry` does not accept confirm.
+
+Set client_root to the fixed client root and AGENTSTACK_CLIENT_CONFIG to its runtime-client.json. Read launch ID from the existing launch.json and message ID from doctor-local or the received notification. Read current status first:
+```sh
+# AGENTSTACK_CLIENT_CONFIG points to this client's runtime-client.json.
+launch_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["launch_id"])' "$client_root/runtime/launch.json")
+status_file=$(mktemp)
+agentstack-runtime-client operator-json launch-status <<EOF_JSON > "$status_file"
+{"launch_id":"$launch_id"}
+EOF_JSON
+state_sha256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state_sha256"])' "$status_file")
+cat "$status_file"
+```
+
+Inspect phase, operator_required, next_operations and remote_owner_verified. state_sha256 covers current context, credential, launch, live sessions and intent under the same lock. On RESOLUTION_DIGEST_MISMATCH, read status again and reconsider the action.
+
+```sh
+# exec-unknown / abandoned: acknowledge uncertainty; never claims completion.
+agentstack-runtime-client operator-json launch-resolve <<EOF_JSON
+{"launch_id":"$launch_id","expected_state_sha256":"$state_sha256","confirm":true,"resolution":{"action":"abandon","operator_evidence":"The process could not be independently verified"}}
+EOF_JSON
+```
+
+```sh
+# planned / gated only: select ONE operation after reading a fresh status.
+agentstack-runtime-client operator-json launch-cancel <<EOF_JSON
+{"launch_id":"$launch_id","expected_state_sha256":"$state_sha256","confirm":true}
+EOF_JSON
+# Alternatively retry (no confirm field in its schema):
+agentstack-runtime-client operator-json launch-retry <<EOF_JSON
+{"launch_id":"$launch_id","expected_state_sha256":"$state_sha256"}
+EOF_JSON
+```
+
+```sh
+# Use the message_id reported by doctor-local (42 is an example).
+agentstack-runtime-client operator-json delivery-status <<EOF_JSON
+{"message_id":42}
+EOF_JSON
+```
+
+Read status again after the operation. Abandon returns phase=abandoned/runtime_ready=false; cancel returns phase=cancelled/prepared=true/runtime_ready=false; retry returns phase=gated/prepared=true and is not ready until trusted SessionStart. For delivery, obtain the delivery-status digest and pass message_id, expected_state_sha256, confirm:true and resolution to resolve-delivery. Actions are retry-at-least-once, confirm-external-completed and abandon-without-consuming; operator_evidence records the basis for the decision. Abandon-without-consuming only blocks locally, without consuming unread state or the server notification fact.
+
+If confirmed-ended is interrupted while saving live sessions, status returns operator_required=true and next_operations=[launch-resolve]. Resubmit the same confirmed-ended with a fresh digest to finish the remaining writes before a new launch. Local status and abandon also work while Mail is unreachable.
 
 The bound proxy derives server schemas by removing owner and binding inputs. Local bootstrap verifies the trusted receipt; runtime_status reports the bound runtime. Caller tokens and display names never select another owner. New windows use the existing agent_id foreign key and NULL legacy_project_id.
 
 ## Codex hook trust
+
+The fixed provider HOME mcp.json, settings.json and Gemini mcp_config.json are wholly derived files, regenerated under the launch gate operation mutex on each launch. Interpreter, wrapper and hook updates can replace them. Put user settings in the existing tool-selection inputs, not in these generated files. Concurrent edits return GENERATED_CONFIG_CHANGED; unreadable files return GENERATED_CONFIG_UNREADABLE. Correct the private path/permissions and retry explicitly. There is no separate generated-state ledger.
 
 Normal launch never approves trust. The approved plan in the fixed provider HOME must match plugin payload and native config trust. Otherwise launch fails with `CODEX_HOOK_CONFIGURE_REQUIRED`. Approval cannot be reused for changed payload.
 
@@ -97,3 +142,5 @@ The App history HOME uses the same shared resolver as the legacy consumer: `CODE
 App cold wake is tested with fixtures only; actual resume is unverified. At 12 wakes per hour, admission becomes `blocked / WAKE_RATE_LIMITED` without incrementing handoff attempts. Once the time window permits, the same intent resumes. The server notification fact remains pending; polling never consumes it.
 
 App uses the same execution settings reader as the legacy consumer for `AGENTSTACK_CODEX_APP_COLD_WAKE`, `AGENTSTACK_CODEX_BINARY`, `AGENTSTACK_CODEX_APP_PLUGIN_ID`, and `AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK`. Explicit cold-wake disablement and Mail disabled prevent new handoffs.
+
+Global watcher reacts to signal-directory events, falling back to the legacy two-second poll; the existing scan interval rescues missed events. Legacy watcher numeric declarations remain the sole source for cooldown, headless timeout and poll/scan defaults. App timing uses the same AGENTSTACK_CODEX_APP_WAKE_* reader and WakePolicy defaults as the legacy bridge. Waiting/blocked decisions precede fetch; below-minimum importance is cached in the same intent and reconsidered when its threshold changes. A prior unknown delivery keeps duplicate_possible even if a later attempt is known not to have been submitted. A previous launch for the same owner/binding is replanned; a genuine owner/credential change blocks only that message and can be explicitly rebound by retry-at-least-once. Errors in one message or App root do not stop the others.

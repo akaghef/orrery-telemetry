@@ -85,6 +85,7 @@ class WakePolicy:
     max_attempts: int = 5
     wakes_per_hour: int = 12
     process_timeout_seconds: float = 900.0
+    poll_seconds: float = 0.25
 
 
 @dataclass(slots=True)

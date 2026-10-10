@@ -245,6 +245,9 @@
               "type": "null"
             }
           ]
+        },
+        "notify_min_importance": {
+          "type": "string"
         }
       },
       "required": [
@@ -1217,7 +1220,7 @@
     "unknown": "execとは区別。注入/persistent external-unknownは同intentのchannel lease/backoff後、duplicate_possible=trueで自動retry。Appは最大5、tmux系は旧どおり無制限。binding/owner変更は自動repinせずfenced→operator、late attempt callback拒否。",
     "filter": "importance/coalesce/rate/backoffは既存設定のdefault/boundsを保持し共通consumerへ。filtered/blocked/absentでnotification_factを消費しない。",
     "health": "topstatus=serverreadiness、signal.status=DB通知projection。local operator-requiredはstatus readonlyと既存doctor warning、worker stderr/log（当該遷移1回）で案内し、Mailでの通知成功に依存しない。UI読取はPR6。",
-    "retry_policy": "channelごとの旧の値を保持、表retry_channelsを正本にする。handoff前のbare shell/capture timeout/session不在/disabled/route未確定はattempt_countを増やさず30秒ごと再確認（disabled中は外部/owner通信をskip）。上限に数えるのはhandoff後のfailure/unknownだけ。unknown時はmax(当該channel lease期限, backoffのnext_attempt_at)まで待つ。known failureではleaseを閉じ当該backoff後。confirmed後はcompletion再送だけでattemptを増やさない。",
+    "retry_policy": "channelごとの旧の値を保持、表retry_channelsを正本にする。handoff前のbare shell/capture timeout/session不在/disabled/route未確定はattempt_countを増やさずsignal eventで再確認、event無しは旧2秒poll（救済scanは旧30秒Mac/2秒Linux）（disabled中は外部/owner通信をskip）。上限に数えるのはhandoff後のfailure/unknownだけ。unknown時はmax(当該channel lease期限, backoffのnext_attempt_at)まで待つ。known failureではleaseを閉じ当該backoff後。confirmed後はcompletion再送だけでattemptを増やさない。",
     "channel_policy_selection": "route_kind=codex-appならhook channel名によらず既存App WakePolicy、その他のtmux/standalone hook/persistent/daemonは旧watcher policy。selectorを共通consumer1関数にし各adapterが上限を別実装しない。"
   },
   "await_contract": {
@@ -1368,7 +1371,7 @@
       "actor": "coordinator",
       "operation": "A(SH)→C→M下で固定routeからcurrentをreload、pre-handoff判定。配送不能ならattempt0で待機、handoff可能時だけattempt/期限を同intentへ保存",
       "to": "planned",
-      "recovery": "bare shell/capture timeout/session不在/disabledは30秒待ち続け上限に数えない。全lock解放後外部handoff、callbackは同順で再取得。"
+      "recovery": "bare shell/capture timeout/session不在/disabledはsignal event/旧pollで待ち続け上限に数えない。全lock解放後外部handoff、callbackは同順で再取得。"
     },
     {
       "id": "T16",
@@ -1422,7 +1425,7 @@
       "actor": "coordinator",
       "operation": "signal保持、authority/route診断のみ",
       "to": "pending/no dispatch",
-      "recovery": "30秒再確認、attempt_count不変。session不在を配送成功/削除/blockedへ変えない。REPL復帰後operator0で配送。"
+      "recovery": "signal event/旧pollで再確認、attempt_count不変。session不在を配送成功/削除/blockedへ変えない。REPL復帰後operator0で配送。"
     },
     {
       "id": "T22",
@@ -1440,7 +1443,7 @@
       "actor": "coordinator",
       "operation": "各channel旧backoff/leaseで同intent retry。上限ありAppだけ5回でblocked",
       "to": "planned later or blocked",
-      "recovery": "handoff前不可はここに入れず30秒待機。tmux系は無制限。blockedはfact未消費、doctor/status→operator。"
+      "recovery": "handoff前不可はここに入れずsignal event/旧pollで待機。tmux系は無制限。blockedはfact未消費、doctor/status→operator。"
     },
     {
       "id": "T24",
@@ -2051,7 +2054,7 @@
   "retry_channels": [
     {
       "channel": "tmux / claude-hook / codex-hook",
-      "pre_handoff": "attempt0、30秒ごと再確認",
+      "pre_handoff": "attempt0、signal eventで再確認、event無しは旧2秒poll（救済scanは旧30秒Mac/2秒Linux）",
       "post_handoff_backoff": "30秒固定",
       "unknown_lease": "旧watcher HEADLESS_REPLY_TIMEOUT (1..300、既定/不正300)+30秒",
       "max_attempts": null,
@@ -2059,7 +2062,7 @@
     },
     {
       "channel": "persistent / deterministic daemon",
-      "pre_handoff": "attempt0、30秒ごと再確認",
+      "pre_handoff": "attempt0、signal eventで再確認、event無しは旧2秒poll（救済scanは旧30秒Mac/2秒Linux）",
       "post_handoff_backoff": "30秒固定",
       "unknown_lease": "旧watcher HEADLESS_REPLY_TIMEOUT+30秒、bot reply待ち中は期限前重複無し",
       "max_attempts": null,
@@ -2067,11 +2070,11 @@
     },
     {
       "channel": "codex-app",
-      "pre_handoff": "attempt0、30秒ごと再確認",
+      "pre_handoff": "attempt0、既存App wake poll/coalesceで再確認",
       "post_handoff_backoff": "旧WakePolicy指数backoff 2秒から最大300秒、30秒floor無し",
       "unknown_lease": "旧WakePolicy 900秒",
       "max_attempts": 5,
-      "source": "integrations/codex_app/src/agentstack_codex_app/wake.py:80..87",
+      "source": "WakePolicyの既定値とdaemon.wake_timing_settingsの共通AGENTSTACK_CODEX_APP_WAKE_* reader（global/旧共用）",
       "wake_poll_seconds": 0.25,
       "coalesce_seconds": 2,
       "wakes_per_hour": 12,
@@ -2091,6 +2094,12 @@
     "管理delivery_completedだけは退役済みの既存recipientを受理し、exact credential generation・binding・UID・message/recipient照合を維持。公開toolと新規handoffは退役拒否。",
     "子のtools_selectionは既存child_toolsのpolicyを固定provider HOMEへ適用し、選択不能なら拒否。mail taskは親の単一mutation intentと決定的UUIDで再送、embeddedと混同しない。",
     "Appのwake上限は同じdelivery intentへattempt0のWAKE_RATE_LIMITEDを表示。1 rootにつき同時resumeは1つ。既存live slotのApp状態はprocess evidence更新で消さない。",
-    "operator codex-plan再実行は固定marketplaceだけ作り直す。planは毎回未承認にし、内容が同じでも改めて人の承認を必要にする単一規則。"
+    "operator codex-plan再実行は固定marketplaceだけ作り直す。planは毎回未承認にし、内容が同じでも改めて人の承認を必要にする単一規則。",
+    "confirmed-endedの中断は既存operator_resolutionとliveの共通判定でstatus/prepareを止め、同解消の残りだけ再実行する。新journal無し。",
+    "同owner/bindingの旧launch intentはduplicate_possibleを維持して再計画。owner/credential不一致は当該midだけblocked、明示retryでcurrentへ再束縛。hook/watch/Appはmid/root単位で例外を閉じ込める。",
+    "待機/blockedをfetch前に判定し、importance下限は同intentのnotify_min_importanceで再評価。Appは1対象につきfetch最大1回。",
+    "固定の導出native設定はoperation mutex下のlaunch gateで再生成。人の入力は別の既存正本に置く。",
+    "App _seenは各tickで現hint集合へ限定し、route directory消滅時も消す。",
+    "dashboard API世代はserver.API_GENERATIONの1定義。実socket試験は短い専用fixture、製品の長さ拒否は維持。"
   ]
 }

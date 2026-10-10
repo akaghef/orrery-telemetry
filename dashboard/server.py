@@ -42,6 +42,9 @@ import urllib.parse
 import urllib.request
 from urllib.parse import urlparse, parse_qs
 
+# Public dashboard compatibility generation (docs/tests read this source).
+API_GENERATION = 14
+
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
@@ -8537,7 +8540,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 14}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": API_GENERATION}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

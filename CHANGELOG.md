@@ -12,6 +12,8 @@
 
 ### 隔離 global client の起動・配送を接続
 
+起動終了の部分保存は同じ解消で完了するまで次起動を拒否します。古い配送 intent と個別の異常は他の通知を止めず、待機中の不要な取得を避けます。通知 event / 2秒 poll と既存 App 設定 reader を共有し、固定 provider 導出設定は gate 内で再生成します。
+
 既定の旧 mode と activation=false を維持し、新規 window の owner 束縛、global proxy の bootstrap、provider の起動 receipt と通知 consumer を接続しました。consumer は client 側の固定 layout に置き、既存 server 設定との isolation・binding 照合で分岐を防ぎます。window は context、現在の process は既存 session 記録、配送完了は server の notification fact に統一しました。注入や bot の応答が不明なら同 intent を再試行し、確定後は completion だけを再送します。起動の不明状態は status の digest を使う明示解消へ戻せます。persistent の実行設定は固定 profile の typed execution を operator が指定します。dashboard の明示 global 実行入口に合わせ API 世代を14にしました。
 
 ### global client の子登録・再開・hook を準備

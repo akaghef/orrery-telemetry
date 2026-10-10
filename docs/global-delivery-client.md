@@ -23,14 +23,59 @@ agent の route.json と App の external route は client_name だけを保存�
 | planned / gated | status の digest を指定して launch-retry または launch-cancel |
 | exec-unknown | 自動で再実行せず launch-resolve で abandon / confirmed-running / confirmed-ended |
 | running | trusted SessionStart receipt と owner/window の確認が揃ったときだけ runtime_ready |
-| ended / cancelled | 次の明示起動を準備可能 |
+| ended / cancelled | confirmed-ended の live 反映が全て済んでから次の明示起動を準備可能 |
 | abandoned | 不明な process はそのまま。証明が得られたら明示解消 |
 
-operator 操作は `agentstack-runtime-client operator-json OPERATION` に JSON を stdin から渡します。`launch-status` / `delivery-status` の `state_sha256` を取得し、変更操作には `expected_state_sha256` と `confirm: true` を渡します。digest は同じ lock 内の現在 context・credential・launch・live session と intent から計算します。status 後に世代や起動が変われば解消を拒否します。Mail に届かない場合も local status と abandon は使えます。
+operator 操作は `agentstack-runtime-client operator-json OPERATION` に JSON を stdin から渡します。正本は [local_operator_wire.operations](../packages/agentstack_mail/fixtures/global-client-4c.json) です。`launch-cancel`・`launch-resolve`・`resolve-delivery` は `confirm:true` が必須、`launch-retry` は confirm を受け取りません。
 
+`client_root` は対象の固定 client root、`AGENTSTACK_CLIENT_CONFIG` はその runtime-client.json を指します。launch ID は既存 launch.json、message ID は doctor-local の warning または受信した通知から取得します。次は launch の現在値を読む例です。
+```sh
+# AGENTSTACK_CLIENT_CONFIG points to this client's runtime-client.json.
+launch_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["launch_id"])' "$client_root/runtime/launch.json")
+status_file=$(mktemp)
+agentstack-runtime-client operator-json launch-status <<EOF_JSON > "$status_file"
+{"launch_id":"$launch_id"}
+EOF_JSON
+state_sha256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state_sha256"])' "$status_file")
+cat "$status_file"
+```
+
+status の `phase`・`operator_required`・`next_operations`・`remote_owner_verified` を確認します。`state_sha256` は同じ lock 内の現在 context・credential・launch・live session と intent の digest です。状態や世代が変わって `RESOLUTION_DIGEST_MISMATCH` になったら、status を読み直して判断し直します。
+
+
+```sh
+# exec-unknown / abandoned: acknowledge uncertainty; never claims completion.
+agentstack-runtime-client operator-json launch-resolve <<EOF_JSON
+{"launch_id":"$launch_id","expected_state_sha256":"$state_sha256","confirm":true,"resolution":{"action":"abandon","operator_evidence":"The process could not be independently verified"}}
+EOF_JSON
+```
+
+```sh
+# planned / gated only: select ONE operation after reading a fresh status.
+agentstack-runtime-client operator-json launch-cancel <<EOF_JSON
+{"launch_id":"$launch_id","expected_state_sha256":"$state_sha256","confirm":true}
+EOF_JSON
+# Alternatively retry (no confirm field in its schema):
+agentstack-runtime-client operator-json launch-retry <<EOF_JSON
+{"launch_id":"$launch_id","expected_state_sha256":"$state_sha256"}
+EOF_JSON
+```
+
+```sh
+# Use the message_id reported by doctor-local (42 is an example).
+agentstack-runtime-client operator-json delivery-status <<EOF_JSON
+{"message_id":42}
+EOF_JSON
+```
+
+操作後は再び status を読みます。abandon は `phase=abandoned / runtime_ready=false`、cancel は `phase=cancelled / prepared=true / runtime_ready=false`、retry は `phase=gated / prepared=true` を返し、trusted SessionStart が確認されるまでは ready になりません。delivery-status の digest を同じように取り、resolve-delivery へ `message_id`・`expected_state_sha256`・`confirm:true`・`resolution` を渡します。action は `retry-at-least-once` / `confirm-external-completed` / `abandon-without-consuming` で、operator_evidence に判断の根拠を記します。abandon-without-consuming は blocked にするだけで、未読や server の通知 fact を消費しません。
+
+confirmed-ended の途中で live の保存が失敗した場合、status は `operator_required=true / next_operations=[launch-resolve]` を返します。新 digest で同じ confirmed-ended を再提示して残りを完了するまで次の launch は拒否されます。Mail に届かない場合も local status と abandon は使えます。
 proxy は server fixture の schema から owner・binding の入力を除いて生成します。bootstrap と runtime_status は local tool です。bootstrap は trusted session receipt を確認します。名前や呼出し側が渡した owner token で宛先を選びません。新しい window は agent_id の既存 FK に束縛し、legacy_project_id は NULL にします。
 
 ## Codex hook trust
+
+固定 provider HOME の mcp.json・settings.json・Gemini mcp_config.json は完全な導出物です。launch gate の operation mutex 内で毎回再生成するため、Python・wrapper・hook の版が変わっても更新できます。利用者の設定はこれらのファイルへ直接追記せず、既存の tool selection の入力へ置きます。同時書換えは `GENERATED_CONFIG_CHANGED`、読取不能は `GENERATED_CONFIG_UNREADABLE` です。private path/permission を直して明示起動をやり直してください。導出物の別の台帳はありません。
 
 通常の launch は trust を承認しません。固定 provider HOME の承認済み plan、plugin payload、native config の trust が一致しなければ `CODEX_HOOK_CONFIGURE_REQUIRED` で止まります。変更前の plan に承認を使い回すこともできません。
 
@@ -71,10 +116,12 @@ hint は ID と binding だけです。owner の pending-only・exact-ID fetch �
 
 | channel | 再試行 |
 | --- | --- |
-| tmux / standalone hook / persistent / daemon | 旧 watcher の30秒 cooldown、回数上限なし。unknown は timeout＋30秒の lease と backoff の両方を待つ |
-| Codex App | poll 0.25秒、coalesce 2秒、1時間12 wake、lease 900秒、backoff 2..300秒、最大5 attempt |
+| tmux / standalone hook / persistent / daemon | 旧 watcher の同じ定義から読む30秒 cooldown、回数上限なし。unknown は timeout＋30秒の lease と backoff の両方を待つ |
+| Codex App | poll 0.25秒、coalesce 2秒、1時間12 wake、lease 900秒、backoff 2..300秒、最大5 attempt（既定値。`AGENTSTACK_CODEX_APP_WAKE_*` を旧と同じ reader で適用） |
 
-bare shell・capture timeout・session 不在・Mail disabled・未確定 route は handoff 前なので attempt を増やしません。App の rate 超過と5回上限は blocked とし、dead_letter にはしません。unknown の再試行は duplicate_possible を返します。confirmed 後は server completion の再送だけです。遅れて来た別 attempt・旧 credential generation・旧 launch の callback は拒否します。
+bare shell・capture timeout・session 不在・Mail disabled・未確定 route は handoff 前なので attempt を増やしません。App の rate 超過と5回上限は blocked とし、dead_letter にはしません。global watcher は signal directory の event で動き、event reader が無ければ旧と同じ2秒 poll、event の取りこぼしは既存 scan 間隔で救済します。待機期限・blocked は通信前に判定します。importance 未満は同 intent の BELOW_MIN_IMPORTANCE とし、下限設定が変わった時だけ再評価します。
+
+unknown の再試行は duplicate_possible を返し、後の未送信だけでは先行 unknown の警告を消しません。同 owner/binding の再 launch は古い intent を新 attempt へ捕まえ直します。本当に owner/credential が変わった場合はその message だけ blocked とし、明示 retry で現在値へ再計画できます。1 message / App root の異常は他の通知を止めません。confirmed 後は server completion の再送だけです。遅れて来た別 attempt・旧 credential generation・旧 launch の callback は拒否します。
 
 server の top-level status は要求を受けられる readiness、signal.status は通知の配送の健康です。local unknown/blocked は既存 doctor の warning と status/worker log から確認します。dashboard が配送健康を読む UI は後続です。
 

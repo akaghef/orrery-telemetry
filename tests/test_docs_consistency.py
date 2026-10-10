@@ -113,10 +113,15 @@ def test_api_docs_state_the_served_api_generation_and_when_it_changes() -> None:
     # 2026-09-30: ORRERY cockpit decides whether orrery-telemetry is new
     # enough from `api`, not from the release date, so the docs must show the
     # generation the server really serves and the rule for raising it.
-    served = re.search(r'"name": "orrery-telemetry", "version": version, "api": (\d+)\}',
-                       _read("dashboard/server.py"))
-    assert served, "/api/version response not found in dashboard/server.py"
+    import ast
+    source = _read("dashboard/server.py")
+    definitions = [node.value.value for node in ast.parse(source).body
+                   if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "API_GENERATION" for target in node.targets)
+                   and isinstance(node.value, ast.Constant) and type(node.value.value) is int]
+    assert len(definitions) == 1, "one API_GENERATION source is required"
+    assert '"api": API_GENERATION' in source, "/api/version must use the shared generation"
+    generation = definitions[0]
     for rel, rule in (("docs/api.md", "互換の世代"), ("docs/api.en.md", "compatibility generation")):
         doc = _read(rel)
-        assert f'"api":{served.group(1)}}}' in doc, f"{rel} shows another api generation"
+        assert f'"api":{generation}}}' in doc, f"{rel} shows another api generation"
         assert rule in doc and "CHANGELOG" in doc, f"{rel} does not say when api goes up"
