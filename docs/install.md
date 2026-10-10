@@ -488,3 +488,5 @@ installer は third-party 版への自動切替を行いません。必要なら
 Codex の専用 installer の再利用単位・hook 承認の引渡し・隔離試験は [Codex plugin 導入処理の再利用](codex-plugin-lifecycle.md) を参照してください。本体 install への接続は別の変更です。
 
 隔離 global client の準備は [global child client](global-child-client.md) を参照してください。既定の旧運用は維持します。
+
+明示的な隔離起動・配送と operator の復旧は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。

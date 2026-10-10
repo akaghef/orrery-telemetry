@@ -45,6 +45,12 @@
     "durable_message_outputs_v1": [
       "send_message",
       "reply_message"
+    ],
+    "inbox_pending_filter_v1": [
+      "fetch_inbox"
+    ],
+    "delivery_completion_owner_generation_v1": [
+      "delivery_completed"
     ]
   },
   "tool_contracts": {
@@ -3005,6 +3011,10 @@
             "minItems": 1,
             "maxItems": 100,
             "uniqueItems": true
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
@@ -3014,7 +3024,8 @@
           "candidate_generation",
           "authority_epoch",
           "recipient_agent_id",
-          "message_ids"
+          "message_ids",
+          "expected_credential_generation"
         ],
         "additionalProperties": false
       },
@@ -3094,7 +3105,7 @@
         ],
         "additionalProperties": false
       },
-      "semantics": "message_ids入力順応答。構文/binding/recipient agent検証、known非recipient1件なら全rollback DELIVERY_RECIPIENT_MISMATCH。unknown messageはunknown/notified_at=null＋dirty upsert、他owner情報を返さない。未消費のknownに初回delivered:<UTC> factだけset＋dirty、同transactionでrevision最大1、完全no-opで0。未知IDのdirty upsertが変化ならrevision1。再申告は新timestampを作らず同DB factへ。read/ack済みも通知の初回時刻はconsumer実申告時で記録可能。"
+      "semantics": "message_ids入力順応答。構文/binding/recipient agent検証、known非recipient1件なら全rollback DELIVERY_RECIPIENT_MISMATCH。unknown messageはunknown/notified_at=null＋dirty upsert、他owner情報を返さない。未消費のknownに初回delivered:<UTC> factだけset＋dirty、同transactionでrevision最大1、完全no-opで0。未知IDのdirty upsertが変化ならrevision1。再申告は新timestampを作らず同DB factへ。read/ack済みも通知の初回時刻はconsumer実申告時で記録可能。 sameUID管理callbackだけは退役済みの既存recipientも受理する。expected_credential_generation厳密一致・binding・message/recipient照合を維持し、新規handoffや再有効化は行わない。公開toolは退役宛先を引き続き拒否し、unretire後も記録済みfactを保持する。"
     },
     "reconcile_outputs": {
       "request_schema": {
@@ -3315,7 +3326,9 @@
             "DELIVERY_RECIPIENT_MISMATCH",
             "OUTPUT_SLOT_CONFLICT",
             "OUTPUT_IO_FAILED",
-            "OUTPUT_BINDING_CHANGED"
+            "OUTPUT_BINDING_CHANGED",
+            "CREDENTIAL_GENERATION_MISMATCH",
+            "CREDENTIAL_GENERATION_MISMATCH"
           ]
         }
       },

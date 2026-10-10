@@ -13,6 +13,15 @@
 
 set -euo pipefail
 
+# Global delivery has one coordinator and never enters legacy notify-state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader"
+ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
+if [[ "$_ags_selected_rc" == 0 ]]; then
+    exec python3 "$(dirname "$_ags_global_loader")/runtime_client.py" watch
+fi
+[[ "$_ags_selected_rc" == 125 ]] || exit "$_ags_selected_rc"
+
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.agentstack/mail}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 POLL_INTERVAL=2  # seconds (fallback if fswatch unavailable)

@@ -317,7 +317,7 @@ async def http(state, name, args=None):
         if name == "tools":
             return await client.list_tools()
         response = await client.call_tool(name, args or {})
-        return json.loads(next(p.text for p in response.content if hasattr(p, "text")))
+        return json.loads(next((p.text for p in response.content if hasattr(p, "text")), "[]"))
 
 
 def management(state, operation, **extra):
@@ -336,6 +336,8 @@ def management(state, operation, **extra):
         },
         **extra,
     }
+    if operation == "delivery_completed":
+        req.setdefault("expected_credential_generation", owner(state, extra.get("recipient_agent_id", 2))["expected_credential_generation"])
     with socket.socket(socket.AF_UNIX) as stream:
         stream.settimeout(5)
         stream.connect(state["config"]["management_socket"])
@@ -594,6 +596,7 @@ def test_imported_consumed_management_already_completed_and_no_age(prepared):
             )
         },
         "recipient_agent_id": row["agent_id"],
+        "expected_credential_generation": owner(prepared, row["agent_id"])["expected_credential_generation"],
         "message_ids": [row["message_id"]],
     }
     result = runtime._management_apply(req, os.getuid())
@@ -749,6 +752,7 @@ def test_delivery_whole_batch_reject_and_unknown_cleanup(prepared):
             )
         },
         "recipient_agent_id": 1,
+        "expected_credential_generation": 7,
         "message_ids": [99999, mid],
     }
     with runtime.transaction() as db:

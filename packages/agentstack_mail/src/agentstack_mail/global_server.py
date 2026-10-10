@@ -976,6 +976,8 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
         urgent_only: bool = False,
         since_ts: str | None = None,
         before_id: int | None = None,
+        notification_pending_only: bool = False,
+        message_ids: list[int] | None = None,
         expected_credential_generation: int | None = None,
     ) -> list[dict]:
         return runtime.inbox(locals())
@@ -985,7 +987,7 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
     from inspect import signature
 
     original = signature(fetch_inbox)
-    extensions = {"before_id", "expected_credential_generation"}
+    extensions = {"before_id", "expected_credential_generation", "notification_pending_only", "message_ids"}
     fetch_inbox.__signature__ = original.replace(
         parameters=[
             p

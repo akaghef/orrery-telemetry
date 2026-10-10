@@ -91,6 +91,7 @@ Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME 
 | 隔離 global 予約・welcome を検証する | [S2c 契約と復旧](docs/global-reservations.md)（既定は旧 mode） |
 | 隔離 message と通知を検証する | [S2b の DB・signal 契約](docs/global-messages.md)（既定は旧 mode） |
 | 隔離 runtime client を検証する | [登録・復旧・待機の4a準備](docs/global-runtime-client.md)（既定は旧 mode） |
+| 隔離 global client を起動・配送する | [起動・配送・operator 復旧](docs/global-delivery-client.md)（既定は旧 mode） |
 
 [Obsidian と一緒に使う](docs/obsidian.md)と公開の [demo vault](https://github.com/gyroid-eth/orrery-demo-vault)で、作業ログ・論文ノート・タスクをノートにできます。Obsidian は必須ではありません。CLI 以外の [Codex App](docs/codex-app.md)、[Antigravity / Gemini](docs/antigravity.md)は optional provider です。
 

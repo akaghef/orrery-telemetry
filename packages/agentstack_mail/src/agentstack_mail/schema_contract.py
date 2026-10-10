@@ -93,23 +93,26 @@ def fixture(name="global-server-s2a.json"):
 
             # Fixed named definitions are expanded before schema admission.
             # schema_ref is a fixture compiler marker, never a wire keyword.
-            if name == "global-server-s2c.json":
+            if name in {"global-server-s2c.json", "global-client-4c.json"}:
 
                 def expand(node):
                     if isinstance(node, dict):
                         if "schema_ref" in node:
-                            if node != {"schema_ref": "lease"}:
+                            key = node["schema_ref"]
+                            definitions = {"lease": value.get("lease_schema"), **value.get("schema_definitions", {})}
+                            if set(node) != {"schema_ref"} or key not in definitions or definitions[key] is None:
                                 raise ValueError("CAPABILITY_INVALID")
-                            return expand(value["lease_schema"])
+                            return expand(definitions[key])
                         return {k: expand(v) for k, v in node.items()}
                     if isinstance(node, list):
                         return [expand(v) for v in node]
                     return node
 
                 value = expand(value)
-                value["client_uuid_contract"] = {
-                    "definite_rejections": assemble_rejections(value)
-                }
+                if name == "global-server-s2c.json":
+                    value["client_uuid_contract"] = {
+                        "definite_rejections": assemble_rejections(value)
+                    }
 
             def definitions(node):
                 if isinstance(node, dict):

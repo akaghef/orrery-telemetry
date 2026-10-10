@@ -199,3 +199,5 @@ Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks
 絶対 path の[予約候補](absolute-reservations.md)は明示的な guard/release adapter と共通 normalizer を用意します。既存 hook は旧 mode のままで、候補 helper を自動で呼びません。参加 session の全フォルダへの適用と実 binding resolver の接続は後続の切替 PR です。
 
 隔離 global client の準備は [global child client](global-child-client.md) を参照してください。既定の旧運用は維持します。
+
+明示的な隔離起動・配送と operator の復旧は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。

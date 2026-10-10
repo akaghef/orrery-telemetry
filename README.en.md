@@ -91,6 +91,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 | Validate isolated global reservations/welcome | [S2c contract and recovery](docs/global-reservations.en.md) (legacy remains default) |
 | Validate isolated messages and signals | [S2b DB and notification contract](docs/global-messages.en.md) (legacy mode remains default) |
 | Validate isolated runtime clients | [PR4a registration, recovery and await](docs/global-runtime-client.en.md) (legacy mode remains default) |
+| Launch isolated global clients and deliver notifications | [Launch, delivery and operator recovery](docs/global-delivery-client.en.md) (legacy remains default) |
 
 [Using it with Obsidian](docs/obsidian.en.md) and the public [demo vault](https://github.com/gyroid-eth/orrery-demo-vault) turn logs, paper notes, and tasks into notes; Obsidian is optional. [Codex App](docs/codex-app.en.md) and [Antigravity / Gemini](docs/antigravity.en.md) are optional providers beyond the CLIs.
 

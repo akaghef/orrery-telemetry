@@ -252,7 +252,7 @@
         "client_config": "derived-fixed-path",
         "prepared": true,
         "runtime_ready": false,
-        "execution_reason": "GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C"
+        "execution_reason": "GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED"
       },
       "token_output": false,
       "legacy_stdout": "existing name only; no change",
@@ -845,7 +845,6 @@
         "kind",
         "parent",
         "phase",
-        "launch_id",
         "working_directory",
         "tools_selection",
         "task_delivery",
@@ -1734,7 +1733,7 @@
         ],
         "assigned": "4b (global入口拒否/案内)、実E2Eは4c",
         "action": "minimal-wiring",
-        "global_target": "globalでlegacy selftestを誤実行しない、GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C",
+        "global_target": "globalでlegacy selftestを誤実行しない、GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED",
         "reason": "未配線委任を成功と判定しない。旧selftest不変",
         "source_sha256": "592a00c34692dc015e7bde9ca9796659dbd5778feca26574a818d80b966ec1c4"
       },

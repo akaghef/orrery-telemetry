@@ -2256,6 +2256,10 @@ copy_tree() {
 RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
 RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 RUNTIME_CLIENT_CONTRACT_SOURCES=(
+  "$REPO_ROOT/scripts/codex_plugin_trust.py"
+  "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
+  "$REPO_ROOT/bin/lib/runtime_delivery.py"
+  "$REPO_ROOT/packages/agentstack_mail/fixtures/global-client-4c.json"
   "$REPO_ROOT/bin/lib/global-client-loader.sh"
   "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py"
   "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_s2c_contract.py"

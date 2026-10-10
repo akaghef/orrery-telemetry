@@ -218,6 +218,38 @@ def apply_trust(plan: dict):
             'plugin_id': plan['plugin_id'], 'shared_codex_home': str(home), 'hook_count': len(hooks)}
 
 
+def verify_approved_plan(plan: dict) -> None:
+    """Read-only verification of the approved placement and persisted trust.
+
+    apply_trust performs native discovery. Launch checks its immutable inputs
+    and native config; it neither installs nor approves a hook.
+    """
+    import tomllib
+    import stat
+    if plan.get('schema_version') != 1 or plan.get('approved') is not True or plan.get('enable_hooks') is not True:
+        raise TrustUnavailable('reviewed hook approval is required')
+    home, root = Path(plan['shared_codex_home']), Path(plan['plugin_root'])
+    if not root.is_absolute() or not root.is_relative_to(home) or home.is_symlink():
+        raise TrustUnavailable('plugin placement escaped provider home')
+    current=root
+    while current!=home:
+        if current.is_symlink():raise TrustUnavailable('plugin placement contains a symlink')
+        current=current.parent
+    config_path=home/'config.toml'
+    info=config_path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_nlink!=1 or info.st_mode&0o077:
+        raise TrustUnavailable('native trust config is not private')
+    if payload_digest(root) != plan['payload_digest'] or json.loads((root/'hooks/hooks.json').read_text()) != plan['declared_hooks']:
+        raise TrustUnavailable('approved plugin payload changed')
+    config = tomllib.loads(config_path.read_text())
+    plugin_id=plan.get('plugin_id')
+    if not isinstance(plugin_id,str) or not re.fullmatch(r'agentstack-codex-app@[a-z0-9-]+',plugin_id) or config.get('plugins',{}).get(plugin_id,{}).get('enabled') is not True:
+        raise TrustUnavailable('approved plugin is not enabled')
+    state = config.get('hooks', {}).get('state', {})
+    if not plan.get('hooks') or any(state.get(h['key']) != {'trusted_hash': h['currentHash'], 'enabled': True} for h in plan['hooks']):
+        raise TrustUnavailable('approved hook trust is not present')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='operation', required=True)

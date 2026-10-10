@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### 隔離 global client の起動・配送を接続
+
+既定の旧 mode と activation=false を維持し、新規 window の owner 束縛、global proxy の bootstrap、provider の起動 receipt と通知 consumer を接続しました。consumer は client 側の固定 layout に置き、既存 server 設定との isolation・binding 照合で分岐を防ぎます。window は context、現在の process は既存 session 記録、配送完了は server の notification fact に統一しました。注入や bot の応答が不明なら同 intent を再試行し、確定後は completion だけを再送します。起動の不明状態は status の digest を使う明示解消へ戻せます。persistent の実行設定は固定 profile の typed execution を operator が指定します。dashboard の明示 global 実行入口に合わせ API 世代を14にしました。
+
 ### global client の子登録・再開・hook を準備
 
 既定の旧 mode を維持し、固定 client root を使う明示 prepare-only の子登録・再開を追加しました。登録の中断は同じ name/token の再送と owner 照合で回収し、SessionEnd と cleanup を共通化しました。予約は期限の閾値以下だけ更新し、応答喪失時は次の hook が同じ UUID を再送します。schema・拒否表・message intent は server と共有します。既存 standalone の子への転用を拒否し、global 選択後・owner material の前に Mail 無効化を確認します。解放は旧 grace 設定（既定90秒）と lease ごとの slot を使い、更新された予約を保ちます。次の編集 hook は保存済みの全種類の mutation を再送し、通常の context 判定と partial install の admission は各1か所へ集約しました。context が無いときの mode 判定では Python を起動せず、旧 runtime が select 未対応でも旧経路を保ちます。実行と wake は後続のまま、activation=false・公開 Mail tool31個は不変です。dashboard の明示 global resume 入力に合わせ API 世代を13にしました。

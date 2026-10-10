@@ -690,6 +690,12 @@ def _resume_cwd(
     return str(binding["project_key"])
 
 
+def codex_provider_home(environ: Mapping[str, str] | None = None) -> Path:
+    """The same transcript HOME used by Desktop observation and cold resume."""
+    env = os.environ if environ is None else environ
+    return Path((env.get("CODEX_HOME") or "~/.codex").strip()).expanduser()
+
+
 def _resume_environment(
     codex_binary: str,
     environ: Mapping[str, str] | None = None,

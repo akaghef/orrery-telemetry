@@ -69,3 +69,5 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 
 - [global client の子・再開の準備](global-child-client.md) — 固定 layout、同じ登録 intent の再送、共通 end と予約 hook。
 - [呼び手・中断・受け入れの表](global-child-client-contract.md) — global client の fixture から生成した契約の一覧。
+
+- [global client の配送・起動](global-delivery-client.md) — 固定 layout、通知の再試行、明示的な復旧と provider の準備。

@@ -1,5 +1,7 @@
 # global runtime client の4a準備
 
+このガイドは S1 の登録準備を扱います。現在の S2 能力、実起動・proxy・window binding・配送は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。
+
 [English](global-runtime-client.en.md)
 
 4a は [隔離 S1 server](global-server.md) を呼ぶ共通 client と登録・復旧・待機の entrypoint を準備します。設定が無ければ従来の旧 mode のままです。installer は helper を配置するだけで、global 設定を生成しません。activation は false で、実サービス・実 HOME・Mail DB の切替は行いません。
@@ -43,7 +45,7 @@ client root は兄弟なので入れ子になりません。固定の親と Mail
 
 provider bootstrap は source した shell に canonical identity を export します。global の `agent-start`、`agent-start-codex`、`agent-start-gemini` は明示した context で登録して provider を起動します。この隔離準備経路は現在の terminal で実行し、新しい tmux session を自動生成しません。旧 mode の picker/tmux 起動は従来どおりです。試験では provider を shell stub に置き換え、実 LLM を起動しません。
 
-名前解決と session policy は同じ context を照合します。session index の新形式は schema 3 / `global-self` で、instance・agent ID・credential generation・authority epoch と window を持ちます。別 agent の登録結果を自分の session に保存しません。旧 schema 2 は旧経路に残します。read-only inspect の window は `window_verification=local-only-server-unverified` と表示し、ready を立てません。明示または保存した program/model で register する再接続時には S1 register で server 照合し `server-verified-by-register` を返します。observe のみの再接続は server 未照合のままです。read-only window capability と、program/model を変更せず登録を更新する能力は S2 の候補です。
+名前解決と session policy は同じ context を照合します。session index の新形式は schema 3 / `global-self` で、instance・agent ID・credential generation・authority epoch を持ちます。window は context の identity だけが保存し、credential/profile/session にある旧 global の余分な window 欄は読むだけで、次の正規保存で省きます。別 agent の登録結果を自分の session に保存しません。旧 schema 2 は旧経路に残します。S1 に対する read-only inspect の window は `window_verification=local-only-server-unverified` と表示し、ready を立てません。明示または保存した program/model で register する再接続時には S1 register で server 照合し `server-verified-by-register` を返します。observe のみの再接続は server 未照合のままです。S2a 以降の server では read-only window capability と program/model を保つ登録更新を使い、server 照合結果を区別します。
 
 credential・authority・lock・config・管理 socket・pending journal の保存先が同じ path / 解決先 / dev・inode を指す場合は、各呼出し前後に `CONTEXT_PATH_ROLE_CONFLICT` で拒否します。profile にこれらの保存先を使うことも拒否します。implicit context が broken symlink の場合も不在扱いにせず停止します。client context・credential・journal・metadata・profile・session index は Mail の `runtime_root` 配下と、その symlink の解決先を保存先にできません。既存の出力先は role の magic/schema と binding・owner を確認し、SQLite・任意テキスト・別 owner の形式は network 前に拒否します。symlink・複数 hardlink も拒否します。新しい0600の一時ファイルは O_EXCL で作り、rename の直前にも既存出力先の形式を再検査します。非協調の同 UID actor が最後の検査と rename の間に名前を差し替える競合まで原子的に排除する保証ではありません。
 
@@ -55,7 +57,7 @@ released 版の raw token（任意の identity sidecar）、旧 persistent profi
 
 `agentstack-enroll --global-context CONFIG inspect` は S1 の管理 socket に接続します。`claim REQUEST_ID EXPECTED_GENERATION` と `recover REQUEST_ID EXPECTED_GENERATION` は operator が明示して実行する入口です。モデルの認証失敗から自動実行しません。新 credential を0600の pending journal に保存してから CAS を要求し、同じ入力の再実行は同じ値を使います。receipt の再取得だけで成功とはせず、現在の inspect の generation/fingerprint と whois 認証を照合してから local credential と context を有効にします。専用 HOME に替えても明示した context が同じ ID を選びます。
 
-`agentstack-runtime-client save-profile` は project を持たない `orrery-global-client-profile-v1` を保存します。`agentstack-persistent inspect|reconnect --profile PROFILE` と `agentstack-daemon inspect --profile PROFILE` が binding を照合します。新 profile の proxy/daemon 実行は4cが担当します。4a の `run` は `GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C` で拒否し、ready を true にしません。global context の無い旧 profile の実行は維持します。global context と旧 profile を混ぜた場合は `LEGACY_PROFILE_CONTEXT_CONFLICT` で拒否します。operator の `agentstack-daemon create --connection CONFIG --name NAME --operator` は同じ登録・profile 保存処理を使い、project を入力しません。`finalize-create --connection CONFIG --agent-id ID --operator` は、保存した pending credential を指定 stable ID で照合し、再登録せずに同じ profile を確定します。daemon 自体は起動しません。
+`agentstack-runtime-client save-profile` は固定の project を持たない profile を保存します。inspect/reconnect は owner と binding を照合します。persistent の実行には明示 operator configure による typed `execution` が必要で、run はそれを読み共通 launch handoff に入ります。旧 profile は旧経路のままで、global への取り込みは後続の明示 import です。operator の create/finalize-create は credential と profile を準備するだけで daemon を起動しません。実行は別の明示操作です。[persistent の設定](global-delivery-client.md#persistent-の-operator-configure)を参照してください。
 
 明示した `finalize-create` と claim/recover の再実行に限り、固定 pending journal の identity を復旧用 owner として照合します。journal の binding/ID、現在の credential の token/generation、認証した server row が一致する場合だけ復旧します。通常の identity=null 入口は使用済み root を引き続き拒否します。有効化の書込み順は credential → context → 登録 metadata（存在する場合）の1か所に統一し、各 slot 保存後の中断を回帰で確認します。再実行は register/CAS を追加せず同じ ID に戻します。登録 pending は有効化後に消し、それ以降の profile 保存失敗は検証済み identity の明示 finalize で修復できます。request 前に保存した journal だけでは server row の存在を証明しません。不一致なら local bytes と server を変更しません。 credential 更新 pending には更新前の credential の世代と fingerprint も保存し、保存前後のどちらの途中状態かを照合します。未 claim の row に古い local credential が残る場合も、明示 claim の同じ pending と CAS receipt で確認します。 local credential が無い null-token row の claim も支えます。この場合、pending の更新前 generation/fingerprint は両方 null です。再実行は credential が依然として無い状態、またはその pending の新 credential が保存済みの状態だけを受け入れます。
 
@@ -63,7 +65,7 @@ released 版の raw token（任意の identity sidecar）、旧 persistent profi
 
 共通 lock の shared lock を操作中に保持し、起動時・通信前後に設定と authority を照合します。quiescing・retired root・異なる epoch/root/instance・lock inode の交換は拒否します。旧 mode を明示した fenced context も、起動前の同じ照合で止まります。active の S1 context を legacy として指定しても `LEGACY_CONTEXT_REQUIRES_PR7` で拒否します。lock を外して旧 curl に戻る処理を writer fence とは扱いません。設定無しの既定の旧 mode は従来どおり動き、旧 transport と authority の実 handoff は未実装です。設定無しの旧 wrapper を排除したとは扱いません。OS supervisor の停止、全 writer collector、実 pointer handoff は PR7 に残ります。同 UID の非協調 process による filesystem の名前交換は原子的に防げません。
 
-S2 の送信・返信・予約・contact、4b の child manifest/resume/cleanup と bundled skill、4c の proxy/session binding/daemon/wake/配送世代は未接続です。Gemini stdio は context/authority 確認後に `GLOBAL_STDIO_REQUIRES_PR4C`、native Windows は明示 context/authority 確認後に `GLOBAL_S1_UNIX_CONTRACT_UNSUPPORTED` で拒否し、旧 project routing へ fallback しません。Windows の Unix socket/flock 代替は別の設計課題です。WSL は共通 Unix client を使います。一般の作業 directory や transcript の cwd は保存できますが、Mail routing の project に戻しません。
+S2 の送信・返信・予約・contact、子の lifecycle と共通 proxy は server が公開する capability に従います。global Gemini stdio は同じ proxy を使い、対話型 root は正規 native receipt が無いため固定拒否です。native Windows は `GLOBAL_S1_UNIX_CONTRACT_UNSUPPORTED`、WSL は共通 Unix client を使います。画面と実サービスの切替は後続です。
 
 ## 確認手順
 
@@ -133,7 +135,7 @@ finally:
 | Gemini stdio | authority の照合と固定 reason の拒否 | stdio proxy は4c |
 | native Windows launcher | context/authority の検査と Unix 契約対象外の固定 reason | global transport の platform 設計は別。WSL は Unix client |
 
-window の read-only server 照合 capability は S2 への候補です。S1 の fixture と wire を4aの都合で変更しません。
+この表は4a時点の境界です。現在の実行・proxy・window binding は [global delivery client](global-delivery-client.md) にまとまっています。S1 の fixture と wire は保持します。
 
 S2a の明示 schema3 server に接続すると、能力に応じて program/model を保つ登録更新・server 側の read-only window 照合・receipt の UUID 引継ぎを使います。S1 の動きは維持します。新 candidate と client root を選ぶときは [schema2 の拒否と呼出し側の向け直し](global-server.md#schema2-を拒否されたとき)を確認してください。
 

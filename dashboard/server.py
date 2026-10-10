@@ -3465,11 +3465,15 @@ def global_child_resume(body: dict) -> dict:
     config = body.get('client_config')
     if not isinstance(name,str) or not isinstance(config,str):
         return {'ok':False,'error':'CONTEXT_REQUIRED'}
-    if body.get('prepare_only') is not True or (body.get('open') is not None and body.get('open') is not False):
-        return {'ok':False,'error':'GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C'}
+    prepare = body.get('prepare_only') is True and body.get('open') in (None, False)
+    execute = body.get('prepare_only') is False and body.get('open') is True
+    if not prepare and not execute:
+        return {'ok':False,'error':'GLOBAL_EXECUTION_CONFIRMATION_REQUIRED'}
     library = pathlib.Path(__file__).resolve().parents[1] / 'bin/lib/agentstack-register.sh'
-    completed = subprocess.run(['/bin/bash',str(library),'resume-child','--context',config,
-        '--client-name',name,'--prepare-only','--detached'],capture_output=True,text=True,timeout=60)
+    command=['/bin/bash',str(library),'resume-child','--context',config,
+        '--client-name',name,'--detached']
+    if prepare:command.append('--prepare-only')
+    completed = subprocess.run(command,capture_output=True,text=True,timeout=60)
     if completed.returncode:
         return {'ok':False,'error':completed.stderr.strip() or 'GLOBAL_RESUME_FAILED'}
     return json.loads(completed.stdout)
@@ -8533,7 +8537,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 13}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 14}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

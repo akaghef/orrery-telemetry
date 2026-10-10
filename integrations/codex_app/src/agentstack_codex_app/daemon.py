@@ -44,6 +44,7 @@ from .wake import (
     WakeCoordinator,
     WakePolicy,
     validate_codex_binary,
+    codex_provider_home,
 )
 
 
@@ -152,9 +153,7 @@ class BridgeConfig:
                 "AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS must not be "
                 "less than AGENTSTACK_CODEX_APP_RETRY_SECONDS"
             )
-        codex_home = Path(
-            (env.get("CODEX_HOME") or "~/.codex").strip()
-        ).expanduser()
+        codex_home = codex_provider_home(env)
         cold_wake_enabled = _env_bool(
             env.get("AGENTSTACK_CODEX_APP_COLD_WAKE", "1"),
             "AGENTSTACK_CODEX_APP_COLD_WAKE",
@@ -1224,6 +1223,12 @@ def _recv_payload(connection: socket.socket) -> dict[str, Any]:
 def serve() -> None:
     """Build the configured Bridge and serve until interrupted."""
 
+    from .global_runtime import selected_client
+    selected=selected_client()
+    if selected is not None:
+        from .global_bridge import GlobalBridge
+        GlobalBridge(*selected).serve_forever()
+        return
     config = BridgeConfig.from_env()
     transport = HttpJsonRpcTransport(
         config.agent_mail_endpoint,

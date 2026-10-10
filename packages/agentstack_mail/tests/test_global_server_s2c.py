@@ -60,7 +60,7 @@ def server(prepared):
 def test_real_http_catalog_lifecycle(server):
     catalog = asyncio.run(http(server, "tools"))
     names = {tool.name for tool in catalog}
-    assert len(names) == 31 and "macro_prepare_thread" not in names
+    assert len(names) == 32 and "macro_prepare_thread" not in names
     args = owner(
         server, request_id=str(uuid.uuid4()), paths=[str(server["root"] / "http.py")]
     )

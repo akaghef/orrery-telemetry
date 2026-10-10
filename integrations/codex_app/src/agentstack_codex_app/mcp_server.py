@@ -967,6 +967,15 @@ TOOL_DEFINITIONS = [
 def serve() -> None:
     """Start the allowlisted MCP proxy over stdio."""
 
+    if __package__ in {None, ''}:
+        from agentstack_codex_app.global_runtime import selected_client
+    else:
+        from .global_runtime import selected_client
+    selected = selected_client()
+    if selected is not None:
+        api, client = selected
+        api['runtime_delivery'](client).proxy()
+        return
     config = ProxyConfig.from_env()
     identities = IdentityStore(config.runtime_dir / "identity")
     snapshots = SnapshotStore(config.runtime_dir / "snapshot.json")

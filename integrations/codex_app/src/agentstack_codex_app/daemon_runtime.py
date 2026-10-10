@@ -130,6 +130,52 @@ def canonical_wait():
     return runpy.run_path(str(helper))["wait_for_reply"]
 
 
+class GlobalDaemonRuntime:
+    """The same fixed-profile owner client, without a second token/proxy store."""
+    def __init__(self, path):
+        helper = Path(__file__).resolve().parents[4] / 'bin/lib/runtime_client.py'
+        if not helper.exists():
+            helper = Path(os.environ.get('AGENTSTACK_HOME',str(Path.home()/'.agentstack'))) / 'bin/lib/runtime_client.py'
+        self.api = runpy.run_path(str(helper))
+        value = self.api['profile_operation'](path,'inspect')
+        if value is None:
+            raise DaemonError('PROFILE_CONTEXT_REQUIRED')
+        profile = self.api['read_json'](Path(path))
+        self.client = self.api['RuntimeClient'](Path(profile['client_config']))
+        self._closed = threading.Event()
+        self._wait_lock = threading.Lock()
+        self._after_id = 0
+
+    def call(self, name, arguments):
+        if self._closed.is_set():
+            raise DaemonError('daemon-closed')
+        if name not in {'runtime_status','whois','fetch_inbox','acknowledge_message','send_message','reply_message'}:
+            raise DaemonError('daemon-call-denied')
+        try:
+            result = self.client.observe() if name=='runtime_status' else self.client.call(name,arguments)
+            if name=='fetch_inbox' and arguments.get('include_bodies') and result:
+                self._after_id=max(self._after_id,max(row['id'] for row in result))
+            return result
+        except self.api['ClientError'] as exc:
+            raise DaemonError(str(exc)) from None
+
+    def wait_for_notification(self, timeout):
+        if type(timeout) not in (int,float) or not 0 < timeout <= 60:
+            raise DaemonError('daemon-timeout-invalid')
+        if not self._wait_lock.acquire(blocking=False):
+            raise DaemonError('daemon-wait-already-active')
+        try:
+            code,message=canonical_wait()(lambda:self.call('fetch_inbox',{'limit':1000,'include_bodies':False}),
+                timeout=timeout,after_id=self._after_id,cancelled=self._closed)
+            if code not in (0,124,125):raise DaemonError('daemon-wait-failed')
+            return message is not None
+        finally:
+            self._wait_lock.release()
+
+    def close(self):
+        self._closed.set()
+
+
 class DaemonRuntime:
     def __init__(
         self, profile, connection, token, *, client=None, inspect=None, wait=None
@@ -166,6 +212,8 @@ class DaemonRuntime:
 
     @classmethod
     def open(cls, path):
+        if private_json(path).get('kind') == 'orrery-global-client-profile-v1':
+            return GlobalDaemonRuntime(path)
         value = profile_at(path)
         connection = connection_at(value["connection"])
         parent = Path(value["lock_path"]).parent
