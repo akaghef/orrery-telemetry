@@ -97,3 +97,5 @@ server の top-level status は要求を受けられる readiness、signal.statu
 App の履歴 HOME は旧 consumer と同じ共通関数で決めます。`CODEX_HOME` が無ければ通常の `~/.codex` です。履歴を子 root に複製・移動せず、resume の process 以外は書き換えません。resume には対象の子 context の proxy を渡し、単一 root の同時 resume を避けます。既存の plugin と人が承認した native trust を利用し、自動承認しません。通常の子 launch は引き続き子の固定 provider HOME を使います。
 
 App の cold wake は fixture のみ、実 resume は未確認です。1時間12回に達すると `blocked / WAKE_RATE_LIMITED` になり、handoff の試行回数を増やしません。時間枠が空けば同じ intent から再開します。通知 fact は server に残り、poll は消費しません。
+
+App の `AGENTSTACK_CODEX_APP_COLD_WAKE`、`AGENTSTACK_CODEX_BINARY`、`AGENTSTACK_CODEX_APP_PLUGIN_ID`、`AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK` は旧 consumer と同じ設定 reader を使います。cold wake の明示停止と Mail disabled の間は新しい handoff を作りません。

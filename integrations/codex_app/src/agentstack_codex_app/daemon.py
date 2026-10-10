@@ -154,10 +154,7 @@ class BridgeConfig:
                 "less than AGENTSTACK_CODEX_APP_RETRY_SECONDS"
             )
         codex_home = codex_provider_home(env)
-        cold_wake_enabled = _env_bool(
-            env.get("AGENTSTACK_CODEX_APP_COLD_WAKE", "1"),
-            "AGENTSTACK_CODEX_APP_COLD_WAKE",
-        )
+        execution_settings = wake_execution_settings(env)
         wake_poll_seconds = _env_float(
             env,
             "AGENTSTACK_CODEX_APP_WAKE_POLL_SECONDS",
@@ -222,18 +219,6 @@ class BridgeConfig:
         delivery_value = (
             env.get("AGENTSTACK_CODEX_APP_DELIVERY_DB") or ""
         ).strip()
-        codex_binary = validate_codex_binary(
-            env.get("AGENTSTACK_CODEX_BINARY") or "codex",
-            setting_name="AGENTSTACK_CODEX_BINARY",
-        )
-        skip_git_repo_check = _env_bool(
-            env.get("AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK", "0"),
-            "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK",
-        )
-        plugin_id = (
-            env.get("AGENTSTACK_CODEX_APP_PLUGIN_ID")
-            or "agentstack-codex-app@agentstack-local"
-        ).strip()
         stale_after_seconds = _env_float(
             env,
             "AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS",
@@ -266,7 +251,7 @@ class BridgeConfig:
                 if delivery_value
                 else runtime_dir / "delivery.sqlite3"
             ),
-            cold_wake_enabled=cold_wake_enabled,
+            cold_wake_enabled=execution_settings["cold_wake_enabled"],
             wake_poll_seconds=wake_poll_seconds,
             wake_coalesce_seconds=wake_coalesce_seconds,
             wake_lease_seconds=wake_lease_seconds,
@@ -275,11 +260,24 @@ class BridgeConfig:
             wake_max_attempts=wake_max_attempts,
             wake_limit_per_hour=wake_limit_per_hour,
             wake_timeout_seconds=wake_timeout_seconds,
-            codex_binary=codex_binary,
-            plugin_id=plugin_id,
-            skip_git_repo_check=skip_git_repo_check,
+            codex_binary=execution_settings["codex_binary"],
+            plugin_id=execution_settings["plugin_id"],
+            skip_git_repo_check=execution_settings["skip_git_repo_check"],
             stale_after_seconds=stale_after_seconds,
         )
+
+
+def wake_execution_settings(env: Mapping[str, str]) -> dict[str, Any]:
+    """The execution switches shared by both App delivery routes."""
+    return {
+        "cold_wake_enabled": _env_bool(
+            env.get("AGENTSTACK_CODEX_APP_COLD_WAKE", "1"), "AGENTSTACK_CODEX_APP_COLD_WAKE"),
+        "codex_binary": validate_codex_binary(
+            env.get("AGENTSTACK_CODEX_BINARY") or "codex", setting_name="AGENTSTACK_CODEX_BINARY"),
+        "plugin_id": (env.get("AGENTSTACK_CODEX_APP_PLUGIN_ID") or "agentstack-codex-app@agentstack-local").strip(),
+        "skip_git_repo_check": _env_bool(
+            env.get("AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK", "0"), "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK"),
+    }
 
 
 class BridgeDaemon:

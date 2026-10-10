@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 from test_global_runtime_client_s2a import api, context
+from service_teardown import TEST_LABEL_PREFIX
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'packages/agentstack_mail/tests'))
 spec=importlib.util.spec_from_file_location('delivery_server_fixture',ROOT/'packages/agentstack_mail/tests/test_global_server_s2c.py')
@@ -269,7 +270,7 @@ finally:
     delivery.configure_execution({'argv':[sys.executable,str(worker),str(ROOT/'bin/lib/runtime_client.py')],
         'interaction':'headless','cwd':str(client.isolation)})
     env={**os.environ,'HOME':str(client.isolation/'home'),'AGENTSTACK_CLIENT_CONFIG':str(client.path),
-         'AGENTSTACK_HOME':str(ROOT)}
+         'AGENTSTACK_HOME':str(ROOT), 'AGENTSTACK_LABEL_PREFIX':TEST_LABEL_PREFIX}
     process=subprocess.Popen([sys.executable,str(ROOT/'bin/agentstack-persistent'),'run','--profile',str(client.profile_path)],
         env=env,cwd=client.isolation,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     try:
@@ -951,3 +952,114 @@ def test_child_codex_cli_spelling_selects_codex_without_changing_metadata(server
     assert observed[0][0]=='codex'
     assert api['RuntimeClient'](target.path).registration_metadata()==before
     assert before['program']=='codex-cli'
+
+
+def test_parallel_consumers_share_one_handoff_slot(server, launch):
+    import concurrent.futures
+    import threading
+    client, delivery, _ = launch
+    mid = send(server)
+    consumers = [api['runtime_delivery'](api['RuntimeClient'](client.path)) for _ in range(2)]
+    barrier = threading.Barrier(2)
+    def prepare(consumer):
+        barrier.wait(timeout=5)
+        return consumer.prepare(mid, 'tmux')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(prepare, consumers))
+    assert sorted(result['state'] for result in results) == ['handoff', 'retry-wait']
+    assert delivery.delivery_status(mid)['attempt_count'] == 1
+    handoff = next(result for result in results if result['state'] == 'handoff')
+    assert delivery.callback(mid, handoff['attempt_id'], confirmed=True)['state'] == 'complete'
+    assert delivery.pending_messages(mid) == []
+
+
+def test_delivery_status_serializes_current_writer_and_rejects_old_digest(server, launch, monkeypatch):
+    import concurrent.futures
+    import threading
+    client, delivery, _ = launch
+    mid = send(server)
+    delivery.prepare(mid, 'tmux')
+    other = api['RuntimeClient'](client.path)
+    writer = api['runtime_delivery'](other)
+    captured, release, writing = threading.Event(), threading.Event(), threading.Event()
+    original = delivery.state_digest
+    def paused(*args):
+        value = original(*args)
+        captured.set()
+        assert release.wait(5)
+        return value
+    monkeypatch.setattr(delivery, 'state_digest', paused)
+    def update():
+        with other.operation_mutex():
+            writing.set()
+            row = writer.launch()
+            row['error'] = 'synthetic-current-change'
+            writer.save(other.outputs['launch'], row, 'launch_intent')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        status = pool.submit(delivery.delivery_status, mid)
+        assert captured.wait(5)
+        change = pool.submit(update)
+        try:
+            assert not writing.wait(.15)
+        finally:
+            release.set()
+        first = status.result(timeout=5)
+        change.result(timeout=5)
+    monkeypatch.setattr(delivery, 'state_digest', original)
+    with delivery.message(mid) as path:
+        before = path.read_bytes()
+    with pytest.raises(api['ClientError'], match='RESOLUTION_DIGEST_MISMATCH'):
+        delivery.operator('resolve-delivery', {'message_id': mid,
+            'expected_state_sha256': first['state_sha256'], 'confirm': True,
+            'resolution': {'action': 'retry-at-least-once', 'operator_evidence': 'state changed'}})
+    with delivery.message(mid) as path:
+        assert path.read_bytes() == before
+    assert delivery.delivery_status(mid)['state_sha256'] != first['state_sha256']
+
+
+def test_notification_formatter_preserves_legacy_line_markers_and_complete_boundary():
+    formatter = api['delivery_contract']()['format_notification']
+    message = {'sender': {'name': 'Sender'}, 'subject': 'Topic', 'importance': 'normal',
+               'body_md': 'first\nsecond\r\nthird'}
+    complete = formatter(message)
+    assert 'Body (complete; no inbox fetch needed): first ⏎ second ⏎ third' in complete
+    message['body_md'] = 'x' * 2001
+    preview = formatter(message)
+    assert 'Body preview:' in preview and 'Fetch inbox to read the rest.' in preview
+    assert 'x' * 2001 not in preview
+    message.pop('body_md')
+    assert formatter(message).endswith('Please call fetch_inbox to read it.')
+
+
+def test_app_respects_shared_execution_switches_before_cold_handoff(launch, monkeypatch):
+    sys.path.insert(0, str(ROOT/'integrations/codex_app/src'))
+    from agentstack_codex_app.global_bridge import GlobalBridge
+    from agentstack_codex_app.daemon import BridgeConfig
+    client, delivery, row = launch
+    home = delivery.directory(client.runtime_dir/'provider-home/codex')
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    monkeypatch.setenv('AGENTSTACK_CODEX_APP_COLD_WAKE', '0')
+    monkeypatch.setenv('AGENTSTACK_CODEX_BINARY', '/usr/bin/true')
+    monkeypatch.setenv('AGENTSTACK_CODEX_APP_PLUGIN_ID', 'fixture-plugin@local')
+    monkeypatch.setenv('AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK', '1')
+    monkeypatch.delenv('AGENTSTACK_CODEX_BIN', raising=False)
+    bridge = GlobalBridge(api, client)
+    legacy = BridgeConfig.from_env({**os.environ, 'AGENTSTACK_PROJECT_KEY':str(client.isolation),
+                                   'AGENTSTACK_MCP_URL':client.endpoint})
+    for field in ('cold_wake_enabled', 'codex_binary', 'plugin_id', 'skip_git_repo_check'):
+        assert getattr(bridge.config, field) == getattr(legacy, field)
+    sessions = delivery.directory(bridge.config.codex_sessions_root)
+    sid = 'fixture-configured-desktop'
+    (sessions/('rollout-'+sid+'.jsonl')).write_text(json.dumps({
+        'type':'session_meta', 'payload':{'id':sid,'originator':'Codex Desktop'}})+'\n')
+    command = bridge.resume_command(delivery, row, {'session_id':sid})
+    assert command[0] == '/usr/bin/true'
+    assert command[command.index('exec'):] == ['exec','resume','--skip-git-repo-check',sid]
+    assert 'plugins."fixture-plugin@local".mcp_servers.agentstack.enabled=false' in command
+    def no_admission(*args, **kwargs):
+        raise AssertionError('disabled cold wake must not read routes or prepare a handoff')
+    monkeypatch.setattr(bridge.delivery, 'consumer_agent', no_admission)
+    bridge.wake_tick()
+    bridge.config = __import__('dataclasses').replace(bridge.config, cold_wake_enabled=True)
+    monkeypatch.setenv('AGENTSTACK_MAIL_DISABLED', '1')
+    bridge.wake_tick()

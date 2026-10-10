@@ -95,3 +95,5 @@ If `codex-plan` stops after building the marketplace, the operator explicitly re
 The App history HOME uses the same shared resolver as the legacy consumer: `CODEX_HOME`, or the ordinary `~/.codex` when absent. History is never copied or moved into a child root; only the resume process writes to it. Resume receives the target child's context-bound proxy, with one concurrent resume per root. It uses the existing plugin and human-approved native trust without automatic approval. Ordinary child launch still uses that child's fixed provider HOME.
 
 App cold wake is tested with fixtures only; actual resume is unverified. At 12 wakes per hour, admission becomes `blocked / WAKE_RATE_LIMITED` without incrementing handoff attempts. Once the time window permits, the same intent resumes. The server notification fact remains pending; polling never consumes it.
+
+App uses the same execution settings reader as the legacy consumer for `AGENTSTACK_CODEX_APP_COLD_WAKE`, `AGENTSTACK_CODEX_BINARY`, `AGENTSTACK_CODEX_APP_PLUGIN_ID`, and `AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK`. Explicit cold-wake disablement and Mail disabled prevent new handoffs.

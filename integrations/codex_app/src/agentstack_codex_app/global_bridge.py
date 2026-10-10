@@ -13,7 +13,7 @@ import socket
 import threading
 import time
 
-from .daemon import BridgeConfig, BridgeDaemon, _recv_payload, _state_for_event
+from .daemon import BridgeConfig, BridgeDaemon, _recv_payload, _state_for_event, wake_execution_settings
 from .hook_entry import validate_event, transcript_is_codex_desktop
 from .identity_store import external_id_for
 from .wake import codex_provider_home, _resume_environment
@@ -30,7 +30,7 @@ class GlobalBridge(BridgeDaemon):
         self.config = BridgeConfig(runtime_dir=runtime,socket_path=runtime/'bridge.sock',
             spool_path=runtime/'hook-events.jsonl',retry_path=runtime/'registration-retry.jsonl',
             snapshot_path=runtime/'snapshot.json',project_key='',agent_mail_endpoint=template.endpoint,
-            codex_sessions_root=codex_provider_home()/'sessions')
+            codex_sessions_root=codex_provider_home()/'sessions', **wake_execution_settings(os.environ))
         self._events=queue.Queue(); self._stop=threading.Event();self._worker=None
         self._inflight={};self._history={};self._seen={}
         self._last_warning=None
@@ -147,7 +147,7 @@ class GlobalBridge(BridgeDaemon):
                 'plugins.'+json.dumps(self.config.plugin_id)+'.mcp_servers.agentstack.enabled=false',
                 '-c', 'mcp_servers.orrery-mail.command='+json.dumps(proxy[0]),
                 '-c', 'mcp_servers.orrery-mail.args='+json.dumps(proxy[1:]),
-                'exec', 'resume', sid]
+                'exec', 'resume', *(['--skip-git-repo-check'] if self.config.skip_git_repo_check else []), sid]
 
     def wake_tick(self):
         # Channel bounds are selected by the same consumer used by hooks.
@@ -163,6 +163,7 @@ class GlobalBridge(BridgeDaemon):
                 delivery.callback(mid,attempt,confirmed=code==0)
             finally:
                 self._inflight.pop(key,None)
+        if not self.config.cold_wake_enabled or os.environ.get('AGENTSTACK_MAIL_DISABLED')=='1':return
         root=self.delivery.consumer_agent().parent.parent/'external'
         if not root.exists():return
         for folder in root.iterdir():

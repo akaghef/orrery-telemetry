@@ -70,9 +70,9 @@ def format_notification(message):
     text = f"ORRERY Mail notification: message from {line(sender)} [{line(message.get('importance', 'normal'))}]: {line(message.get('subject'))}."
     body = message.get('body_md')
     if isinstance(body, str) and len(body) <= 2000:
-        return text + ' Body (complete; no inbox fetch needed): ' + line(body)
+        return text + ' Body (complete; no inbox fetch needed): ' + line(body.replace('\r', ' ').replace('\n', ' ⏎ '))
     if isinstance(body, str):
-        return text + ' Body preview: ' + line(body[:2000]) + ' Fetch inbox to read the rest.'
+        return text + ' Body preview: ' + line(body[:2000].replace('\r', ' ').replace('\n', ' ⏎ ')) + ' Fetch inbox to read the rest.'
     return text + ' Please call fetch_inbox to read it.'
 
 
