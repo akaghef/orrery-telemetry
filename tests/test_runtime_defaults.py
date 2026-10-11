@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import pathlib
@@ -314,6 +315,19 @@ def test_runtime_code_has_no_legacy_claude_fallback():
     ).stdout.split("\0")
     paths = [ROOT / rel for rel in tracked if rel]
     for path in paths:
+        if path == ROOT / "bin/lib/instruction_templates.json":
+            # Historical bytes prove a user's old block, never configure a
+            # runtime path. Keep this exception a typed, content-addressed data
+            # catalog; every executable payload still goes through the scan.
+            catalog = json.loads(path.read_text(encoding="utf-8"))
+            assert isinstance(catalog, list) and catalog
+            for item in catalog:
+                assert set(item) == {"provider", "template_id", "renderer_id", "template"}
+                assert item["provider"] in {"claude", "codex"}
+                assert item["renderer_id"] == "legacy-sed-v1"
+                assert isinstance(item["template"], str)
+                assert hashlib.sha256(item["template"].encode()).hexdigest() == item["template_id"]
+            continue
         if path.is_file() and path.suffix not in {".png", ".pyc"}:
             try:
                 text = path.read_text(encoding="utf-8")
