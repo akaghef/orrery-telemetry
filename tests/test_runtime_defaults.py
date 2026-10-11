@@ -16,6 +16,7 @@ import pytest
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from test_instruction_blocks import engine as instruction_engine  # noqa: E402
 from service_teardown import (  # noqa: E402
     TEST_LABEL_PREFIX,
     stop_dashboard,
@@ -514,6 +515,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert settings.read_text(encoding="utf-8") == original_settings
         assert json.loads(claude_json.read_text()) == original_claude_json
         assert not (home / ".codex" / "AGENTS.md").exists()
+        claude_target = instruction_engine(env).target
+        assert not claude_target.exists()
         assert not (project / "CLAUDE.md").exists()
     finally:
         _stop_fake_dashboard(env)
@@ -553,9 +556,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
         assert any((install_dir / "backups").iterdir())
     finally:
         _stop_fake_dashboard(env)
@@ -564,7 +566,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     settings.write_text(original_settings, encoding="utf-8")
     claude_json.write_text(json.dumps(original_claude_json), encoding="utf-8")
     (home / ".codex" / "AGENTS.md").unlink()
-    (project / "CLAUDE.md").unlink()
+    claude_target.unlink()
     env["AGENTSTACK_ASSUME_YES"] = "not-a-boolean"
     from_flag = subprocess.run(
         [*command, "--assume-yes"],
@@ -584,9 +586,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
     finally:
         _stop_fake_dashboard(env)
 

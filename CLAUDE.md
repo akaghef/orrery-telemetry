@@ -7,7 +7,9 @@ link to learn them.
 
 **Approvals belong to the human.** Follow the single
 [consent contract](docs/instruction-migration.en.md#consent). Use
-`--assume-yes` only when the user explicitly chose it.
+`--assume-yes` only when the user explicitly chose it. Without explicit approval, non-interactive installs
+skip approval steps and can report success while skills remain unavailable;
+hand the terminal back to the user for those steps.
 
 **Never invent a value to get past an error.** The installer stops when it
 cannot determine which database ORRERY Mail uses, whether the port is free, or

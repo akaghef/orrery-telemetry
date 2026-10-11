@@ -91,7 +91,7 @@
     ],
     [
       "A04",
-      "symlink chain受理、target/source nlink>1、symlink先hardlink、plan時single-link→mutation直前にhardlink追加",
+      "symlink chain受理、target/明示path/marker有りsource nlink>1、symlink先hardlink、plan時single-link→mutation直前にhardlink追加",
       "symlink/mode/ACL/xattr保持。hardlinkは理由付き拒否・全alias bytes不変、backup/write0。手動独立copy後再plan可。直前再照合でrename0、元file/全alias bytes不変（既に作成した退避/receiptは従来の中断契約）"
     ],
     [
@@ -200,6 +200,20 @@
     [
       "notices/consent/env",
       "参加admissionだけnotice。同意はdocsの1契約。明示project keyがenv.shに優先"
+    ]
+  ],
+  "implementation_review_r2": [
+    [
+      "receipt integrity",
+      "current/historyを同じschema/kind/plan hash検証つきreaderで読む。破損はINSTRUCTION_PLAN_CHANGED、削除前に拒否しledger/backup保持"
+    ],
+    [
+      "automatic unrelated hardlink",
+      "marker無し自動sourceは変更せず飛ばす。marker有りsource・明示path・targetはhardlink拒否を維持"
+    ],
+    [
+      "noninteractive notice",
+      "非対話の承認step skipはinstall成功でもskill未設定を残す。利用者へ端末を返す注意を入口にも記載"
     ]
   ]
 }

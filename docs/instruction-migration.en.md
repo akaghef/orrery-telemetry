@@ -15,7 +15,7 @@ Follow the block only when ORRERY Mail tools exist. Participation uses an alread
 | Bare model performs raw route 5 registration | Start through `agent-start <workdir>` or `agent-start-codex <workdir>`; replace personal pending-* launchers with these |
 | CLAUDE_HOME selects output | Actual provider input CLAUDE_CONFIG_DIR; a different CLAUDE_HOME returns `INSTRUCTION_HOME_CONFLICT`; launch environments are not rewritten |
 | awk reconstructs the whole file | Only marker spans change; outside bytes, BOM and line endings survive |
-| Write through hardlinks | nlink>1 returns `INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY`; symlinks retain their pinned chain and same-owner referent |
+| Write through hardlinks | Migration targets/sources with nlink>1 return `INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY`; symlinks retain their pinned chain and same-owner referent |
 
 Normal launchers resolve an existing identity before execution. If both candidate selection and registration fail to return a name, launch stops with `LAUNCH_IDENTITY_UNAVAILABLE`. Desktop lifecycle hooks keep saving their existing binding before registration. A cockpit split creates a shell, not an agent identity. Personal shell configuration and external warm-pool implementations are not automatically changed.
 
@@ -91,3 +91,7 @@ Before deleting anything, `agentstack-uninstall --purge-data` checks pending wor
 `--remove-legacy-block --path X` cleans up X only. If the current user block is missing or changed, `INSTRUCTION_TARGET_REQUIRES_SETUP` directs the user to setup first. Other sources and the user target remain unchanged. Edited or unknown sources get local-diff/manual marker-only review guidance instead of an ineffective cleanup command.
 
 Purge checks sources recorded in all current and history receipts, keeping backups while an older marker remains. Normal uninstall keeps unsafe files (including changed symlinks or hardlinks), warns, and continues with the remaining files. Purge stops on these conditions.
+
+Automatically discovered files without markers are not migration sources; hardlinked files of this kind remain untouched and are skipped. Targets, explicit `--path` files, and sources containing markers retain strict hardlink refusal.
+
+Purge uses the same receipt reader for current/history schema, kind, and canonical plan hash validation. A mismatch returns `INSTRUCTION_PLAN_CHANGED` before deletion and keeps the ledger/backups. Restore a verified receipt before retrying; do not bypass the check by manually changing its hash.

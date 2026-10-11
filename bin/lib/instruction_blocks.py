@@ -127,7 +127,11 @@ def set_attr(path, name, value):
     else:subprocess.run(['/usr/bin/xattr','-wx',name,data.hex(),str(path)],check=True,capture_output=True)
 
 
-def snapshot(path):
+def has_marker(data):
+    return any(marker in (data or b'') for marker in (*BEGIN.values(), END))
+
+
+def snapshot(path, *, source_candidate=False):
     """Pin every symlink component; never sever a user's symlink on replacement."""
     requested = Path(os.path.abspath(path))
     pending, resolved, chain, hops = list(requested.parts[1:]), Path('/'), [], 0
@@ -167,9 +171,11 @@ def snapshot(path):
     if st:
         if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
             raise Refused('INSTRUCTION_PATH_UNSAFE', resolved)
-        if st.st_nlink != 1:
-            raise Refused('INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY', resolved)
         data = resolved.read_bytes()
+        # Automatic discovery reads unrelated notes but never selects them for
+        # mutation. Explicit paths and targets retain strict link admission.
+        if st.st_nlink != 1 and (not source_candidate or has_marker(data)):
+            raise Refused('INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY', resolved)
         ac, xa = acl(resolved), attrs(resolved)
         metadata = {'dev': st.st_dev, 'ino': st.st_ino, 'mode': stat.S_IMODE(st.st_mode), 'nlink': st.st_nlink, 'acl_sha256': sha(ac), 'xattr_sha256': sha(canonical(xa))}
     else:
@@ -337,11 +343,7 @@ class Engine:
     def receipt(self):
         if not self.receipt_path.exists() and not self.receipt_path.is_symlink():
             return None
-        r = read_private(self.receipt_path)
-        validate(r, 'receipt')
-        if r.get('kind') != 'orrery-instruction-migration-v2' or sha(canonical(r['plan'])) != r['plan_id']:
-            raise Refused('INSTRUCTION_PLAN_CHANGED', 'receipt invalid')
-        return r
+        return read_receipt(self.receipt_path)
 
     def known(self, data, path, receipt=None):
         proof = self.provenance(data, path, receipt)
@@ -403,7 +405,7 @@ class Engine:
         findings = []; receipt = self.receipt()
         for path in [self.target, *self.source_paths(explicit, detect=True)]:
             try:
-                entry, data = snapshot(path)
+                entry, data = snapshot(path, source_candidate=path != self.target and path not in {Path(x).absolute() for x in explicit})
                 if data is None:
                     if path == self.target:
                         findings.append(self.finding(path, data))
@@ -419,8 +421,8 @@ class Engine:
                 findings.append({'source_path':str(path),'kind':'unknown','template_id':None,'block_sha256':None,'reason':str(exc),'cleanup_argv':[]})
         return findings
 
-    def file_plan(self, path, *, target=False, receipt=None):
-        entry, data = snapshot(path)
+    def file_plan(self, path, *, target=False, receipt=None, source_candidate=False):
+        entry, data = snapshot(path, source_candidate=source_candidate)
         old = data or b''
         try:
             b = block_bytes(old)
@@ -449,12 +451,12 @@ class Engine:
         sources, seen = [], {target['resolved_path']}
         for path in (sorted({Path(x).absolute() for x in explicit}, key=str) if source_only else self.source_paths(explicit)):
             try:
-                entry = self.file_plan(path, receipt=r)
+                entry = self.file_plan(path, receipt=r, source_candidate=path not in {Path(x).absolute() for x in explicit})
                 if entry['resolved_path'] in seen:
                     continue
                 if entry['before_block_sha256'] is None:
-                    data=snapshot(path)[1] or b''
-                    if not any(marker in data for marker in (*BEGIN.values(),END)):
+                    data=snapshot(path, source_candidate=path not in {Path(x).absolute() for x in explicit})[1]
+                    if not has_marker(data):
                         continue
                 sources.append(entry); seen.add(entry['resolved_path'])
             except Refused as exc:
@@ -526,7 +528,7 @@ class Engine:
         r = self.receipt()
         if not r:
             for old_path in (self.install/'backups/instruction-migration'/self.provider).glob('*/receipt.json'):
-                old=read_private(old_path)
+                old=read_receipt(old_path)
                 if old.get('plan_id')==plan_id:raise Refused('INSTRUCTION_HOME_CHANGED','restore the recorded provider home before resume')
         if not r or r['plan_id'] != plan_id:
             raise Refused('INSTRUCTION_PLAN_CHANGED', 'receipt ID mismatch')
@@ -621,6 +623,15 @@ def _read_only():
     yield
 
 
+def read_receipt(path):
+    """All current/history readers share schema and canonical plan integrity."""
+    r = read_private(path)
+    validate(r, 'receipt')
+    if r.get('kind') != 'orrery-instruction-migration-v2' or sha(canonical(r['plan'])) != r['plan_id']:
+        raise Refused('INSTRUCTION_PLAN_CHANGED', f'receipt invalid: {path}; keep ledger/backups and restore a verified receipt before retrying')
+    return r
+
+
 def purge_admission(install):
     """Read-only before any uninstaller effect; unknown progress keeps backups."""
     folder=Path(install)/'backups/instruction-migration'
@@ -632,7 +643,7 @@ def purge_admission(install):
         if not root.exists():continue
         for slot in root.iterdir():
             if slot.is_symlink() or not slot.is_dir():raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED',slot)
-            r=read_private(slot/'receipt.json');validate(r,'receipt');receipts.append(str(slot/'receipt.json'))
+            r=read_receipt(slot/'receipt.json');receipts.append(str(slot/'receipt.json'))
             if r['stage'] not in TERMINAL:
                 raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED','pending instruction migration')
             history=slot/'history'
@@ -641,11 +652,11 @@ def purge_admission(install):
             if history.exists():
                 for path in history.iterdir():
                     if path.suffix != '.json':raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED',path)
-                    previous=read_private(path);validate(previous,'receipt');generations.append(previous)
+                    previous=read_receipt(path);generations.append(previous)
             for generation in generations:
                 for entry in generation['plan']['sources']:
                     _,data=snapshot(entry['requested_path'])
-                    if any(marker in (data or b'') for marker in (*BEGIN.values(),END)):
+                    if has_marker(data):
                         raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED','retained legacy block in current/history receipt; remove after local review')
             _,data=snapshot(r['plan']['target']['requested_path'])
             b=block_bytes(data or b'')
@@ -662,7 +673,7 @@ def uninstall_recorded(install, references, *, dry_run=False, purge=False):
             path=Path(reference)
             if not path.is_relative_to(install/'backups/instruction-migration') or path.name!='receipt.json':
                 raise Refused('INSTRUCTION_PATH_UNSAFE','invalid install receipt reference')
-            r=read_private(path);validate(r,'receipt');plan=r['plan'];provider=plan['provider']
+            r=read_receipt(path);plan=r['plan'];provider=plan['provider']
             env={'HOME':str(install.parent),'AGENTSTACK_HOME':str(install),'AGENTSTACK_PROJECT_KEY':plan['target']['render_inputs']['project_key'] or '',
                  'CLAUDE_CONFIG_DIR':plan['resolved_home'],'CODEX_HOME':plan['resolved_home']}
             e=Engine(provider,env=env)

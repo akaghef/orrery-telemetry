@@ -19,6 +19,8 @@
 - identity の無い bare session の raw 自動登録を止め、既存 identity の復旧と非参加の案内を共通 catalog から表示します。編集 guard の block／warn-open は維持します。Mail の既定は旧 mode・activation=false のままです。
 
 
+履歴も含めた receipt の plan hash 検証を共通化し、破損時は purge 前に停止して backup を保持します。自動検出した marker の無い hardlink は変更せず飛ばし、無関係な利用者の指示で setup が止まる後退を修正しました。
+
 ### 隔離 global client の起動・配送を接続
 
 起動終了の部分保存は同じ解消で完了するまで次起動を拒否します。古い配送 intent と個別の異常は他の通知を止めず、待機中の不要な取得を避けます。通知 event / 2秒 poll と既存 App 設定 reader を共有し、固定 provider 導出設定は gate 内で再生成します。

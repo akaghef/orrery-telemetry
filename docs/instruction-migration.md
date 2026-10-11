@@ -15,7 +15,7 @@ block は ORRERY Mail tool があるときだけ従います。参加材料は�
 | identity 無しの model が raw 登録する route 5 | `agent-start <workdir>` / `agent-start-codex <workdir>` で起動。個人の `cc` が pending-* を作る場合もこの launcher へ置換 |
 | CLAUDE_HOME で書込先を決める | 実読込み先 CLAUDE_CONFIG_DIR。CLAUDE_HOME が異なる場合 `INSTRUCTION_HOME_CONFLICT`。起動環境を自動変更しない |
 | 全文を awk で再構成 | marker 間だけ変更、外側の byte 列・改行・BOM を保持 |
-| hardlink へ write-through | nlink>1 は `INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY`。symlink は同所有者の固定解決先へ CAS、link 自体を保持 |
+| hardlink へ write-through | 移行対象の nlink>1 は `INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY`。symlink は同所有者の固定解決先へ CAS、link 自体を保持 |
 
 正規 launcher は既存 identity を起動前に解決します。候補選択も登録も名前を返さない場合は `LAUNCH_IDENTITY_UNAVAILABLE` で停止します。Codex Desktop の正規 lifecycle hook は既存 binding を保存してから登録する順序を維持します。cockpit の pane 分割は shell を作るだけで、agent 登録を意味しません。外部 warm-pool の起動実装や個人 shell 設定は自動変更しません。
 
@@ -91,3 +91,7 @@ setup の `--uninstall`、通常の uninstaller は記録済み marker だけを
 `--remove-legacy-block --path X` は X だけを片付けます。利用者側の現行 block が未設置・変更済みなら `INSTRUCTION_TARGET_REQUIRES_SETUP` で止まり、先に setup を案内します。別の source や利用者 target は書き換えません。編集済み・未知の source には cleanup command を出さず、local diff と手動で marker 間だけを消す手順を案内します。
 
 purge は current と history の全 receipt に記録した source を照合します。古い世代の marker が残る間も backup を保持します。通常の uninstall は symlink の変更や hardlink 等で安全に除去できない file を保持して警告し、残りを続けます。purge はその異常で止まります。
+
+自動検出した marker の無い file は移行 source ではないため、hardlink でも変更せず飛ばします。target と明示 `--path`、marker を含む source の hardlink 拒否は維持します。
+
+purge は current/history を同じ receipt reader で schema・kind・canonical plan hash まで検証します。不一致は `INSTRUCTION_PLAN_CHANGED` で削除前に停止し、ledger と backup を保持します。検証済みの receipt を復元してから再試行してください。hash を手で書き換えて回避しないでください。

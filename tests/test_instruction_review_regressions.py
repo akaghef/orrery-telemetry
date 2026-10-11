@@ -96,3 +96,59 @@ def test_session_start_migration_notices_only_for_participants(env,participant):
     result=subprocess.run(['/bin/bash',str(ROOT/'hooks/session-start-reminder.sh')],input=json.dumps({'session_id':'instruction-review-session'}),env=values,capture_output=True,text=True,timeout=60)
     assert result.returncode==0,result.stderr
     assert ('ORRERY instruction migration:' in result.stdout)==participant
+
+
+@pytest.mark.parametrize('generation',['current','history'])
+def test_corrupt_receipt_hash_blocks_purge_before_any_uninstall_effect(env,generation):
+    e=installed(env);e.home.mkdir();e.target.write_text('Personal notes to retain in backup\n');apply(e)
+    prior=e.receipt_path.read_bytes()
+    if generation=='history':
+        history=e.ledger/'history';history.mkdir();path=history/'previous.json'
+        path.write_bytes(prior);path.chmod(0o600)
+    else:path=e.receipt_path
+    receipt=json.loads(path.read_bytes())
+    receipt['plan']['target']['render_inputs']['project_key']='/changed-without-updating-hash'
+    path.write_bytes(m.canonical(receipt)+b'\n')
+    (e.install/'install-state.json').write_text(json.dumps({'install_dir':str(e.install),
+        'services':[],'owned_files':[],'owned_dirs':[],'purge_paths':[],
+        'instruction_receipts':[str(e.receipt_path)]}))
+    before=tree(Path(env['HOME']))
+    with pytest.raises(m.Refused,match='INSTRUCTION_PLAN_CHANGED'):m.purge_admission(e.install)
+    result=subprocess.run(['/bin/bash',str(ROOT/'scripts/uninstall.sh'),'--purge-data'],
+        env={**env,'PATH':str(Path(sys.executable).parent)+':/usr/bin:/bin'},capture_output=True,text=True)
+    assert result.returncode!=0 and 'INSTRUCTION_PLAN_CHANGED' in result.stderr
+    assert tree(Path(env['HOME']))==before
+    assert e.ledger.exists() and list(e.ledger.glob('backups/*/*.before'))
+
+
+@pytest.mark.parametrize('entry',['setup','installer'])
+def test_unrelated_hardlink_ancestor_does_not_block_setup_or_installer(env,entry):
+    import shutil
+    e=installed(env);source=Path(env['HOME'])/'CLAUDE.md'
+    source.write_text('Personal instructions without ORRERY markers\n')
+    alias=source.with_name('personal-alias');os.link(source,alias)
+    before=source.read_bytes();inode=source.stat().st_ino
+    setup=e.install/'bin/agentstack-claude-setup'
+    shutil.copy2(ROOT/'bin/agentstack-claude-setup',setup)
+    values={**env,'AGENTSTACK_PYTHON':sys.executable}
+    if entry=='setup':command=['/bin/bash',str(setup),'--assume-yes']
+    else:
+        # Run the installer's actual managed-setup function, without services.
+        script=(ROOT/'scripts/install.sh').read_text()
+        function=script[script.index('run_managed_setup() {'):script.index('safe_managed_doc_setups() {')]
+        command=['/bin/bash','-euc',function+'''\nDRY_RUN=false
+REPO_ROOT="$AGENTSTACK_TEMPLATE_HOME"
+INSTALL_DIR="$AGENTSTACK_HOME"
+BIN_DIR="$INSTALL_DIR/bin"
+PROJECT_KEY="$AGENTSTACK_PROJECT_KEY"
+ASSUME_YES=1
+say() { printf '%s\\n' "$*"; }
+warn() { printf '%s\\n' "$*" >&2; }
+run_managed_setup "Claude CLAUDE.md" agentstack-claude-setup
+''']
+    result=subprocess.run(command,cwd=env['AGENTSTACK_PROJECT_KEY'],env=values,capture_output=True,text=True)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert m.block_bytes(e.target.read_bytes())==e.block
+    assert source.read_bytes()==alias.read_bytes()==before and source.stat().st_ino==inode
+    assert not any(f['source_path']==str(source) for f in e.detect())
+    with pytest.raises(m.Refused,match='INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY'):e.plan([str(source)])
