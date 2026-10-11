@@ -41,6 +41,13 @@ def test_pending_changelog_guard_rejects_direct_unreleased(monkeypatch) -> None:
         test_pending_changelog_items_use_fragments()
 
 
+def test_changelog_fragments_are_valid() -> None:
+    import runpy
+
+    read_fragments = runpy.run_path(str(ROOT / "scripts/changelog-release.py"))["read_fragments"]
+    read_fragments(ROOT)
+
+
 def _default_mail_port() -> str:
     # explicit > previous env.sh > this default (hooks/project-context.sh).
     match = re.search(

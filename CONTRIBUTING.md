@@ -98,7 +98,10 @@ Do not add an `Unreleased` section or pending items to `CHANGELOG.md`, and do
 not duplicate a fragment there. CI and the release script share one structural
 check: level 2 headings are release dates only, and no change headings may
 precede the first release. Heading checks and link rebasing ignore fenced
-code blocks. `CHANGELOG.md` contains released changes only.
+code blocks. Every fence must close within its own fragment. CI and release
+also share the checks for every fragment's filename, leading `###`, heading
+levels, and closed fences, so invalid fragments fail before merge.
+`CHANGELOG.md` contains released changes only.
 
 To release, start from an up-to-date clean branch and run:
 

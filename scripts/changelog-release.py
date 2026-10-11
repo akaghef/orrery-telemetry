@@ -30,6 +30,8 @@ def markdown_lines(text: str):
         else:
             yield offset, line
         offset += len(line)
+    if fence:
+        raise ValueError("unclosed fenced code block")
 
 
 def markdown_headings(text: str):
@@ -78,6 +80,25 @@ def render_fragment(text: str) -> str:
     return result
 
 
+def validate_fragment(path: Path) -> str:
+    """Validate one whole fragment before CI accepts it or release consumes it."""
+    if not FRAGMENT_NAME.fullmatch(path.name):
+        raise ValueError(f"{path.name}: use NNNNNN-description.md (six-digit PR number)")
+    text = path.read_text(encoding="utf-8")
+    # Exhaust the shared scanner: it also rejects an unclosed fence at EOF.
+    headings = list(markdown_headings(text))
+    if not text.startswith("### ") or any(level < 3 for level, _, _ in headings):
+        raise ValueError(f"{path.name}: start with ###; no level 1/2 headings")
+    return text
+
+
+def read_fragments(root: Path) -> list[tuple[Path, str]]:
+    return [
+        (path, validate_fragment(path))
+        for path in sorted((root / "changelog.d").glob("*.md"), reverse=True)
+    ]
+
+
 def release(root: Path, version: str) -> int:
     if not re.fullmatch(r"\d{4}\.\d{2}\.\d{2}", version):
         raise ValueError("version must be YYYY.MM.DD")
@@ -85,10 +106,7 @@ def release(root: Path, version: str) -> int:
     changelog = root / "CHANGELOG.md"
     original = changelog.read_text(encoding="utf-8")
     headings = validate_changelog(original)
-    fragments = sorted((root / "changelog.d").glob("*.md"), reverse=True)
-    for path in fragments:
-        if not FRAGMENT_NAME.fullmatch(path.name):
-            raise ValueError(f"{path.name}: use NNNNNN-description.md (six-digit PR number)")
+    fragments = read_fragments(root)
     if not fragments:
         return 0
     if any(title == version for title, _ in headings):
@@ -96,12 +114,7 @@ def release(root: Path, version: str) -> int:
     if headings and version <= headings[0][0]:
         raise ValueError("version must be newer than the latest release")
 
-    contents = []
-    for path in fragments:
-        text = path.read_text(encoding="utf-8")
-        if not text.startswith("### ") or any(level < 3 for level, _, _ in markdown_headings(text)):
-            raise ValueError(f"{path.name}: start with ###; no level 1/2 headings")
-        contents.append(render_fragment(text))
+    contents = [render_fragment(text) for _, text in fragments]
     # Keep each fragment's prose/spacing; add a separator only if needed.
     body = ""
     for text in contents:
@@ -128,7 +141,7 @@ def release(root: Path, version: str) -> int:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    for path in fragments:
+    for path, _ in fragments:
         path.unlink()
     return len(fragments)
 

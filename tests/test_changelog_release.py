@@ -202,3 +202,65 @@ def test_released_checkout_keeps_fragment_directory_and_links(tmp_path):
     assert not list((fresh / "changelog.d").glob("*.md"))
     assert "[changelog.d/](changelog.d/)" in (fresh / "CHANGELOG.md").read_text()
     assert release(fresh, "2026.10.11") == 0
+
+
+def fragment_ci_check(root, monkeypatch):
+    (root / "scripts").mkdir()
+    (root / "scripts/changelog-release.py").write_bytes(SCRIPT.read_bytes())
+    guard = runpy.run_path(str(ROOT / "tests/test_docs_consistency.py"))[
+        "test_changelog_fragments_are_valid"
+    ]
+    monkeypatch.setitem(guard.__globals__, "ROOT", root)
+    return guard
+
+
+@pytest.mark.parametrize("name,text", [
+    ("251-old.md", "### New\n\nPending.\n"),
+    ("000251-new.md", "Pending without a heading.\n"),
+    ("000251-new.md", "### New\n\n# Invalid heading\n"),
+    ("000251-new.md", "### New\n\n## Invalid heading\n"),
+    ("000251-new.md", "### New\n\n```text\nUnclosed.\n"),
+    ("000251-new.md", "### New\n\n~~~text\nUnclosed.\n"),
+    ("000251-new.md", "### New\n\n````text\nToo short.\n```\n"),
+    ("000251-new.md", "### New\n\n```text\nWrong marker.\n~~~\n"),
+    ("000251-new.md", "### New\n\n```text\nNot a closing fence.\n``` trailing\n"),
+])
+def test_ci_and_release_reject_invalid_fragments_before_mutation(tmp_path, monkeypatch, name, text):
+    root = repository(tmp_path)
+    (root / "changelog.d" / name).write_text(text)
+    # A malformed fragment must not swallow the next fragment or older releases.
+    following = root / "changelog.d/000250-other.md"
+    following.write_text("### Other PR\n\nPreserved.\n")
+    before = {p.name: p.read_bytes() for p in (root / "changelog.d").iterdir()}
+    guard = fragment_ci_check(root, monkeypatch)
+    with pytest.raises(ValueError):
+        guard()
+    with pytest.raises(ValueError):
+        release(root, "2026.10.11")
+    assert (root / "CHANGELOG.md").read_text() == OLD
+    assert before == {p.name: p.read_bytes() for p in (root / "changelog.d").iterdir()}
+    assert not list(root.glob(".changelog-*"))
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_ci_accepts_closed_fences_and_release_preserves_history(tmp_path, monkeypatch, fence):
+    root = repository(tmp_path)
+    text = f"### Example\n\n{fence}bash\n# Comment\n## [Unreleased]\n{fence}\n"
+    (root / "changelog.d/000251-example.md").write_text(text)
+    guard = fragment_ci_check(root, monkeypatch)
+    guard()
+    assert release(root, "2026.10.11") == 1
+    result = (root / "CHANGELOG.md").read_text()
+    assert text in result
+    assert result.endswith(OLD[OLD.index("## 2026.10.06"):])
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~"])
+def test_unclosed_fences_in_separate_fragments_do_not_close_each_other(tmp_path, fence):
+    root = repository(tmp_path)
+    for number in (250, 251):
+        (root / f"changelog.d/{number:06d}-example.md").write_text(f"### Example\n\n{fence}\n")
+    with pytest.raises(ValueError, match="unclosed fenced code block"):
+        release(root, "2026.10.11")
+    assert (root / "CHANGELOG.md").read_text() == OLD
+    assert len(list((root / "changelog.d").glob("*.md"))) == 2
