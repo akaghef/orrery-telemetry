@@ -161,3 +161,26 @@ def test_existing_cancelled_launch_can_resume_same_retired_identity(operator,mon
     assert launched[0][1]['provider_session_id']=='fixture-session'
     assert operator.client('resume').management('inspect',agent_id=client.identity['agent_id'])['retired_at'] is None
     assert operator.client('resume').local_owner()==client.local_owner()
+
+
+@pytest.mark.parametrize('entry',['operator','client'])
+@pytest.mark.parametrize('change,reason',[
+    ('schema','RESPONSE_INVALID'),
+    ('binding','MANAGEMENT_BINDING_MISMATCH'),
+    ('query','RESPONSE_INVALID'),
+])
+def test_received_operator_projection_is_checked_by_one_contract(operator,monkeypatch,entry,change,reason):
+    operator.create('read-contract',agent_name='ReadContract',program='daemon',model='deterministic')
+    client=operator.client('read-contract')
+    original=operator.api['RuntimeClient'].management_exchange
+    def exchange(transport,request):
+        reply=original(transport,request)
+        if request['action']=='ui_read':
+            if change=='schema':reply['as_of_revision']='invalid'
+            elif change=='binding':reply['binding']['authority_epoch']='different'
+            else:reply['query_kind']='roster'
+        return reply
+    monkeypatch.setattr(operator.api['RuntimeClient'],'management_exchange',exchange)
+    read=operator.read if entry=='operator' else client.operator_read
+    with pytest.raises(operator.api['ClientError'],match=reason):
+        read({'kind':'health'})

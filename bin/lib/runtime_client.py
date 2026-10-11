@@ -164,6 +164,29 @@ def operator_schemas():
     return _UI_CONTRACT
 
 
+def operator_exchange(transport, binding, query):
+    """One schema and binding check for client and operator UI reads."""
+    schemas = operator_schemas()
+    validate = wire_contract()['validate_schema']
+    request = {'version': 1, 'action': 'ui_read', **binding, 'query': query}
+    try:
+        validate(request, schemas['REQUEST'])
+    except ValueError as exc:
+        raise ClientError('QUERY_INVALID') from exc
+    reply = RuntimeClient.management_exchange(transport, request)
+    if not isinstance(reply, dict) or reply.get('ok') is not True:
+        raise ClientError(reply.get('reason', 'MANAGEMENT_REJECTED') if isinstance(reply, dict) else 'MANAGEMENT_REJECTED')
+    try:
+        validate(reply, schemas['RESPONSE'])
+    except ValueError as exc:
+        raise ClientError('RESPONSE_INVALID') from exc
+    if reply['binding'] != binding:
+        raise ClientError('MANAGEMENT_BINDING_MISMATCH')
+    if reply['query_kind'] != query['kind'] or (query['kind'] == 'messages' and reply.get('tool') != query['tool']):
+        raise ClientError('RESPONSE_INVALID')
+    return reply
+
+
 def s2a_tools(*, receipt=False):
     return {name for name, value in wire_contract()['fixture']['tool_contracts'].items()
             if not receipt or value.get('operation') == 'write'}
@@ -1108,21 +1131,7 @@ class RuntimeClient:
 
     def operator_read(self, query):
         with self.operation_mutex(), self.fence():
-            schemas = operator_schemas()
-            request = {'version':1, 'action':'ui_read', **self.binding, 'query':query}
-            wire_contract()['validate_schema'](request, schemas['REQUEST'])
-            reply = self.management_exchange(request)
-            if not isinstance(reply,dict) or reply.get('ok') is not True:
-                raise ClientError(reply.get('reason','MANAGEMENT_REJECTED') if isinstance(reply,dict) else 'MANAGEMENT_REJECTED')
-            try:
-                wire_contract()['validate_schema'](reply, schemas['RESPONSE'])
-            except ValueError as exc:
-                raise ClientError('RESPONSE_INVALID') from exc
-            if reply['binding'] != self.binding:
-                raise ClientError('MANAGEMENT_BINDING_MISMATCH')
-            if reply['query_kind'] != query['kind'] or (query['kind']=='messages' and reply.get('tool')!=query['tool']):
-                raise ClientError('RESPONSE_INVALID')
-            return reply
+            return operator_exchange(self, self.binding, query)
 
     def management(self, action, **values):
         with self.fence():

@@ -32,7 +32,6 @@ class RuntimeOperator:
             'candidate_generation':c.get('candidate_generation'),'authority_epoch':c.get('authority_epoch')}
         if any(not isinstance(v,str) or not v for v in self.binding.values()):
             raise self.api['ClientError']('BINDING_INVALID')
-        self.schemas=self.api['operator_schemas']()
         self.transport=SimpleNamespace(config=c)
 
     def read(self, query):
@@ -40,19 +39,7 @@ class RuntimeOperator:
         # tracker, authority fence and the single SQLite read transaction.
         if self.api['read_private'](self.path)!=self.raw:
             raise self.api['ClientError']('CONTEXT_CHANGED')
-        request={'version':1,'action':'ui_read',**self.binding,'query':query}
-        validate=self.api['wire_contract']()['validate_schema']
-        try:validate(request,self.schemas['REQUEST'])
-        except ValueError as exc:raise self.api['ClientError']('QUERY_INVALID') from exc
-        reply=self.api['RuntimeClient'].management_exchange(self.transport,request)
-        if not isinstance(reply,dict) or reply.get('ok') is not True:
-            raise self.api['ClientError'](reply.get('reason','MANAGEMENT_REJECTED') if isinstance(reply,dict) else 'MANAGEMENT_REJECTED')
-        try:validate(reply,self.schemas['RESPONSE'])
-        except ValueError as exc:raise self.api['ClientError']('RESPONSE_INVALID') from exc
-        if reply['binding']!=self.binding:
-            raise self.api['ClientError']('MANAGEMENT_BINDING_MISMATCH')
-        if reply['query_kind']!=query['kind'] or (query['kind']=='messages' and reply.get('tool')!=query['tool']):
-            raise self.api['ClientError']('RESPONSE_INVALID')
+        reply=self.api['operator_exchange'](self.transport,self.binding,query)
         if self.api['read_private'](self.path)!=self.raw:
             raise self.api['ClientError']('CONTEXT_CHANGED')
         return reply
