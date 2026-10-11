@@ -81,8 +81,13 @@ that should be an explicit review decision, not an accidental omission.
 
 ## Changelog fragments and releases
 
-Each PR adds one uniquely named `changelog.d/<name>.md` (for example,
-`changelog.d/251-changelog-fragments.md` or a descriptive branch name).
+Each PR adds one `changelog.d/NNNNNN-description.md`: its PR number padded
+with zeros to six digits, followed by a lowercase ASCII slug (letters, digits,
+hyphens). Examples: `changelog.d/000251-changelog-fragments.md` and
+`changelog.d/000260-branch-name.md`. After opening the PR, set its actual number
+before merge. Release notes use descending PR-number order (larger numbers
+first); this is PR order, not merge-time order. Migrated notes use their
+original PR numbers too. Multiple change headings from one PR share its file.
 Start with `### A user-facing change`, followed by the same prose or bullets
 used in a released CHANGELOG section. Use Japanese, describe the resulting
 behavior, and record any API generation change here. Use `../docs/...` for
@@ -90,8 +95,10 @@ links from a fragment to repository documentation; the release script rebases
 inline and reference-definition links one directory up.
 
 Do not add an `Unreleased` section or pending items to `CHANGELOG.md`, and do
-not duplicate a fragment there. The docs consistency check rejects
-`Unreleased` headings. `CHANGELOG.md` contains released changes only.
+not duplicate a fragment there. CI and the release script share one structural
+check: level 2 headings are release dates only, and no change headings may
+precede the first release. Heading checks and link rebasing ignore fenced
+code blocks. `CHANGELOG.md` contains released changes only.
 
 To release, start from an up-to-date clean branch and run:
 
@@ -100,9 +107,12 @@ python3 scripts/changelog-release.py YYYY.MM.DD
 ```
 
 Replace `YYYY.MM.DD` with the new release date. The stdlib-only script inserts
-a version section before the newest release, in filename order, then removes
-the consumed `.md` fragments. It leaves the introduction and older releases
-intact. With no fragments, including a second run, it does nothing. It refuses
+a version section before the newest release, in descending six-digit
+PR-number order, then removes the consumed `NNNNNN-description.md` fragments. Other `.md` filenames are
+rejected. The permanent `changelog.d/README.txt` is never consumed and keeps
+the directory and documentation links present in a fresh release checkout.
+It leaves the introduction and older releases intact. With valid CHANGELOG
+structure and no fragments, including a second run, it does nothing. It refuses
 an already released version when fragments remain; do not append new changes
 to an existing release. If interrupted after the CHANGELOG write, review the
 saved section and remaining fragments before completing their removal; do not

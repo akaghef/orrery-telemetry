@@ -22,17 +22,22 @@ def _read(rel: str) -> str:
 
 def test_pending_changelog_items_use_fragments() -> None:
     changelog = _read("CHANGELOG.md")
-    assert not re.search(r"^##\s+Unreleased\b", changelog, re.M | re.I), (
-        "add one changelog.d/<name>.md per PR; do not write Unreleased directly"
-    )
+    import runpy
+
+    validator = runpy.run_path(str(ROOT / "scripts/changelog-release.py"))["validate_changelog"]
+    try:
+        validator(changelog)
+    except ValueError as error:
+        raise AssertionError(str(error)) from error
     assert "[changelog.d/](changelog.d/)" in changelog
+    assert (ROOT / "changelog.d/README.txt").is_file()
 
 
 def test_pending_changelog_guard_rejects_direct_unreleased(monkeypatch) -> None:
     import pytest
 
     monkeypatch.setitem(globals(), "_read", lambda _: "## Unreleased\n\n### New\n")
-    with pytest.raises(AssertionError, match="one changelog.d"):
+    with pytest.raises(AssertionError, match="use changelog.d"):
         test_pending_changelog_items_use_fragments()
 
 

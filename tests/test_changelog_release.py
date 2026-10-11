@@ -36,8 +36,8 @@ def test_no_fragments_does_not_write(tmp_path):
 def test_multiple_fragments_sorted_and_second_run_is_noop(tmp_path):
     root = repository(tmp_path)
     # Creation order deliberately differs from filename order.
-    (root / "changelog.d/z-last.md").write_text("### Last\n\nSecond.\n")
-    (root / "changelog.d/a-first.md").write_text("### First\n\nFirst.\n\n")
+    (root / "changelog.d/000251-last.md").write_text("### Last\n\nSecond.\n")
+    (root / "changelog.d/000260-first.md").write_text("### First\n\nFirst.\n\n")
     (root / "changelog.d/keep.txt").write_text("Not a fragment.\n")
     assert release(root, "2026.10.11") == 2
     expected = OLD.replace(
@@ -56,7 +56,7 @@ def test_multiple_fragments_sorted_and_second_run_is_noop(tmp_path):
 def test_initial_release_and_links(tmp_path):
     root = repository(tmp_path)
     (root / "CHANGELOG.md").write_text("# Changelog\n\nIntroduction.\n")
-    (root / "changelog.d/change.md").write_text(
+    (root / "changelog.d/000251-change.md").write_text(
         "### Links\n\n[API](../docs/api.md#version), [external](https://example.com).\n"
         "![Image](../docs/image.png) and [reference][api].\n\n"
         "[api]: ../docs/api.md\n"
@@ -73,7 +73,7 @@ def test_initial_release_and_links(tmp_path):
 @pytest.mark.parametrize("version", ["invalid", "2026.2.01", "2026.02.30", "2026.10.06", "2026.10.05"])
 def test_invalid_or_reused_version_keeps_all_files(tmp_path, version):
     root = repository(tmp_path)
-    fragment = root / "changelog.d/new.md"
+    fragment = root / "changelog.d/000251-new.md"
     fragment.write_text("### New\n\nPending.\n")
     with pytest.raises(ValueError):
         release(root, version)
@@ -84,8 +84,8 @@ def test_invalid_or_reused_version_keeps_all_files(tmp_path, version):
 @pytest.mark.parametrize("text", ["", "# Title\n", "Plain prose\n", "### Change\n\n## Unreleased\n"])
 def test_malformed_fragment_keeps_all_files(tmp_path, text):
     root = repository(tmp_path)
-    (root / "changelog.d/valid.md").write_text("### Valid\n\nKept.\n")
-    (root / "changelog.d/bad.md").write_text(text)
+    (root / "changelog.d/000252-valid.md").write_text("### Valid\n\nKept.\n")
+    (root / "changelog.d/000251-bad.md").write_text(text)
     with pytest.raises(ValueError):
         release(root, "2026.10.11")
     assert (root / "CHANGELOG.md").read_text() == OLD
@@ -94,7 +94,7 @@ def test_malformed_fragment_keeps_all_files(tmp_path, text):
 
 def test_failed_changelog_write_keeps_fragments(tmp_path, monkeypatch):
     root = repository(tmp_path)
-    (root / "changelog.d/new.md").write_text("### New\n\nPending.\n")
+    (root / "changelog.d/000251-new.md").write_text("### New\n\nPending.\n")
     import os
 
     def fail_replace(*args):
@@ -104,7 +104,7 @@ def test_failed_changelog_write_keeps_fragments(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="write failed"):
         release(root, "2026.10.11")
     assert (root / "CHANGELOG.md").read_text() == OLD
-    assert (root / "changelog.d/new.md").exists()
+    assert (root / "changelog.d/000251-new.md").exists()
     assert not list(root.glob(".changelog-*"))
 
 
@@ -113,7 +113,7 @@ def test_cli_uses_script_checkout_not_current_directory(tmp_path):
     (root / "scripts").mkdir()
     copied = root / "scripts/changelog-release.py"
     copied.write_bytes(SCRIPT.read_bytes())
-    (root / "changelog.d/new.md").write_text("### New\n\nPending.\n")
+    (root / "changelog.d/000251-new.md").write_text("### New\n\nPending.\n")
     result = subprocess.run(
         [sys.executable, str(copied), "2026.10.11"], cwd=root / "changelog.d",
         capture_output=True, text=True,
@@ -121,3 +121,84 @@ def test_cli_uses_script_checkout_not_current_directory(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "Collected 1" in result.stdout
     assert "## 2026.10.11" in (root / "CHANGELOG.md").read_text()
+
+
+@pytest.mark.parametrize("heading", [
+    "## Unreleased", "  ## Unreleased", "   ## [Unreleased]",
+    "## uNrElEaSeD ##", "##\tUnreleased", "## 未リリース",
+    "### Unreleased", "Unreleased\n----------",
+])
+@pytest.mark.parametrize("with_fragment", [False, True])
+def test_pending_headings_rejected_by_ci_and_release(tmp_path, monkeypatch, heading, with_fragment):
+    root = repository(tmp_path)
+    text = OLD.replace("## 2026.10.06", heading + "\n\nPending.\n\n## 2026.10.06")
+    (root / "CHANGELOG.md").write_text(text)
+    if with_fragment:
+        (root / "changelog.d/000251-new.md").write_text("### New\n\nPending.\n")
+    # Call the real CI assertion with the same invalid source as release.
+    guard = runpy.run_path(str(ROOT / "tests/test_docs_consistency.py"))[
+        "test_pending_changelog_items_use_fragments"
+    ]
+    monkeypatch.setitem(guard.__globals__, "_read", lambda _: text)
+    with pytest.raises(AssertionError, match="use changelog.d"):
+        guard()
+    with pytest.raises(ValueError, match="use changelog.d"):
+        release(root, "2026.10.11")
+    assert (root / "CHANGELOG.md").read_text() == text
+    assert len(list((root / "changelog.d").glob("*.md"))) == int(with_fragment)
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_fenced_examples_are_preserved_not_checked_as_headings(tmp_path, fence):
+    root = repository(tmp_path)
+    snippet = f"{fence}bash\n# Comment\n## [Unreleased]\n[example](../docs/api.md)\n{fence}\n"
+    # The same scanner protects both existing history and pending fragments.
+    (root / "CHANGELOG.md").write_text(OLD + "\n" + snippet)
+    (root / "changelog.d/000251-new.md").write_text("### Example\n\n" + snippet)
+    assert release(root, "2026.10.11") == 1
+    assert (root / "CHANGELOG.md").read_text().count(snippet) == 2
+
+
+def test_migrated_and_new_fragments_use_descending_pr_numbers(tmp_path):
+    root = repository(tmp_path)
+    for name in (
+        "000248-instruction-migration", "000260-branch-name",
+        "000249-changelog-fragments", "000251-new-feature",
+    ):
+        (root / f"changelog.d/{name}.md").write_text(f"### {name}\n\nChange.\n")
+    assert release(root, "2026.10.11") == 4
+    result = (root / "CHANGELOG.md").read_text()
+    headings = [line for line in result.splitlines() if line.startswith("### 000")]
+    assert headings == [
+        "### 000260-branch-name", "### 000251-new-feature",
+        "### 000249-changelog-fragments", "### 000248-instruction-migration",
+    ]
+
+
+@pytest.mark.parametrize("name", ["251-old.md", "branch-name.md", "README.md"])
+def test_other_md_names_are_rejected_not_consumed(tmp_path, name):
+    root = repository(tmp_path)
+    (root / "changelog.d" / name).write_text("### New\n\nPending.\n")
+    with pytest.raises(ValueError, match="six-digit PR number"):
+        release(root, "2026.10.11")
+    assert (root / "CHANGELOG.md").read_text() == OLD
+    assert (root / "changelog.d" / name).exists()
+
+
+def test_released_checkout_keeps_fragment_directory_and_links(tmp_path):
+    root = repository(tmp_path)
+    (root / "CHANGELOG.md").write_text(OLD.replace("Introduction.", "[changelog.d/](changelog.d/)"))
+    (root / "changelog.d/README.txt").write_bytes((ROOT / "changelog.d/README.txt").read_bytes())
+    (root / "changelog.d/000251-new.md").write_text("### New\n\nPending.\n")
+    assert release(root, "2026.10.11") == 1
+    # Git stores files, not empty directories. Recreate exactly the release index.
+    subprocess.run(["git", "-c", "init.templateDir=", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    fresh = root / "fresh"
+    subprocess.run([
+        "git", "-C", str(root), "checkout-index", "--all", f"--prefix={fresh}/",
+    ], check=True)
+    assert (fresh / "changelog.d/README.txt").is_file()
+    assert not list((fresh / "changelog.d").glob("*.md"))
+    assert "[changelog.d/](changelog.d/)" in (fresh / "CHANGELOG.md").read_text()
+    assert release(fresh, "2026.10.11") == 0
