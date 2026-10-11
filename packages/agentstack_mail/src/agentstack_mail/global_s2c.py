@@ -5,6 +5,7 @@ import hashlib
 import os
 
 from .global_server import GlobalError, now
+from .global_ui import OperatorRead
 from .global_s2a import revision, utc
 from .global_s2a_contract import canonical, digest, unique_document
 from .global_s2b import (
@@ -95,7 +96,7 @@ def validate_receipt(db, row, instance, candidate):
                     raise GlobalError("REQUEST_RECEIPT_INVALID")
 
 
-class S2cRuntime(S2bRuntime):
+class S2cRuntime(OperatorRead, S2bRuntime):
     config_kind = "orrery-global-server-s2c-v1"
     profile = "s2c"
     schema_version = 5

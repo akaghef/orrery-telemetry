@@ -150,3 +150,47 @@ App cold wake is tested with fixtures only; actual resume is unverified. At 12 w
 App uses the same execution settings reader as the legacy consumer for `AGENTSTACK_CODEX_APP_COLD_WAKE`, `AGENTSTACK_CODEX_BINARY`, `AGENTSTACK_CODEX_APP_PLUGIN_ID`, and `AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK`. Explicit cold-wake disablement and Mail disabled prevent new handoffs.
 
 Global watcher reacts to signal-directory events, falling back to the legacy two-second poll; the existing scan interval rescues missed events. Legacy watcher numeric declarations remain the sole source for cooldown, headless timeout and poll/scan defaults. App timing uses the same AGENTSTACK_CODEX_APP_WAKE_* reader and WakePolicy defaults as the legacy bridge. Waiting/blocked decisions precede fetch; below-minimum importance is cached in the same intent and reconsidered when its threshold changes. A prior unknown delivery keeps duplicate_possible even if a later attempt is known not to have been submitted. A previous launch for the same owner/binding is replanned; a genuine owner/credential change blocks only that message and can be explicitly rebound by retry-at-least-once. Errors in one message or App root do not stop the others.
+
+<a id="operator-ui-access"></a>
+## Isolated dashboard operator API
+
+[日本語](global-delivery-client.md#operator-ui-access)
+
+Default installation and the legacy dashboard are unchanged. API generation15 adds an isolated global backend reading a completed S2c candidate through its private management socket. The dashboard never opens Mail SQLite. No public Mail tools are added. The screen and cockpit integration follow separately: never enable the screen from the API number while `global_dashboard_ui=0`.
+
+Use a dedicated temporary HOME and explicitly set `AGENTSTACK_RUNTIME_MODE=global`, `AGENTSTACK_GLOBAL_SERVER_CONFIG` (the completed candidate's `server-config.json`), `AGENTSTACK_MCP_URL` (that isolated Mail HTTP endpoint), `AGENTSTACK_HOME` (the same isolation root's `agentstack`) and `AGENTSTACK_PORT` (a dedicated free port). Invalid global configuration never falls back to the legacy database. Live cutover is a separate procedure.
+
+An operator first runs `agentstack-http-operator configure` locally. This exclusively creates the fixed `runtime/http-operator.json` with mode0600; existing files are never overwritten. Use the value from `agentstack-http-operator show` in `Authorization: Bearer …`. This capability is separate from agent registration tokens. Keep it out of URLs, logs and shared files. For revocation, stop both participating servers, set aside this fixed file explicitly and configure again.
+
+TCP does not prove peer UID. The capability proves access to the user's private file; one admission checks loopback, configured Host and any supplied Origin/Referer/Fetch Metadata. Every route except static GET/HEAD passes this admission, including future routes. Same-UID/root actors able to steal the capability, XSS and extensions granted page access are outside this boundary. Sharing one Mail instance across users is unsupported.
+
+| Read | Selection |
+|---|---|
+| `/api/agents`, `/api/mail-watcher-health` | Operator roster / health, without bodies |
+| `/api/mail/recent`, `/api/mail/message`, `/api/mail/conversation` | Required `view_as_agent_id` visibility |
+| `/api/mail/legacy-label` | Visible legacy label history; `source` is rejected |
+| `/api/agent-history` | Independent target `agent_id`, intersected with visibility |
+| `/api/messages-since` | Visible rows after `after_id`, with keyset continuation |
+| `/api/edge-messages` | Visible sender/recipient relationship between `a_agent_id` and `b_agent_id` |
+
+MAX, keyset, limit and response revision share one read transaction. Fetch never consumes read/ack/notification facts. `/api/graph` uses that same visible metadata page. Invisible messages, hidden BCC and invisible upper-bound IDs never enter the projection.
+
+### Registration states and interrupted operations
+
+`agentstack-ui-client --client-name` uses the existing CLI slug: lowercase ASCII letter/digit first, then lowercase ASCII letters/digits, `_` or `-`, up to64 characters. No name-derived alternate root is created. Use `clients --name NAME` to locate existing roots and select one explicitly; multiple roots require user selection.
+
+| `status --client-name SLUG` | Explicit next operation |
+|---|---|
+| absent | `prepare-root --client-name SLUG` |
+| root_only / registration_pending | Same `register --client-name SLUG --name NAME --program PROGRAM --model MODEL` |
+| registration_saved | `finalize-registration --client-name SLUG` |
+| registered_unconfigured | Existing provider configure / Codex plan, human approval and apply against the fixed context |
+| configured | Existing explicit launch |
+| launch_present | Existing launch-status / resolution with the same launch ID and digest |
+| unavailable | Repair the cause; a new identity needs a new root |
+
+One existing pending record stores name/program/model/token/binding; only that same intent is resent. An unsent request creates one row. A lost response resolves atomic NAME_CONFLICT by exact name, then proves ownership with whois using the saved token. Partial credential/context/metadata saves finalize the saved row with the same ID/token and no registration retry. Status/list never configure providers or rewrite contexts.
+
+For an existing foreign owner, compute the pending file's SHA-256 and explicitly invoke `registration-abandon --client-name SLUG --expected-digest DIGEST`. Only verified foreign ownership permits a terminal record; it neither registers another name nor adopts that owner. Resend an unsent/unknown intent; finalize a proven owned row. Terminal roots are not automatically reset: use a new root for a new identity.
+
+`POST /api/global/spawn` shares this core and validates cwd against existing spawn roots. It explicitly configures provider instructions, without approving Codex trust. Missing configuration returns registered_unconfigured. `POST /api/global/resume` reuses the root's existing launch/session and creates no next launch while operator resolution is pending. If disk saving fails after network success, return through status to the same pending/finalize entry.

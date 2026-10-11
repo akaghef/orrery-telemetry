@@ -182,7 +182,14 @@ def test_new_registration_atomic_conflict_and_no_name_preflight(prepared):
     canonical = s1.call(prepared, 'whois', **prepared['binding'], agent_id=1, registration_token=prepared['token'])['name']
     with pytest.raises(ClientError, match='NAME_CONFLICT'):
         instance.create(canonical, 'codex', 'fixture')
-    assert not instance.credential.with_suffix('.registration-pending.json').exists()
+    pending = instance.credential.with_suffix('.registration-pending.json')
+    assert pending.exists()  # Exact intent is retained; another name uses a new root.
+    original = api['read_private'](pending)
+    with pytest.raises(ClientError, match='REGISTRATION_PENDING_CONFLICT'):
+        instance.create('NewIndependent', 'codex', 'fixture')
+    assert api['read_private'](pending) == original
+    fresh_context(prepared, c, 'independent-client')
+    instance = client(prepared)
     created = instance.create('NewIndependent', 'codex', 'fixture')
     assert created['agent_id'] != 1
     assert created['credential_generation'] == 1
@@ -486,7 +493,7 @@ def test_unknown_registration_outcome_keeps_pending_and_refuses_retry(prepared, 
     journal = c.credential.with_suffix('.registration-pending.json')
     original = api['read_private'](journal)
     assert 'registration_token' in api['read_json'](journal)
-    with pytest.raises(ClientError, match='REGISTRATION_PENDING_OPERATOR_REQUIRED'):
+    with pytest.raises(ClientError, match='REGISTRATION_PENDING_CONFLICT'):
         c.create('AnotherOwner', 'codex', 'fixture')
     assert api['read_private'](journal) == original
 

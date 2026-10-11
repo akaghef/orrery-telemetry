@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Explicit local capability configuration/show; no agent owner tokens."""
+import argparse
+import os
+from pathlib import Path
+import runpy
+
+api=runpy.run_path(str(Path(__file__).resolve().parents[1]/'dashboard/http_operator.py'))
+p=argparse.ArgumentParser()
+p.add_argument('action',choices=('configure','show'))
+a=p.parse_args()
+home=Path(os.environ.get('AGENTSTACK_HOME',str(Path.home()/'.agentstack')))
+if a.action=='configure':
+    print(api['configure'](home))
+else:
+    print(api['read_capability'](home))
