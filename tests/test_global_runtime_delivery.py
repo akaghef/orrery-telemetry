@@ -1087,6 +1087,8 @@ def test_app_respects_shared_execution_switches_before_cold_handoff(launch, monk
 
 @pytest.mark.parametrize('provider',['claude','codex'])
 def test_provider_instruction_configuration_is_explicit_and_stale_launch_is_readonly(server,monkeypatch,provider):
+    monkeypatch.setenv('PATH','/usr/bin:/bin')
+    monkeypatch.setenv(f'AGENTSTACK_{provider.upper()}_BIN','/usr/bin/true')
     client=unconfigured_context(server,window=False)
     delivery=api['runtime_delivery'](client)
     row=delivery.prepare_launch(provider,cwd=server['root'])
