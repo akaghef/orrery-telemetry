@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import errno
 import fcntl
 import hashlib
 import json
@@ -248,7 +249,15 @@ class RuntimeDelivery:
                 self.fail('DELIVERY_ROUTE_CHANGED')
             directory = self.directory(agent / 'messages' / str(mid))
             with self.dir_lock(directory):
-                yield directory / 'intent.json'
+                try:
+                    yield directory / 'intent.json'
+                finally:
+                    # C is still held: a parallel prepare opens this name only
+                    # after cleanup, never the unlinked message-lock inode.
+                    # rmdir removes only an empty slot; any intent stays intact.
+                    try:directory.rmdir()
+                    except OSError as exc:
+                        if exc.errno not in (errno.ENOTEMPTY,errno.EEXIST):raise
 
     def live_rows(self, launch_id):
         directory = self.client.runtime_dir / 'live-sessions'

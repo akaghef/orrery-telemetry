@@ -2100,9 +2100,9 @@
     "待機/blockedをfetch前に判定し、importance下限は同intentのnotify_min_importanceで再評価。Appは1対象につきfetch最大1回。",
     "Claudeの生成hookは固定orrery-hooks.jsonを--settingsで渡し、providerのsettings.jsonを上書きしない。Geminiのnative mcp_config.jsonはoperation mutex下でorrery-mail entryだけCAS更新し、他key/entryは保持。破損JSONはGENERATED_CONFIG_JSON_INVALIDでbytes不変。Codexは-cの呼出し時設定だけ。",
     "App _seenは各tickで現hint集合へ限定し、route directory消滅時も消す。",
-    "intent列挙は数字の候補名だけ。実体とpermissionと存在は既存message lock内へ一本化し、不正slotをdiagnosticsへ出して他midを継続。",
+    "intent列挙は数字の候補名だけ。実体とpermissionと存在は既存message lock内へ一本化し、不正slotをdiagnosticsへ出して他midを継続。message lock出口で空slotをrmdirし、completion/pending無し/方針blocked削除と既存空slotの片付けを共通化。Cは削除後まで保持し、並行prepareのintentを失わない。",
     "BELOW_MIN_IMPORTANCE/SELF_MESSAGEはoperator状態ではない。同hintが無くなったら既存reconcileでintentを削除。",
-    "旧shellの数値検証の上下限も宣言から読み、0/1/300/301/非数字の実shell比較で固定。signals directory不在時は作らず2秒pollで待つ。",
+    "旧shellの数値検証の上下限も宣言から読む。互換対象は先頭0のない10進と0/1/300/301/非数字の5境界。先頭0のtimeoutは旧shell算術が8進、globalは10進。signals directory不在時は作らず2秒pollで待つ。",
     "dashboard API世代はserver.API_GENERATIONの1定義。実socket試験は短い専用fixture、製品の長さ拒否は維持。"
   ]
 }

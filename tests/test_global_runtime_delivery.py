@@ -946,7 +946,7 @@ def test_confirmed_completion_recovers_without_signal_or_second_injection(server
     monkeypatch.setattr(api['delivery_contract']()['RuntimeDelivery'],'tmux_target',lambda self: (_ for _ in ()).throw(AssertionError('second injection')))
     fresh.watch_once()
     assert not path.exists()
-    assert fresh.intent_ids()==[mid]  # enumeration returns candidate names, not intent existence
+    assert fresh.intent_ids()==[]  # completion removes the empty candidate slot
     assert fresh.diagnostics()==[]
 
 

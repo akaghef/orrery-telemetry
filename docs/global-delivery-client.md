@@ -121,7 +121,9 @@ hint は ID と binding だけです。owner の pending-only・exact-ID fetch �
 
 bare shell・capture timeout・session 不在・Mail disabled・未確定 route は handoff 前なので attempt を増やしません。App の rate 超過と5回上限は blocked とし、dead_letter にはしません。global watcher は server の signal directory がまだ無ければ作らず2秒 poll で待ち、存在後は directory の event で動き、event reader が無ければ旧と同じ2秒 poll、event の取りこぼしは既存 scan 間隔で救済します。待機期限・blocked は通信前に判定します。importance 未満は同 intent の BELOW_MIN_IMPORTANCE とし、下限設定が変わった時だけ再評価します。BELOW_MIN_IMPORTANCE と SELF_MESSAGE は operator 対応待ちではなく、doctor の警告には数えません。read/ack 等で hint が消えたら、既存の reconcile が同 intent を片付けます。
 
-unknown の再試行は duplicate_possible を返し、後の未送信だけでは先行 unknown の警告を消しません。同 owner/binding の再 launch は古い intent を新 attempt へ捕まえ直します。本当に owner/credential が変わった場合はその message だけ blocked とし、明示 retry で現在値へ再計画できます。intent の列挙では数字の候補名だけを取り、存在・実体・permission の確認は message lock 内へ集約します。不正な slot は diagnostics に出し、1 message / App root の異常は他の通知を止めません。confirmed 後は server completion の再送だけです。遅れて来た別 attempt・旧 credential generation・旧 launch の callback は拒否します。
+数値互換の対象は、先頭0のない10進と試験した5境界（0・1・300・301・非数字）です。先頭0の timeout は旧 watcher の算術が8進、global は10進で、旧 watcher 本体は変更していません。
+
+unknown の再試行は duplicate_possible を返し、後の未送信だけでは先行 unknown の警告を消しません。同 owner/binding の再 launch は古い intent を新 attempt へ捕まえ直します。本当に owner/credential が変わった場合はその message だけ blocked とし、明示 retry で現在値へ再計画できます。完了後の空 slot は既存 message lock 内で rmdir し、以前に残った空 slot も次の走査で片付けます。client operation mutex は削除後まで保持するため、並行 prepare は新しい slot を開き、intent を失いません。intent の列挙では数字の候補名だけを取り、存在・実体・permission の確認は message lock 内へ集約します。不正な slot は diagnostics に出し、1 message / App root の異常は他の通知を止めません。confirmed 後は server completion の再送だけです。遅れて来た別 attempt・旧 credential generation・旧 launch の callback は拒否します。
 
 server の top-level status は要求を受けられる readiness、signal.status は通知の配送の健康です。local unknown/blocked は既存 doctor の warning と status/worker log から確認します。dashboard が配送健康を読む UI は後続です。
 
