@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import hashlib
 import os
 import re
@@ -16,7 +17,6 @@ import pytest
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from test_instruction_blocks import engine as instruction_engine  # noqa: E402
 from service_teardown import (  # noqa: E402
     TEST_LABEL_PREFIX,
     stop_dashboard,
@@ -25,6 +25,11 @@ from service_teardown import (  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+_instruction_spec = importlib.util.spec_from_file_location(
+    "runtime_defaults_instruction_blocks", ROOT / "bin/lib/instruction_blocks.py"
+)
+_instruction_blocks = importlib.util.module_from_spec(_instruction_spec)
+_instruction_spec.loader.exec_module(_instruction_blocks)
 INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
 # These operator-only source entries are deliberately not installer payload.
 # Keep this literal list narrow: all other tracked bin entries must be copied.
@@ -515,7 +520,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert settings.read_text(encoding="utf-8") == original_settings
         assert json.loads(claude_json.read_text()) == original_claude_json
         assert not (home / ".codex" / "AGENTS.md").exists()
-        claude_target = instruction_engine(env).target
+        claude_target = _instruction_blocks.Engine("claude", env=env).target
         assert not claude_target.exists()
         assert not (project / "CLAUDE.md").exists()
     finally:

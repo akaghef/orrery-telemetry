@@ -23,7 +23,6 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
 from _installed_client_payload import runtime_contract_sources  # noqa: E402
-from test_instruction_blocks import engine as instruction_engine  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -1008,7 +1007,7 @@ exit 0
         assert "<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        claude_target = instruction_engine(env).target
+        claude_target = home / ".claude" / "CLAUDE.md"
         assert "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->" in claude_target.read_text(encoding="utf-8")
         assert not (project / "CLAUDE.md").exists()
 

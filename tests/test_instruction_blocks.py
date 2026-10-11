@@ -311,3 +311,14 @@ def test_noninteractive_existing_file_change_requires_consent(env,existing,monke
     assert all(after[k]==v for k,v in before.items())
     assert not e.receipt_path.exists()
     assert (existing=='target')==e.target.exists()
+
+
+def test_explicit_claude_config_dir_installs_at_the_literal_user_path(env):
+    home = Path(env['HOME'])
+    env['CLAUDE_CONFIG_DIR'] = str(home / 'custom-config')
+    e = engine(env)
+    assert e.target == home / 'custom-config' / 'CLAUDE.md'
+    apply(e)
+    assert m.block_bytes((home / 'custom-config' / 'CLAUDE.md').read_bytes()) == e.block
+    assert not (home / '.claude' / 'CLAUDE.md').exists()
+    assert not (Path(env['AGENTSTACK_PROJECT_KEY']) / 'CLAUDE.md').exists()
