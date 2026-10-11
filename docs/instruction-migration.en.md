@@ -24,6 +24,8 @@ Normal launchers resolve an existing identity before execution. If both candidat
 
 Different versions loaded together can contradict each other. Detection walks only cwd and its parents for CLAUDE.md/AGENTS.md, never siblings or all of HOME. Doctor reports counts, files, hashes and cleanup commands. SessionStart emits only a count and an operator-facing doctor hint. A later UI change will link directly to both language versions of this page.
 
+On update, the previous project key from `env.sh` and the current project folder are also candidates. New instructions use the current key; each old-block proof records the actual matched render key. There is no saved inventory of every past folder and no broad scan. Run doctor in those working folders or select an explicit `--path`.
+
 ```sh
 agentstack-claude-setup --check
 agentstack-codex-setup --check

@@ -310,7 +310,8 @@ class Engine:
         self.provider = provider
         self.cwd = Path(cwd or os.getcwd()).absolute()
         self.install = Path(self.env.get('AGENTSTACK_HOME') or str(Path(self.env['HOME']) / '.agentstack')).absolute()
-        self.project = self.env.get('AGENTSTACK_LEGACY_PROJECT_KEY') or self.env.get('AGENTSTACK_PROJECT_KEY') or ''
+        self.project = self.env.get('AGENTSTACK_PROJECT_KEY') or ''
+        self.legacy_project = self.env.get('AGENTSTACK_LEGACY_PROJECT_KEY') or self.project
         if provider == 'claude':
             scope = self.env.get('AGENTSTACK_CLAUDE_MD_SCOPE', '')
             if scope not in ('', 'global'):
@@ -343,33 +344,42 @@ class Engine:
         return r
 
     def known(self, data, path, receipt=None):
+        proof = self.provenance(data, path, receipt)
+        return proof['template_id'] if proof else None
+
+    def provenance(self, data, path, receipt=None):
         block = block_bytes(data)
         if block is None:
             return None
         if receipt and sha(block) == receipt['plan']['target']['after_block_sha256']:
-            return receipt['plan']['target']['template_id']
-        span = parse(data); provider = span[2]
-        candidates = {self.project, str(path.parent), ''}
-        if provider == self.provider and block.replace(b'\r\n', b'\n') == self.block:
-            return sha(self.template)
-        for item in self.catalog:
-            if item['provider'] != provider:
-                continue
+            previous = receipt['plan']['target']
+            return {'template_id': previous['template_id'], 'render_inputs': previous['render_inputs']}
+        provider = parse(data)[2]
+        # Deterministic selection also when a historical template did not use
+        # every placeholder: separate-process plans must have identical bytes.
+        candidates = sorted({self.project, self.legacy_project, str(path.parent), ''})
+        templates = ([{'template_id': sha(self.template), 'template': self.template.decode(),
+                       'renderer_id': 'literal-v2'}] if provider == self.provider else [])
+        templates += [item for item in self.catalog if item['provider'] == provider]
+        for item in templates:
             for project in candidates:
                 try:
                     rendered = render(provider, item['template'].encode(), str(self.install), project, item['renderer_id'])
                 except Refused:
                     continue
                 if block.replace(b'\r\n', b'\n') == rendered:
-                    return item['template_id']
+                    return {'template_id': item['template_id'], 'render_inputs': {
+                        'install_home': str(self.install), 'project_key': project or None,
+                        'renderer_id': item['renderer_id']}}
         return None
 
     def source_paths(self, explicit=(), detect=False):
         paths = {Path(x).absolute() for x in explicit}
         if any(x.name not in ('CLAUDE.md', 'AGENTS.md') for x in paths):
             raise Refused('ARGUMENTS_INVALID', '--path must name CLAUDE.md or AGENTS.md')
-        if self.provider == 'claude' and self.project:
-            paths.add(Path(self.project).absolute() / 'CLAUDE.md')
+        if self.provider == 'claude':
+            for project in {self.project, self.legacy_project} - {''}:
+                paths.add(Path(project).absolute() / 'CLAUDE.md')
         for folder in (self.cwd, *self.cwd.parents):
             if detect or self.provider == 'claude':
                 paths.add(folder / 'CLAUDE.md')
@@ -414,19 +424,20 @@ class Engine:
         old = data or b''
         try:
             b = block_bytes(old)
-            known = self.known(old, path, receipt)
+            proof = self.provenance(old, path, receipt)
+            known = proof['template_id'] if proof else None
         except Refused:
             if target:raise
             # Malformed sources are retained in this same receipt, so purge
             # cannot silently erase their backups while their marker remains.
-            b,known=None,None
+            b,known,proof=None,None,None
         if target and b and not known:
             raise Refused('INSTRUCTION_PLAN_CHANGED', 'edited target; compare block locally before applying')
         after = replace_block(old, self.block) if target else (replace_block(old, b'') if known else old)
         entry.update(before_sha256=sha(data) if data is not None else None, after_sha256=sha(after),
                      before_block_sha256=sha(b) if b else None, after_block_sha256=sha(self.block) if target else (None if known else (sha(b) if b else None)),
                      template_id=sha(self.template) if target else known,
-                     render_inputs={'install_home':str(self.install),'project_key':self.project or None,'renderer_id':'literal-v2' if target else 'legacy-sed-v1'},
+                     render_inputs=(proof['render_inputs'] if not target and proof else {'install_home':str(self.install),'project_key':self.project or None,'renderer_id':'literal-v2' if target else 'legacy-sed-v1'}),
                      git_state='not-source' if target else git_state(path), strategy='atomic-referent' if target or known else 'read-only')
         return entry
 

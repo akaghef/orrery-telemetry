@@ -24,6 +24,8 @@ block は ORRERY Mail tool があるときだけ従います。参加材料は�
 
 異なる版の block を二重に読むと指示が食い違うことがあります。検出は cwd から親の CLAUDE.md / AGENTS.md に限定し、sibling や HOME 全体を探しません。doctor は残数・file・hash・片付ける command を表示します。SessionStart は件数と人向け doctor の案内だけです。画面側の案内は後続の変更で、このページの日英両方へリンクします。
 
+更新時は、更新前の `env.sh` の project key と現在の key のフォルダも候補にします。新しい指示は現在の key で描画し、旧 block の一致証明には実際に一致した旧 key を記録します。過去に使った全フォルダの一覧は保存していないため、自動の広域探索はしません。それらの作業フォルダで doctor を実行するか、明示 `--path` で確認してください。
+
 ```sh
 agentstack-claude-setup --check
 agentstack-codex-setup --check

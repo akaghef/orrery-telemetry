@@ -253,3 +253,30 @@ def test_codex_does_not_automigrate_project_claude_file(env):
     apply(e)
     assert source.read_bytes()==previous
     assert any(f['source_path']==str(source) for f in e.detect())
+
+
+def test_update_uses_old_project_for_source_proof_and_current_project_for_target(env):
+    old=Path(env['HOME'])/'previous-project';old.mkdir()
+    e=engine({**env,'AGENTSTACK_LEGACY_PROJECT_KEY':str(old)})
+    item=next(x for x in e.catalog if x['provider']=='claude' and '__AGENTSTACK_PROJECT_KEY__' in x['template'])
+    source=old/'CLAUDE.md'
+    nested=old/'nested/CLAUDE.md';nested.parent.mkdir()
+    original=m.render('claude',item['template'].encode(),str(e.install),str(old),'legacy-sed-v1')
+    for path in (source,nested):path.write_bytes(original)
+    p=e.plan([str(nested)])
+    assert p['target']['render_inputs']['project_key']==env['AGENTSTACK_PROJECT_KEY']
+    assert {x['requested_path'] for x in p['sources']}=={str(source),str(nested)}
+    assert all(x['render_inputs']['project_key']==str(old) for x in p['sources'])
+    assert all(x['render_inputs']['renderer_id']=='legacy-sed-v1' for x in p['sources'])
+    # The real setup entry reads the newly published env.sh, while the
+    # installer carries the prior key only for old-source discovery.
+    import shlex
+    (e.install/'env.sh').write_text('export AGENTSTACK_PROJECT_KEY='+shlex.quote(env['AGENTSTACK_PROJECT_KEY'])+'\n')
+    response=subprocess.run(['/bin/bash',str(ROOT/'bin/agentstack-claude-setup'),'--apply',
+        '--plan-id',m.sha(m.canonical(p)),'--assume-yes','--path',str(nested),'--json'],
+        env=e.env,capture_output=True,text=True,check=True)
+    result=json.loads(response.stdout)
+    assert result['stage']=='complete'
+    assert env['AGENTSTACK_PROJECT_KEY'].encode() in e.target.read_bytes()
+    assert str(old).encode() not in e.target.read_bytes()
+    assert all(m.block_bytes(path.read_bytes()) is None for path in (source,nested))

@@ -91,6 +91,7 @@
     "AGENTSTACK_TERMINAL": "auto"
   },
   "install_dir": "/home/alice/.agentstack",
+  "instruction_receipts": [],
   "notes": [
     "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
     "Claude and Codex skills use manifest-owned symlinks; existing conflicts are preserved.",
