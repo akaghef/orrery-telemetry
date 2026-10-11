@@ -81,17 +81,19 @@ def native(tmp_path):
         stderr=log,
         start_new_session=True,
     )
-    client = AgentMailClient(
-        HttpJsonRpcTransport(
-            f"http://127.0.0.1:{port}/api/", timeout=1, allow_redirects=False
-        )
+    url = f"http://127.0.0.1:{port}/api/"
+    # The short timeout is only for polling startup; calls made by the tests
+    # use the client's default, as the other native Mail tests do.
+    probe_client = AgentMailClient(
+        HttpJsonRpcTransport(url, timeout=1, allow_redirects=False)
     )
+    client = AgentMailClient(HttpJsonRpcTransport(url, allow_redirects=False))
     try:
         deadline = time.monotonic() + 30
         while True:
             assert proc.poll() is None, "isolated Mail process exited"
             try:
-                health = client._call_tool_object("health_check", {})
+                health = probe_client._call_tool_object("health_check", {})
                 if control.exists():
                     break
             except AgentMailError:
@@ -102,7 +104,7 @@ def native(tmp_path):
         connection = {
             "kind": "orrery-mail-connection-v1",
             "expected_server_instance_id": instance,
-            "mcp_url": f"http://127.0.0.1:{port}/api/",
+            "mcp_url": url,
             "management_socket": str(control),
             "runtime_dir": str(tmp_path),
             "http_bearer_mode": "disabled",
