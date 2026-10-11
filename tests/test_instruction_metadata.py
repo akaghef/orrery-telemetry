@@ -77,3 +77,14 @@ def test_same_referent_source_is_updated_once_and_has_no_cleanup_notice(env):
     assert {f['kind'] for f in findings}=={'current'}
     assert all(not f['cleanup_argv'] for f in findings)
     assert source.is_symlink()
+
+
+def test_existing_directory_symlink_allows_new_user_file_but_broken_link_refuses(env):
+    e=engine(env)
+    real=Path(env['HOME'])/'real-config';real.mkdir()
+    e.home.symlink_to(real, target_is_directory=True)
+    assert apply(e)['stage']=='complete'
+    assert e.home.is_symlink() and (real/'CLAUDE.md').read_bytes()==e.block
+    broken=Path(env['HOME'])/'broken-config';broken.symlink_to('missing-directory', target_is_directory=True)
+    with pytest.raises(m.Refused,match='INSTRUCTION_PATH_UNSAFE'):
+        m.snapshot(broken/'CLAUDE.md')

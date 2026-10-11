@@ -141,13 +141,14 @@ def snapshot(path):
         try:
             st = current.lstat()
         except FileNotFoundError:
-            if chain:
-                # A broken symlink is not an absent ordinary destination.
-                raise Refused('INSTRUCTION_PATH_UNSAFE', current)
             resolved = current.joinpath(*pending); break
         if stat.S_ISLNK(st.st_mode):
             hops += 1
             if hops > 40 or (st.st_uid != os.getuid() and not (st.st_uid == 0 and str(current) in ('/tmp','/var'))):
+                raise Refused('INSTRUCTION_PATH_UNSAFE', current)
+            try:
+                current.stat()
+            except (OSError, RuntimeError):
                 raise Refused('INSTRUCTION_PATH_UNSAFE', current)
             text = os.readlink(current)
             chain.append({'path': str(current), 'dev': st.st_dev, 'ino': st.st_ino, 'link_text': text})

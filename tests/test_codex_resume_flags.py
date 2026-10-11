@@ -446,7 +446,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
     copy_client_library(install_home)
-    hooks.mkdir(parents=True)
+    hooks.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bindir)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
     for name in (
@@ -1061,7 +1061,7 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
     copy_client_library(install_home)
-    hooks.mkdir(parents=True)
+    hooks.mkdir(parents=True, exist_ok=True)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(
         (ROOT / "bin" / "agentstack-codex-bootstrap").read_text(encoding="utf-8"),
@@ -1144,7 +1144,7 @@ def test_top_level_bootstrap_records_standalone_origin(policy_env):
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
     copy_client_library(install_home)
-    hooks.mkdir(parents=True)
+    hooks.mkdir(parents=True, exist_ok=True)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bootstrap)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
