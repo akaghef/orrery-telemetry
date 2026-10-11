@@ -22,11 +22,18 @@ import uuid
 
 from agentstack_mail import enrollment_cli as enroll
 from agentstack_mail.enrollment import credential_fingerprint, PROTOCOL_VERSION
-from .agent_mail_client import AgentMailClient, HttpJsonRpcTransport
+from .agent_mail_client import AgentMailClient, AgentNotFoundError, HttpJsonRpcTransport
 from .mcp_server import AgentStackProxy
 
-KIND = "orrery-daemon-binding-v1"
-NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,127}")
+KIND = "orrery-daemon-binding-v2"
+LEGACY_KIND = "orrery-daemon-binding-v1"
+# Mail's canonical agent name (sanitize_agent_name keeps only ASCII letters and
+# digits, up to 128). Consumers that pin the same list use the same rule.
+NAME = re.compile(r"[A-Za-z][A-Za-z0-9]{0,127}")
+MAX_PEERS = 16
+# The only codes that mean "this one peer cannot be used"; any other failure is
+# an outage. Consumers map these codes, never the exception text of Mail.
+PEER_STATUS = {"daemon-peer-changed": "changed", "daemon-peer-missing": "missing"}
 
 
 class DaemonError(RuntimeError):
@@ -97,31 +104,52 @@ def connection_at(path):
 def profile_at(path):
     path = Path(path)
     value = private_json(path)
+    if value.get("kind") == LEGACY_KIND:
+        # The single peer_name/peer_id form is not read beside the list; the
+        # operator rewrites the profile once (docs/daemon-agents.md).
+        raise DaemonError("profile-legacy-v1")
     fields = {
         "kind",
         "name",
         "agent_id",
         "project_key",
         "connection",
-        "peer_name",
-        "peer_id",
+        "peers",
         "pause_path",
         "lock_path",
     }
     if set(value) != fields or value.get("kind") != KIND:
         raise DaemonError("profile-invalid")
-    for key in ("name", "peer_name"):
-        if not isinstance(value[key], str) or NAME.fullmatch(value[key]) is None:
-            raise DaemonError("profile-invalid")
-    for key in ("agent_id", "peer_id"):
-        if type(value[key]) is not int or value[key] <= 0:
-            raise DaemonError("profile-invalid")
+    if not isinstance(value["name"], str) or NAME.fullmatch(value["name"]) is None:
+        raise DaemonError("profile-invalid")
+    if type(value["agent_id"]) is not int or value["agent_id"] <= 0:
+        raise DaemonError("profile-invalid")
     for key in ("project_key", "connection", "pause_path", "lock_path"):
         if not isinstance(value[key], str) or not Path(value[key]).is_absolute():
             raise DaemonError("profile-invalid")
-    if value["name"] == value["peer_name"]:
+    peers = value["peers"]
+    if not isinstance(peers, list) or not 1 <= len(peers) <= MAX_PEERS:
         raise DaemonError("profile-invalid")
+    names, ids = set(), set()
+    for peer in peers:
+        if (
+            not isinstance(peer, dict)
+            or set(peer) != {"name", "id"}
+            or not isinstance(peer["name"], str)
+            or NAME.fullmatch(peer["name"]) is None
+            or type(peer["id"]) is not int
+            or peer["id"] <= 0
+            or peer["name"] in names | {value["name"]}
+            or peer["id"] in ids | {value["agent_id"]}
+        ):
+            raise DaemonError("profile-invalid")
+        names.add(peer["name"])
+        ids.add(peer["id"])
     return value
+
+
+def peer_ids(profile):
+    return {peer["name"]: peer["id"] for peer in profile["peers"]}
 
 
 def canonical_wait():
@@ -181,6 +209,7 @@ class DaemonRuntime:
         self, profile, connection, token, *, client=None, inspect=None, wait=None
     ):
         self.profile, self.connection = dict(profile), dict(connection)
+        self._peers = peer_ids(profile)
         self._token = token
         self._closed = threading.Event()
         self._calls = threading.RLock()
@@ -350,17 +379,10 @@ class DaemonRuntime:
                     "instance": self.connection["expected_server_instance_id"],
                 }
             if name == "whois":
-                if arguments.get("agent_name") != self.profile["peer_name"]:
+                peer = arguments.get("agent_name")
+                if peer not in self._peers:
                     raise DaemonError("daemon-peer-denied")
-                result = self.proxy.whois(self.sid, name=self.profile["peer_name"])
-                if (
-                    type(result.get("id")) is not int
-                    or result.get("id") != self.profile["peer_id"]
-                    or result.get("project_id") != project_id
-                    or result.get("retired_at")
-                ):
-                    raise DaemonError("daemon-peer-changed")
-                return result
+                return self._pinned_peer(peer, project_id)
             if name == "fetch_inbox":
                 limit = arguments.get("limit", 20)
                 bodies = arguments.get("include_bodies", False)
@@ -385,14 +407,17 @@ class DaemonRuntime:
                     include_bodies=bodies,
                     since_ts=since,
                 )
+                # Only listed peer names cross. A listed name with another
+                # numeric ID is returned for the consumer to hold, never ACKed
+                # here, so a changed peer stops only that peer.
                 for item in result:
                     if (
                         type(item.get("id")) is not int
                         or item["id"] <= 0
                         or item.get("project_id") != project_id
-                        or item.get("from") != self.profile["peer_name"]
+                        or item.get("from") not in self._peers
                         or type(item.get("sender_id")) is not int
-                        or item.get("sender_id") != self.profile["peer_id"]
+                        or item["sender_id"] <= 0
                     ):
                         raise DaemonError("daemon-message-denied")
                 if bodies and result:
@@ -400,20 +425,35 @@ class DaemonRuntime:
                 return result
             if name == "acknowledge_message":
                 return self.proxy.acknowledge_message(self.sid, **arguments)
-            if arguments.get("to") != [self.profile["peer_name"]]:
+            to = arguments.get("to")
+            if (
+                not isinstance(to, list)
+                or len(to) != 1
+                or not isinstance(to[0], str)
+                or to[0] not in self._peers
+            ):
                 raise DaemonError("daemon-peer-denied")
             # Check the actual peer's row just before using its name for a write.
-            self._active()
-            peer = self.proxy.whois(self.sid, name=self.profile["peer_name"])
-            if (
-                type(peer.get("id")) is not int
-                or peer.get("id") != self.profile["peer_id"]
-                or peer.get("project_id") != project_id
-                or peer.get("retired_at")
-            ):
-                raise DaemonError("daemon-peer-changed")
+            self._pinned_peer(to[0], project_id)
             self._active()
             return self.proxy.send_message(self.sid, **arguments)
+
+    def _pinned_peer(self, name, project_id):
+        self._active()
+        try:
+            result = self.proxy.whois(self.sid, name=name)
+        except AgentNotFoundError:
+            # Only Mail's own not-found answer; any other tool error or
+            # transport failure stays an outage (daemon-operation-failed).
+            raise DaemonError("daemon-peer-missing") from None
+        if (
+            type(result.get("id")) is not int
+            or result.get("id") != self._peers[name]
+            or result.get("project_id") != project_id
+            or result.get("retired_at")
+        ):
+            raise DaemonError("daemon-peer-changed")
+        return result
 
     def wait_for_notification(self, timeout):
         if (

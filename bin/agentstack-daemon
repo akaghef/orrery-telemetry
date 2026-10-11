@@ -95,7 +95,8 @@ def main():
             runtime = DaemonRuntime.open(args.profile)
             try:
                 result = runtime.call("runtime_status", {})
-                runtime.call("whois", {"agent_name": runtime.profile["peer_name"]})
+                for peer in runtime.profile["peers"]:
+                    runtime.call("whois", {"agent_name": peer["name"]})
             finally:
                 runtime.close()
         print(json.dumps({"ok": True, **result}))
