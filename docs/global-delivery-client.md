@@ -162,7 +162,7 @@ App の `AGENTSTACK_CODEX_APP_COLD_WAKE`、`AGENTSTACK_CODEX_BINARY`、`AGENTSTA
 
 専用の一時 HOME を使い、`AGENTSTACK_RUNTIME_MODE=global`、`AGENTSTACK_GLOBAL_SERVER_CONFIG`（完成した candidate の `server-config.json`）、`AGENTSTACK_MCP_URL`（同じ隔離 Mail の HTTP endpoint）、`AGENTSTACK_HOME`（同じ isolation root の `agentstack`）、`AGENTSTACK_PORT`（専用の空き port）を明示します。設定が壊れたときに旧 DB へ戻ることはありません。実サービスの切替は別の手順です。
 
-最初にローカルの operator が `agentstack-http-operator configure` を実行します。固定の `runtime/http-operator.json` を0600で新規作成し、既存 file は上書きしません。`agentstack-http-operator show` で表示した値を HTTP の `Authorization: Bearer …` に渡します。これは agent の登録 token とは別です。値を URL、ログ、共有ファイルに載せないでください。失効させる場合は、利用する dashboard と cockpit を停止し、この固定 file を operator が退避してから configure し直します。
+最初にローカルの operator が同じ隔離先の `AGENTSTACK_HOME` を明示して `agentstack-http-operator configure` を実行します。CLI も未設定なら `HTTP_OPERATOR_HOME_REQUIRED` で拒否し、実 HOME を既定にしません。固定の `runtime/http-operator.json` を0600で新規作成し、既存 file は上書きしません。`agentstack-http-operator show` で表示した値を HTTP の `Authorization: Bearer …` に渡します。これは agent の登録 token とは別です。値を URL、ログ、共有ファイルに載せないでください。失効させる場合は、利用する dashboard と cockpit を停止し、この固定 file を operator が退避してから configure し直します。
 
 HTTP は TCP 上の UID を直接証明できません。私有 file を読める利用者の capability を証明にし、loopback・設定済み Host・提示された Origin/Referer/Fetch Metadata を同じ入口で確認します。static の GET/HEAD 以外は、将来追加される route もこの入口を通ります。capability を盗める同 UID/root、XSS、ページへの権限を与えた拡張機能は、この境界では防げません。別の利用者と1台の Mail を共有する用途は支えません。
 
@@ -196,3 +196,8 @@ MAX・keyset・limit・返却 revision は1つの read transaction に置き、f
 別 owner の同名だった場合、pending の SHA-256 を固定して `registration-abandon --client-name SLUG --expected-digest DIGEST` を明示できます。これは所有できない行を確認した場合だけ terminal にし、別の名前の登録や自動採用はしません。未送信・結果不明は同 intent の再送、所有できた行は finalize を使います。通常入口から terminal を解除せず、新 identity には新 root を使います。
 
 `POST /api/global/spawn` はこの共通処理を使い、cwd を既存の spawn roots で確認します。provider の指示配置だけを明示 configure し、Codex trust は自動承認しません。必要な設定が無ければ registered_unconfigured を返します。`POST /api/global/resume` は同じ root の既存 launch/session を使い、operator resolution 待ちなら新しい launch を作りません。通信成功後に disk が失敗した場合も、status から同じ pending/finalize の入口へ戻ってください。
+
+
+名前の照合で Mail に既存の名前があり、一致する client root が無ければ、root/pending の作成前に `NAME_CONFLICT` を返します。`clients` の `name_agent_id` はその読取結果、`diagnostics` は root ごとの異常です。壊れた root は利用できませんが、他の root の一覧と別名の新規登録は続けられます。terminal pending は名前と owner conflict の証拠として保持し、同名の再利用を拒否します。退役済み identity の照合も管理側の owner 検証で行います。
+
+登録直前の競合で pending が残った場合は、`GET /api/global/spawn-status?client_name=SLUG` の `registration_sha256` を確認し、同じ HTTP admission の下で `POST /api/global/registration-abandon` に `{"client_name":"SLUG","expected_digest":"DIGEST"}` を渡せます。digest 不一致では記録を変えません。既存 CLI と同じく別 owner と確認できた intent だけを terminal にし、別の identity には新 root を使います。token は status に返しません。不正 JSON は400 `QUERY_INVALID`、登録の競合は409、transport などの障害は503です。

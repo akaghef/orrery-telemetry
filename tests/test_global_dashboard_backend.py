@@ -110,3 +110,103 @@ def test_bad_spawn_input_is_rejected_before_any_root(ui):
     code,raw=request(ui,'/api/global/spawn',method='POST',body=body)
     assert code==400 and json.loads(raw)['reason']=='QUERY_INVALID'
     assert not (ui[0]['root']/'agentstack/clients').exists()
+
+
+def test_malformed_json_is_input_error(ui):
+    state,http,token=ui
+    req=Request(f'http://127.0.0.1:{http.server_port}/api/global/spawn',method='POST',data=b'{',
+        headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+    with pytest.raises(HTTPError) as error:urlopen(req,timeout=5)
+    assert error.value.code==400
+    assert json.loads(error.value.read())['reason']=='QUERY_INVALID'
+
+
+def test_foreign_registration_name_returns_conflict_without_local_state(ui):
+    import os
+    body={'client_name':'foreign','name':'Alpha','program':'daemon','model':'fixture','cwd':os.environ['HOME']}
+    code,raw=request(ui,'/api/global/spawn',method='POST',body=body)
+    assert code==409 and json.loads(raw)['reason']=='NAME_CONFLICT',raw
+    assert not (ui[0]['root']/'agentstack/clients/foreign').exists()
+
+
+@pytest.mark.parametrize('program',['claude-code','codex'])
+def test_http_provider_missing_instructions_returns_actionable_status(ui,program,monkeypatch):
+    import os
+    from dashboard.global_backend import OPERATOR_API
+    # Keep this request on the status/configuration boundary, without provider binaries.
+    operator=OPERATOR_API['RuntimeOperator'](ui[0]['config_path'])
+    initial=operator.create('provider',agent_name='HttpProvider',program=program,model='fixture')
+    assert initial['stage']=='registered_unconfigured'
+    assert initial['reason']=='INSTRUCTION_PROVIDER_CONFIG_REQUIRED'
+    delivery=operator.api['runtime_delivery'](operator.client('provider'))
+    started=[]
+    monkeypatch.setattr(type(delivery),'start',lambda self,*a,**kw:started.append((a,kw)))
+    body={'client_name':'provider','name':'HttpProvider','program':program,'model':'fixture','cwd':os.environ['HOME']}
+    code,raw=request(ui,'/api/global/spawn',method='POST',body=body)
+    expected='configured' if program=='claude-code' else 'registered_unconfigured'
+    assert code==200 and json.loads(raw)['stage']==expected,raw
+    assert bool(started)==(program=='claude-code')
+    code,raw=request(ui,'/api/global/spawn-status?client_name=provider')
+    assert code==200 and json.loads(raw)['stage']==expected,raw
+    if program=='codex':assert json.loads(raw)['reason']=='CODEX_HOOK_CONFIGURE_REQUIRED'
+
+
+def test_http_registration_race_has_digest_checked_abandon_and_new_root(ui):
+    import os
+    from dashboard.global_backend import OPERATOR_API
+    operator=OPERATOR_API['RuntimeOperator'](ui[0]['config_path'])
+    operator.prepare('race')
+    client=operator.client('race')
+    # Simulate a competing registration between lookup and atomic register.
+    with pytest.raises(RuntimeError,match='OWNER_REQUIRED'):
+        client.create('Alpha','daemon','fixture')
+    pending=client.outputs['registration']
+    original=pending.read_bytes()
+    code,raw=request(ui,'/api/global/spawn-status?client_name=race')
+    state=json.loads(raw)
+    assert code==200 and state['stage']=='registration_pending'
+    assert state['registration_sha256']
+    code,raw=request(ui,'/api/global/registration-abandon',auth=False,method='POST',
+        body={'client_name':'race','expected_digest':state['registration_sha256']})
+    assert code==403 and pending.read_bytes()==original
+    code,raw=request(ui,'/api/global/registration-abandon',method='POST',
+        body={'client_name':'race','expected_digest':'0'*64})
+    assert code==409 and pending.read_bytes()==original
+    code,raw=request(ui,'/api/global/registration-abandon',method='POST',
+        body={'client_name':'race','expected_digest':state['registration_sha256']})
+    assert code==200 and json.loads(raw)['terminal'] is True
+    terminal=pending.read_bytes()
+    code,raw=request(ui,'/api/global/spawn',method='POST',body={'client_name':'after-race',
+        'name':'AfterRace','program':'daemon','model':'fixture','cwd':os.environ['HOME']})
+    assert code==200 and json.loads(raw)['stage']=='registered_unconfigured',raw
+    assert pending.read_bytes()==terminal
+
+
+@pytest.mark.parametrize('reason',['OWNER_REQUIRED','REGISTRATION_PENDING_CONFLICT','EXISTING_IDENTITY_REQUIRED'])
+def test_exception_registration_conflicts_are_http_409(ui,monkeypatch,reason):
+    import os
+    from dashboard.global_backend import OPERATOR_API
+    def conflict(*a,**kw):raise OPERATOR_API['API']['ClientError'](reason)
+    monkeypatch.setattr(OPERATOR_API['RuntimeOperator'],'spawn',conflict)
+    code,raw=request(ui,'/api/global/spawn',method='POST',body={'client_name':'conflict',
+        'name':'ConflictName','program':'daemon','model':'fixture','cwd':os.environ['HOME']})
+    assert code==409 and json.loads(raw)['reason']==reason
+
+
+@pytest.mark.parametrize('program',['claude-code','codex'])
+def test_fresh_http_provider_spawn_uses_configuration_without_provider_binary(ui,program,monkeypatch):
+    import os
+    from dashboard.global_backend import OPERATOR_API
+    delivery=OPERATOR_API['API']['delivery_contract']()['RuntimeDelivery']
+    started=[]
+    monkeypatch.setattr(delivery,'start',lambda self,*a,**kw:started.append((a,kw)))
+    body={'client_name':'fresh-provider','name':'FreshHttpProvider','program':program,
+        'model':'fixture','cwd':os.environ['HOME']}
+    assert not (ui[0]['root']/'agentstack/clients/fresh-provider').exists()
+    code,raw=request(ui,'/api/global/spawn',method='POST',body=body)
+    expected='configured' if program=='claude-code' else 'registered_unconfigured'
+    assert code==200 and json.loads(raw)['stage']==expected,raw
+    code,raw=request(ui,'/api/global/spawn-status?client_name=fresh-provider')
+    assert code==200 and json.loads(raw)['stage']==expected,raw
+    assert bool(started)==(program=='claude-code')
+    if program=='codex':assert json.loads(raw)['reason']=='CODEX_HOOK_CONFIGURE_REQUIRED'

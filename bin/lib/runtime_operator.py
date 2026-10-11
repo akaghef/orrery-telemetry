@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 import runpy
-from types import SimpleNamespace
+import hashlib
 
 ROOT = Path(__file__).resolve().parents[2]
 API = runpy.run_path(str(ROOT/'bin/lib/runtime_client.py'))
@@ -32,14 +32,13 @@ class RuntimeOperator:
             'candidate_generation':c.get('candidate_generation'),'authority_epoch':c.get('authority_epoch')}
         if any(not isinstance(v,str) or not v for v in self.binding.values()):
             raise self.api['ClientError']('BINDING_INVALID')
-        self.transport=SimpleNamespace(config=c)
 
     def read(self, query):
         # No local DB verification: the admitted server owns preparation proof,
         # tracker, authority fence and the single SQLite read transaction.
         if self.api['read_private'](self.path)!=self.raw:
             raise self.api['ClientError']('CONTEXT_CHANGED')
-        reply=self.api['operator_exchange'](self.transport,self.binding,query)
+        reply=self.api['operator_exchange'](self.config,self.binding,query)
         if self.api['read_private'](self.path)!=self.raw:
             raise self.api['ClientError']('CONTEXT_CHANGED')
         return reply
@@ -109,7 +108,10 @@ class RuntimeOperator:
         elif provider in ('claude','codex'):
             home=client.runtime_dir/'provider-home'/provider
             helpers=self.api['delivery_contract']()['instruction_api']()
-            helpers['provider_instructions'](home,provider,str(ROOT),'')
+            try:
+                helpers['provider_instructions'](home,provider,str(ROOT),'')
+            except helpers['Refused'] as exc:
+                raise self.api['ClientError']('INSTRUCTION_PROVIDER_CONFIG_REQUIRED') from exc
             if provider=='codex':delivery.codex_trust()
         else:
             raise self.api['ClientError']('GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED')
@@ -118,14 +120,16 @@ class RuntimeOperator:
     def status(self, name):
         path=self.path_for(name)
         result={'ok':True,'client_name':name,'stage':'absent','agent_id':None,
-            'next_operations':['prepare-root'],'reason':None,'launch_status':None}
+            'next_operations':['prepare-root'],'reason':None,'launch_status':None,'registration_sha256':None}
         if not path.parent.exists() and not path.parent.is_symlink():return result
         try:
             client=self.client(name)
             with client.operation_mutex():
                 pending=client.outputs['registration']
                 if pending.exists() or pending.is_symlink():
-                    row=self.api['read_json'](pending)
+                    raw=self.api['read_private'](pending)
+                    result['registration_sha256']=hashlib.sha256(raw).hexdigest()
+                    row=json.loads(raw)
                     if row.get('terminal'):
                         result.update(stage='unavailable',next_operations=['repair-local-state'],reason='REGISTRATION_OWNER_CONFLICT')
                     elif row.get('row'):
@@ -135,7 +139,7 @@ class RuntimeOperator:
                     result.update(stage='root_only',next_operations=['replay-registration'])
                 else:
                     has_launch=client.outputs['launch'].exists() or client.outputs['launch'].is_symlink()
-                    row=client.inspect_owner() if has_launch else client.observe()
+                    row=client.inspect_owner()
                     result['agent_id']=row['agent_id']
                     if has_launch:
                         delivery=self.api['runtime_delivery'](client)
@@ -156,24 +160,35 @@ class RuntimeOperator:
     def lookup(self, name=None):
         target=self.read({'kind':'resolve_name','name':name})['data']['agent_id'] if name is not None else None
         matches=[]
+        diagnostics=[]
         if self.clients_parent.exists() or self.clients_parent.is_symlink():
             self.api['safe_private_directory'](self.clients_parent)
             for entry in sorted(self.clients_parent.iterdir()):
-                # Enumerate names only. Validation and observation are per root.
-                self.api['validate_client_name'](entry.name)
-                status=self.status(entry.name)
-                if status['stage']=='unavailable':raise self.api['ClientError']('CLIENT_LOOKUP_UNAVAILABLE')
-                pending=entry/self.api['CLIENT_LAYOUT']['registration']
-                saved=self.api['read_json'](pending) if pending.exists() or pending.is_symlink() else {}
-                if name is None or (target is not None and status['agent_id']==target) or saved.get('name')==name:
-                    matches.append({k:status[k] for k in ('client_name','agent_id','stage')})
-        result={'ok':True,'matches':matches}
+                try:
+                    self.api['validate_client_name'](entry.name)
+                    status=self.status(entry.name)
+                    pending=entry/self.api['CLIENT_LAYOUT']['registration']
+                    saved=self.api['read_json'](pending) if pending.exists() or pending.is_symlink() else {}
+                    if status['stage']=='unavailable':
+                        diagnostics.append({'client_name':entry.name,'reason':status['reason']})
+                    if name is None or (target is not None and status['agent_id']==target) or saved.get('name')==name:
+                        matches.append({k:status[k] for k in ('client_name','agent_id','stage')})
+                except (OSError,ValueError,RuntimeError,KeyError,TypeError) as exc:
+                    reason=str(exc)
+                    if not reason.isascii() or not reason.replace('_','').isalnum() or not reason.isupper():
+                        reason='CLIENT_LOOKUP_UNAVAILABLE'
+                    diagnostics.append({'client_name':entry.name,'reason':reason})
+        result={'ok':True,'matches':matches,'name_agent_id':target,'diagnostics':diagnostics}
         self.api['wire_contract']()['validate_schema'](result,self.api['operator_schemas']()['FIXTURE']['client_lookup_schema'])
         return result
 
     def create(self, name, *, agent_name, program, model):
         self.api['validate_client_name'](name)
-        known=self.lookup(agent_name)['matches']
+        lookup=self.lookup(agent_name)
+        known=lookup['matches']
+        terminal={row['client_name'] for row in lookup['diagnostics'] if row['reason']=='REGISTRATION_OWNER_CONFLICT'}
+        if (lookup['name_agent_id'] is not None and not known) or any(row['client_name'] in terminal for row in known):
+            return {'ok':False,'reason':'NAME_CONFLICT','matches':[]}
         if any(row['client_name']!=name for row in known):
             reason='CLIENT_SELECTION_REQUIRED' if len(known)>1 else 'EXISTING_CLIENT_REQUIRED'
             return {'ok':False,'reason':reason,'matches':known}

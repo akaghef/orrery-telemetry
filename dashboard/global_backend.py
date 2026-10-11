@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 import runpy
-from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 # Python's module import lock initializes this one operator/client API before
@@ -70,12 +69,15 @@ class Backend:
         return self.read(q)
 
     def post(self,path,payload,validate_cwd,open_terminal):
-        table={'/api/global/spawn':'http_spawn_schema','/api/global/resume':'http_resume_schema'}
+        table={'/api/global/spawn':'http_spawn_schema','/api/global/resume':'http_resume_schema',
+            '/api/global/registration-abandon':'http_registration_abandon_schema'}
         if path not in table:raise BackendError('GLOBAL_ROUTE_UNAVAILABLE',404)
         api=self.operator.api
         schema=api['operator_schemas']()['FIXTURE'][table[path]]
         try:api['wire_contract']()['validate_schema'](payload,schema)
         except ValueError as exc:raise BackendError('QUERY_INVALID',400) from exc
+        if path.endswith('/registration-abandon'):
+            return self.operator.client(payload['client_name']).abandon_registration(payload['expected_digest'])
         if path.endswith('/spawn'):
             cwd=validate_cwd(payload['cwd'])
             return self.operator.spawn(payload['client_name'],agent_name=payload['name'],

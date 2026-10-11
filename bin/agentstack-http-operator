@@ -9,7 +9,9 @@ api=runpy.run_path(str(Path(__file__).resolve().parents[1]/'dashboard/http_opera
 p=argparse.ArgumentParser()
 p.add_argument('action',choices=('configure','show'))
 a=p.parse_args()
-home=Path(os.environ.get('AGENTSTACK_HOME',str(Path.home()/'.agentstack')))
+if not os.environ.get('AGENTSTACK_HOME'):
+    p.exit(2,'HTTP_OPERATOR_HOME_REQUIRED: set AGENTSTACK_HOME explicitly\n')
+home=Path(os.environ['AGENTSTACK_HOME'])
 if a.action=='configure':
     print(api['configure'](home))
 else:

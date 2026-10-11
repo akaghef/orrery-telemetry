@@ -164,7 +164,27 @@ def operator_schemas():
     return _UI_CONTRACT
 
 
-def operator_exchange(transport, binding, query):
+def management_exchange(config, request):
+    """One private socket transport; callers validate their response contract."""
+    path = absolute(config['management_socket'])
+    info = path.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ClientError('MANAGEMENT_SOCKET_UNSAFE')
+    with socket.socket(socket.AF_UNIX) as stream:
+        stream.settimeout(5)
+        stream.connect(str(path))
+        stream.sendall(json.dumps(request).encode() + b'\n')
+        raw = b''
+        while not raw.endswith(b'\n'):
+            block = stream.recv(16384)
+            if not block or len(raw) + len(block) > 1048576:
+                raise ClientError('MANAGEMENT_RESPONSE_INVALID')
+            raw += block
+    reply = json.loads(raw)
+    return reply
+
+
+def operator_exchange(config, binding, query):
     """One schema and binding check for client and operator UI reads."""
     schemas = operator_schemas()
     validate = wire_contract()['validate_schema']
@@ -173,7 +193,7 @@ def operator_exchange(transport, binding, query):
         validate(request, schemas['REQUEST'])
     except ValueError as exc:
         raise ClientError('QUERY_INVALID') from exc
-    reply = RuntimeClient.management_exchange(transport, request)
+    reply = management_exchange(config, request)
     if not isinstance(reply, dict) or reply.get('ok') is not True:
         raise ClientError(reply.get('reason', 'MANAGEMENT_REJECTED') if isinstance(reply, dict) else 'MANAGEMENT_REJECTED')
     try:
@@ -1110,33 +1130,14 @@ class RuntimeClient:
                 # S1 lacks this capability. No speculative S2 request is sent.
                 self.call('set_contact_policy', {'policy': policy})
 
-    def management_exchange(self, request):
-        """One private socket transport; callers validate their response contract."""
-        path = absolute(self.config['management_socket'])
-        info = path.lstat()
-        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise ClientError('MANAGEMENT_SOCKET_UNSAFE')
-        with socket.socket(socket.AF_UNIX) as stream:
-            stream.settimeout(5)
-            stream.connect(str(path))
-            stream.sendall(json.dumps(request).encode() + b'\n')
-            raw = b''
-            while not raw.endswith(b'\n'):
-                block = stream.recv(16384)
-                if not block or len(raw) + len(block) > 1048576:
-                    raise ClientError('MANAGEMENT_RESPONSE_INVALID')
-                raw += block
-        reply = json.loads(raw)
-        return reply
-
     def operator_read(self, query):
         with self.operation_mutex(), self.fence():
-            return operator_exchange(self, self.binding, query)
+            return operator_exchange(self.config, self.binding, query)
 
     def management(self, action, **values):
         with self.fence():
             self.capabilities()
-            reply = self.management_exchange({'version': 1, **self.binding, 'action': action, **values})
+            reply = management_exchange(self.config, {'version': 1, **self.binding, 'action': action, **values})
             if not isinstance(reply, dict) or not reply.get('ok'):
                 reason = reply.get('reason', '') if isinstance(reply, dict) else ''
                 raise ClientError(reason if known_error(reason) else 'MANAGEMENT_REJECTED')
@@ -1531,11 +1532,25 @@ class RuntimeClient:
                 'execution_reason': 'GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED',
                 'client_name': name, 'agent_id': row['agent_id'], 'name': row['name'], 'client_config': str(path)}
 
-    def register_child(self, parent, name, program, model, task):
-        return self.register_intent(name, program, model, task,
-            resolve=lambda value: parent.call('resolve_agent_identity', {'target_name':value})['target']['agent_id'])
+    def resolve_registration_name(self, name):
+        if self.outputs['child'].exists() or self.outputs['child'].is_symlink():
+            state=read_json(self.outputs['child'])
+            parent_path=self.clients_parent/state['parent']['client_name']/CLIENT_LAYOUT['context']
+            parent=RuntimeClient(parent_path)
+            if parent.identity['agent_id']!=state['parent']['agent_id']:
+                raise ClientError('CHILD_PARENT_MISMATCH')
+            return parent.call('resolve_agent_identity',{'target_name':name})['target']['agent_id']
+        try:
+            return self.operator_read({'kind':'resolve_name','name':name})['data']['agent_id']
+        except ClientError as exc:
+            if str(exc) in {'MANAGEMENT_REJECTED','MANAGEMENT_ACTION_INVALID','MANAGEMENT_ACTION_UNSUPPORTED','ACTION_INVALID'}:
+                raise ClientError('NAME_CONFLICT') from exc
+            raise
 
-    def register_intent(self, name, program, model, task=None, *, resolve=None):
+    def register_child(self, parent, name, program, model, task):
+        return self.register_intent(name, program, model, task)
+
+    def register_intent(self, name, program, model, task=None):
         """One same-token registration journal for standalone and child roots."""
         path = self.outputs['registration']
         with self.fence():
@@ -1561,12 +1576,7 @@ class RuntimeClient:
             except ClientError as exc:
                 if str(exc) != 'NAME_CONFLICT':
                     raise
-                try:
-                    aid = resolve(name) if resolve is not None else self.operator_read({'kind':'resolve_name','name':name})['data']['agent_id']
-                except ClientError as unavailable:
-                    if resolve is None and str(unavailable) in {'MANAGEMENT_REJECTED','MANAGEMENT_ACTION_INVALID','MANAGEMENT_ACTION_UNSUPPORTED','ACTION_INVALID'}:
-                        raise ClientError('NAME_CONFLICT') from exc
-                    raise
+                aid = self.resolve_registration_name(name)
                 if aid is None:
                     raise ClientError('TARGET_UNAVAILABLE')
                 row = result_value(self.rpc('tools/call', {'name':'whois','arguments':{
@@ -1590,16 +1600,8 @@ class RuntimeClient:
             if hashlib.sha256(raw).hexdigest()!=expected_digest:
                 raise ClientError('REGISTRATION_PENDING_CONFLICT')
             pending=json.loads(raw)
-            if self.outputs['child'].exists() or self.outputs['child'].is_symlink():
-                state=read_json(self.outputs['child'])
-                parent_path=self.clients_parent/state['parent']['client_name']/CLIENT_LAYOUT['context']
-                parent=RuntimeClient(parent_path)
-                if parent.identity['agent_id']!=state['parent']['agent_id']:
-                    raise ClientError('CHILD_PARENT_MISMATCH')
-                target=parent.call('resolve_agent_identity',{'target_name':pending['name']})['target']['agent_id']
-            else:
-                target=self.operator_read({'kind':'resolve_name','name':pending['name']})['data']['agent_id']
-                if target is None:raise ClientError('TARGET_UNAVAILABLE')
+            target=self.resolve_registration_name(pending['name'])
+            if target is None:raise ClientError('TARGET_UNAVAILABLE')
             try:
                 result_value(self.rpc('tools/call',{'name':'whois','arguments':{
                     **self.binding,'agent_id':target,'registration_token':pending['registration_token']}}))

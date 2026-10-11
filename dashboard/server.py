@@ -8479,6 +8479,10 @@ def mail_watcher_health() -> dict:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+def is_public_static(path):
+    return path == '/' or path in THEME_ASSETS
+
+
 class Handler(BaseHTTPRequestHandler):
     def parse_request(self):
         if not super().parse_request():
@@ -8488,7 +8492,7 @@ class Handler(BaseHTTPRequestHandler):
         # One rule for every verb and route, including future local operations.
         # Only exact installed static GET/HEAD resources are public.
         path = urlparse(self.path).path
-        if self.command in {'GET','HEAD'} and (path == '/' or path in THEME_ASSETS):
+        if self.command in {'GET','HEAD'} and is_public_static(path):
             return True
         try:
             try:
@@ -8507,7 +8511,10 @@ class Handler(BaseHTTPRequestHandler):
         if not re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}',reason):reason='GLOBAL_BACKEND_UNAVAILABLE'
         status=getattr(exc,'status',None) or ({'QUERY_INVALID':400,'CURSOR_INVALID':400,
             'UI_VIEWPOINT_REQUIRED':400,'NAME_INVALID':400,'CLIENT_NAME_INVALID':400,
-            'TARGET_UNAVAILABLE':404,'MESSAGE_UNAVAILABLE':404}.get(reason,503))
+            'TARGET_UNAVAILABLE':404,'MESSAGE_UNAVAILABLE':404,
+            **dict.fromkeys(('NAME_CONFLICT','OWNER_REQUIRED','REGISTRATION_PENDING_CONFLICT',
+                'REGISTRATION_OWNER_CONFLICT','EXISTING_IDENTITY_REQUIRED','EXISTING_CLIENT_REQUIRED',
+                'CLIENT_SELECTION_REQUIRED','CLIENT_ROOT_IS_CHILD','REGISTRATION_OWNERSHIP_VERIFIED_RETRY_REQUIRED'),409)}.get(reason,503))
         self._send(status,json.dumps({'ok':False,'reason':reason}).encode(),'application/json; charset=utf-8')
 
     def _global_get(self, path):
@@ -8555,13 +8562,13 @@ class Handler(BaseHTTPRequestHandler):
             return None
 
     def do_HEAD(self):
-        if GLOBAL_MODE and (urlparse(self.path).path == '/' or urlparse(self.path).path in THEME_ASSETS):
+        if GLOBAL_MODE and is_public_static(urlparse(self.path).path):
             self.do_GET()
         else:self.send_error(501,'Unsupported method')
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if GLOBAL_MODE and path != "/" and path not in THEME_ASSETS:
+        if GLOBAL_MODE and not is_public_static(path):
             self._global_get(path)
             return
         if path == "/":
@@ -8859,7 +8866,9 @@ class Handler(BaseHTTPRequestHandler):
                 if len(lengths)!=1 or not lengths[0].isascii() or not lengths[0].isdigit():raise BackendError('QUERY_INVALID',400)
                 length=int(lengths[0])
                 if not 0<length<=65536:raise BackendError('PAYLOAD_TOO_LARGE',413)
-                payload=json.loads(self.rfile.read(length))
+                try:payload=json.loads(self.rfile.read(length))
+                except (json.JSONDecodeError,UnicodeDecodeError) as exc:
+                    raise BackendError('QUERY_INVALID',400) from exc
                 def cwd(value):
                     if not os.path.isabs(value) or not os.path.isdir(value):raise BackendError('SPAWN_DIRECTORY_INVALID',400)
                     resolved=os.path.realpath(value)

@@ -83,3 +83,17 @@ def test_private_file_admission_and_no_automatic_repair(operator,monkeypatch,cha
     before=path.read_bytes() if path.exists() else None
     with pytest.raises(AdmissionError,match='HTTP_OPERATOR_UNAVAILABLE'):admit.http(headers(token),'127.0.0.1')
     assert (path.read_bytes() if path.exists() else None)==before
+
+
+@pytest.mark.parametrize('action',['configure','show'])
+def test_operator_cli_requires_explicit_home(tmp_path,action):
+    import os,subprocess,sys
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    home=tmp_path/'home';home.mkdir()
+    env={k:v for k,v in os.environ.items() if k!='AGENTSTACK_HOME'}
+    env['HOME']=str(home)
+    result=subprocess.run([sys.executable,str(root/'bin/agentstack-http-operator'),action],
+        env=env,capture_output=True,text=True,timeout=10)
+    assert result.returncode==2 and 'HTTP_OPERATOR_HOME_REQUIRED' in result.stderr
+    assert not (home/'.agentstack').exists()

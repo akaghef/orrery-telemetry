@@ -71,7 +71,7 @@ See [Installation](install.en.md#version) for version resolution order.
 
 ### Isolated global backend (API 15)
 
-Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read` and `global_spawn` are1; `instruction_migration` and `global_dashboard_ui` are0. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads and admission remain unchanged.
+Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read` and `global_spawn` are 1; `instruction_migration` and `global_dashboard_ui` are 0. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads and admission remain unchanged.
 
 ### Bundled Mail identity (API 12)
 

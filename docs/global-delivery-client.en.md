@@ -156,11 +156,11 @@ Global watcher reacts to signal-directory events, falling back to the legacy two
 
 [日本語](global-delivery-client.md#operator-ui-access)
 
-Default installation and the legacy dashboard are unchanged. API generation15 adds an isolated global backend reading a completed S2c candidate through its private management socket. The dashboard never opens Mail SQLite. No public Mail tools are added. The screen and cockpit integration follow separately: never enable the screen from the API number while `global_dashboard_ui=0`.
+Default installation and the legacy dashboard are unchanged. API generation 15 adds an isolated global backend reading a completed S2c candidate through its private management socket. The dashboard never opens Mail SQLite. No public Mail tools are added. The screen and cockpit integration follow separately: never enable the screen from the API number while `global_dashboard_ui=0`.
 
 Use a dedicated temporary HOME and explicitly set `AGENTSTACK_RUNTIME_MODE=global`, `AGENTSTACK_GLOBAL_SERVER_CONFIG` (the completed candidate's `server-config.json`), `AGENTSTACK_MCP_URL` (that isolated Mail HTTP endpoint), `AGENTSTACK_HOME` (the same isolation root's `agentstack`) and `AGENTSTACK_PORT` (a dedicated free port). Invalid global configuration never falls back to the legacy database. Live cutover is a separate procedure.
 
-An operator first runs `agentstack-http-operator configure` locally. This exclusively creates the fixed `runtime/http-operator.json` with mode0600; existing files are never overwritten. Use the value from `agentstack-http-operator show` in `Authorization: Bearer …`. This capability is separate from agent registration tokens. Keep it out of URLs, logs and shared files. For revocation, stop both participating servers, set aside this fixed file explicitly and configure again.
+An operator first sets `AGENTSTACK_HOME` explicitly to the isolated home and runs `agentstack-http-operator configure` locally. Without that variable, the CLI refuses with `HTTP_OPERATOR_HOME_REQUIRED`; it never defaults to the real HOME. This exclusively creates the fixed `runtime/http-operator.json` with mode 0600; existing files are never overwritten. Use the value from `agentstack-http-operator show` in `Authorization: Bearer …`. This capability is separate from agent registration tokens. Keep it out of URLs, logs and shared files. For revocation, stop both participating servers, set aside this fixed file explicitly and configure again.
 
 TCP does not prove peer UID. The capability proves access to the user's private file; one admission checks loopback, configured Host and any supplied Origin/Referer/Fetch Metadata. Every route except static GET/HEAD passes this admission, including future routes. Same-UID/root actors able to steal the capability, XSS and extensions granted page access are outside this boundary. Sharing one Mail instance across users is unsupported.
 
@@ -177,7 +177,7 @@ MAX, keyset, limit and response revision share one read transaction. Fetch never
 
 ### Registration states and interrupted operations
 
-`agentstack-ui-client --client-name` uses the existing CLI slug: lowercase ASCII letter/digit first, then lowercase ASCII letters/digits, `_` or `-`, up to64 characters. No name-derived alternate root is created. Use `clients --name NAME` to locate existing roots and select one explicitly; multiple roots require user selection.
+`agentstack-ui-client --client-name` uses the existing CLI slug: lowercase ASCII letter/digit first, then lowercase ASCII letters/digits, `_` or `-`, up to 64 characters. No name-derived alternate root is created. Use `clients --name NAME` to locate existing roots and select one explicitly; multiple roots require user selection.
 
 | `status --client-name SLUG` | Explicit next operation |
 |---|---|
@@ -194,3 +194,8 @@ One existing pending record stores name/program/model/token/binding; only that s
 For an existing foreign owner, compute the pending file's SHA-256 and explicitly invoke `registration-abandon --client-name SLUG --expected-digest DIGEST`. Only verified foreign ownership permits a terminal record; it neither registers another name nor adopts that owner. Resend an unsent/unknown intent; finalize a proven owned row. Terminal roots are not automatically reset: use a new root for a new identity.
 
 `POST /api/global/spawn` shares this core and validates cwd against existing spawn roots. It explicitly configures provider instructions, without approving Codex trust. Missing configuration returns registered_unconfigured. `POST /api/global/resume` reuses the root's existing launch/session and creates no next launch while operator resolution is pending. If disk saving fails after network success, return through status to the same pending/finalize entry.
+
+
+Name lookup rejects an existing Mail name with no matching client root as `NAME_CONFLICT` before creating a root or pending record. `clients.name_agent_id` exposes that read result; `diagnostics` reports each unavailable root independently. Such roots remain unusable, while unrelated names and roots can proceed. Terminal pending records retain their known name and owner-conflict evidence and prevent name reuse. Retired identities are checked through the same private owner inspection.
+
+A registration race can still leave a pending intent. Read `registration_sha256` from `GET /api/global/spawn-status?client_name=SLUG`, then use the admitted `POST /api/global/registration-abandon` with `{"client_name":"SLUG","expected_digest":"DIGEST"}`. A mismatched digest leaves the record unchanged. This uses the existing CLI implementation: only proven foreign ownership permits a terminal record, and a different identity requires a new root. Status never exposes the token. Malformed JSON returns 400 `QUERY_INVALID`, registration conflicts return 409, and transport failures return 503.

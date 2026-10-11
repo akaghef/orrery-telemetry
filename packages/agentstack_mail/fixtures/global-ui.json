@@ -1032,6 +1032,17 @@
             "additionalProperties": false
           }
         ]
+      },
+      "registration_sha256": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -1041,7 +1052,8 @@
       "agent_id",
       "next_operations",
       "reason",
-      "launch_status"
+      "launch_status",
+      "registration_sha256"
     ],
     "additionalProperties": false
   },
@@ -1093,11 +1105,43 @@
           ],
           "additionalProperties": false
         }
+      },
+      "name_agent_id": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "diagnostics": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "client_name": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_name",
+            "reason"
+          ]
+        }
       }
     },
     "required": [
       "ok",
-      "matches"
+      "matches",
+      "name_agent_id",
+      "diagnostics"
     ],
     "additionalProperties": false
   },
@@ -1213,5 +1257,24 @@
       "client_name"
     ],
     "additionalProperties": false
+  },
+  "http_registration_abandon_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "client_name": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+        "maxLength": 64
+      },
+      "expected_digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "required": [
+      "client_name",
+      "expected_digest"
+    ]
   }
 }

@@ -172,7 +172,8 @@ def test_existing_cancelled_launch_can_resume_same_retired_identity(operator,mon
 def test_received_operator_projection_is_checked_by_one_contract(operator,monkeypatch,entry,change,reason):
     operator.create('read-contract',agent_name='ReadContract',program='daemon',model='deterministic')
     client=operator.client('read-contract')
-    original=operator.api['RuntimeClient'].management_exchange
+    namespace=operator.api['operator_exchange'].__globals__
+    original=namespace['management_exchange']
     def exchange(transport,request):
         reply=original(transport,request)
         if request['action']=='ui_read':
@@ -180,7 +181,70 @@ def test_received_operator_projection_is_checked_by_one_contract(operator,monkey
             elif change=='binding':reply['binding']['authority_epoch']='different'
             else:reply['query_kind']='roster'
         return reply
-    monkeypatch.setattr(operator.api['RuntimeClient'],'management_exchange',exchange)
+    monkeypatch.setitem(namespace,'management_exchange',exchange)
     read=operator.read if entry=='operator' else client.operator_read
     with pytest.raises(operator.api['ClientError'],match=reason):
         read({'kind':'health'})
+
+
+def test_foreign_mail_name_is_rejected_before_root_or_pending(operator):
+    before=operator.read({'kind':'health'})['as_of_revision']
+    result=operator.create('unused',agent_name='Alpha',program='daemon',model='deterministic')
+    assert result['reason']=='NAME_CONFLICT'
+    assert not operator.path_for('unused').parent.exists()
+    assert operator.read({'kind':'health'})['as_of_revision']==before
+    assert operator.create('unused',agent_name='AvailableName',program='daemon',model='deterministic')['ok']
+
+
+def test_bad_and_terminal_roots_do_not_block_unrelated_creation(operator):
+    import hashlib
+    operator.prepare('foreign')
+    client=operator.client('foreign')
+    with pytest.raises(RuntimeError,match='OWNER_REQUIRED'):
+        client.create('Alpha','daemon','deterministic')
+    client.abandon_registration(hashlib.sha256(client.outputs['registration'].read_bytes()).hexdigest())
+    original=client.outputs['registration'].read_bytes()
+    (operator.clients_parent/'.DS_Store').write_bytes(b'opaque')
+    operator.prepare('broken')
+    operator.path_for('broken').write_bytes(b'broken')
+    result=operator.create('unrelated',agent_name='UnrelatedName',program='daemon',model='deterministic')
+    assert result['ok']
+    lookup=operator.lookup()
+    assert {r['client_name'] for r in lookup['diagnostics']}=={'.DS_Store','broken','foreign'}
+    assert client.outputs['registration'].read_bytes()==original
+    assert operator.create('another-alpha',agent_name='Alpha',program='daemon',model='deterministic')['reason']=='NAME_CONFLICT'
+    assert not operator.path_for('another-alpha').parent.exists()
+    assert operator.status('broken')['stage']=='unavailable'
+    with pytest.raises(RuntimeError):
+        operator.create('broken',agent_name='AnotherName',program='daemon',model='deterministic')
+
+
+@pytest.mark.parametrize('program',['claude-code','codex'])
+def test_missing_instruction_configuration_is_a_status_not_exception(operator,program):
+    result=operator.create('provider',agent_name='ProviderOwner',program=program,model='fixture')
+    assert result['stage']=='registered_unconfigured'
+    assert result['reason']=='INSTRUCTION_PROVIDER_CONFIG_REQUIRED'
+    assert result['next_operations']==['configure-provider']
+    assert operator.lookup('ProviderOwner')['matches'][0]['agent_id']==result['agent_id']
+
+
+def test_retired_identity_without_launch_is_still_discoverable(operator):
+    result=operator.create('retired',agent_name='RetiredOwner',program='daemon',model='deterministic')
+    operator.client('retired').call('retire_agent')
+    assert operator.lookup('RetiredOwner')['matches'][0]['agent_id']==result['agent_id']
+    assert operator.create('other',agent_name='OtherOwner',program='daemon',model='deterministic')['ok']
+
+
+@pytest.mark.parametrize('action',['retry','abandon'])
+def test_registration_resolution_unsupported_server_has_one_reason(operator,monkeypatch,action):
+    import hashlib
+    operator.prepare('unsupported')
+    client=operator.client('unsupported')
+    monkeypatch.setattr(client,'operator_read',lambda query: (_ for _ in ()).throw(operator.api['ClientError']('MANAGEMENT_ACTION_UNSUPPORTED')))
+    with pytest.raises(RuntimeError,match='^NAME_CONFLICT$'):
+        client.create('Alpha','daemon','deterministic')
+    original=client.outputs['registration'].read_bytes()
+    with pytest.raises(RuntimeError,match='^NAME_CONFLICT$'):
+        if action=='retry':client.create('Alpha','daemon','deterministic')
+        else:client.abandon_registration(hashlib.sha256(original).hexdigest())
+    assert client.outputs['registration'].read_bytes()==original
