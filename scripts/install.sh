@@ -472,6 +472,8 @@ if [[ ! -f "$PROJECT_CONTEXT_LIB" ]]; then
 fi
 # shellcheck disable=SC1090
 . "$PROJECT_CONTEXT_LIB"
+AGENTSTACK_LEGACY_PROJECT_KEY="$(agentstack_installed_env_value AGENTSTACK_PROJECT_KEY "$INSTALL_DIR/env.sh")"
+export AGENTSTACK_LEGACY_PROJECT_KEY
 PROJECT_KEY_INPUT="$PROJECT_KEY"
 PROJECT_KEY="$(agentstack_resolve_project_key "" "$INSTALL_DIR/env.sh" 0)"
 if [[ -z "$PROJECT_KEY" ]]; then
@@ -2256,6 +2258,9 @@ copy_tree() {
 RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
 RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 RUNTIME_CLIENT_CONTRACT_SOURCES=(
+  "$REPO_ROOT/bin/lib/instruction_blocks.py"
+  "$REPO_ROOT/bin/lib/instruction_contract.json"
+  "$REPO_ROOT/bin/lib/instruction_templates.json"
   "$REPO_ROOT/scripts/codex_plugin_trust.py"
   "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
   "$REPO_ROOT/bin/lib/runtime_delivery.py"
@@ -2384,7 +2389,7 @@ install_payload() {
     done
     cp "$REPO_ROOT/bin/agentstack-runtime-client" "$BIN_DIR/agentstack-runtime-client"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
-    cp "$REPO_ROOT/bin/lib/agentstack-managed-block.sh" "$BIN_DIR/lib/agentstack-managed-block.sh"
+    rm -f "$BIN_DIR/lib/agentstack-managed-block.sh"
     cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
     cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
     cp "$REPO_ROOT/bin/agentstack-reregister" "$BIN_DIR/agentstack-reregister"
@@ -2617,21 +2622,6 @@ safe_merge_claude_mcp() {
   fi
 }
 
-confirm_managed_setup() {
-  local label="$1"
-  if [[ "$ASSUME_YES" == "1" ]]; then
-    return 0
-  fi
-  if [[ ! -t 0 ]]; then
-    warn "non-interactive shell; skipping $label managed setup"
-    return 1
-  fi
-  printf 'Apply this ORRERY Telemetry %s managed setup? Type yes to continue: ' "$label" >&2
-  local reply
-  read -r reply
-  [[ "$reply" == "yes" ]]
-}
-
 run_managed_setup() {
   local label="$1" script_name="$2"
   local script_path setup_home
@@ -2649,36 +2639,23 @@ run_managed_setup() {
     return
   fi
 
-  if confirm_managed_setup "$label"; then
-    AGENTSTACK_HOME="$INSTALL_DIR" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" "$script_path"
-    if [[ "$ASSUME_YES" == "1" ]]; then
-      say "assume-yes: applied $label managed setup"
-    fi
+  # The engine owns the single consent prompt (including old shared sources).
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    AGENTSTACK_HOME="$INSTALL_DIR" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" "$script_path" --assume-yes || [[ "$?" == 1 ]]
+    say "assume-yes: applied $label managed setup"
+  elif [[ -t 0 ]]; then
+    AGENTSTACK_HOME="$INSTALL_DIR" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" "$script_path" || [[ "$?" == 1 ]]
   else
+    warn "non-interactive shell; skipping $label managed setup"
     say "Skipped $label managed setup."
   fi
-}
-
-project_key_is_this_checkout() {
-  local resolved
-  resolved="$(cd "$PROJECT_KEY" 2>/dev/null && pwd -P)" || return 1
-  [[ "$resolved" == "$(cd "$REPO_ROOT" && pwd -P)" ]]
 }
 
 safe_managed_doc_setups() {
   if [[ "$TIER" != "tier1" ]]; then
     return
   fi
-  # An explicitly selected project can still be this checkout. Avoid placing
-  # the managed block into the stack's own tracked docs: the block belongs in
-  # the project where agents will work.
-  if project_key_is_this_checkout; then
-    say "skip managed CLAUDE.md / AGENTS.md blocks: --project-key is this checkout"
-    say "  The block belongs in the project you will run agents in. To add it:"
-    say "    $BIN_DIR/agentstack-claude-setup   (with AGENTSTACK_PROJECT_KEY set)"
-    say "    $BIN_DIR/agentstack-codex-setup"
-    return
-  fi
+  # User instructions also belong in the user HOME when working on this checkout.
   run_managed_setup "Codex AGENTS.md" "agentstack-codex-setup"
   run_managed_setup "Claude CLAUDE.md" "agentstack-claude-setup"
 }
@@ -4976,6 +4953,8 @@ manifest["agent_mail"]["deployment_metadata"] = "$NATIVE_MAIL_DEPLOYMENT"
 manifest["agent_mail"]["enroll_bin"] = "$NATIVE_MAIL_ENROLL_BIN"
 manifest["agent_mail"]["deployment_identified"] = mail_deployment_identified
 manifest["agent_mail"]["enrollment_available"] = mail_enrollment_available
+instruction_root = pathlib.Path("$INSTALL_DIR") / "backups" / "instruction-migration"
+manifest["instruction_receipts"] = [str(p) for p in instruction_root.glob("*/*/receipt.json") if p.is_file() and not p.is_symlink()]
 manifest["agent_mail"]["autostart_managed_by_this_install"] = mail_autostart_managed
 mail_update = json.loads(os.environ.get("AGENTSTACK_INSTALL_MAIL_UPDATE") or "null")
 if mail_update:

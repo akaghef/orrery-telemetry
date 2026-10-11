@@ -3,6 +3,8 @@
 [English](global-delivery-client.en.md)
 
 既定は旧 mode のまま、global の `activation_enabled` は false です。この手順は専用の一時 HOME と、一時 server の完成済み candidate を使います。実サービスへの切替と released 形式の import は後続です。
+Claude / Codex の固定 provider HOME は、起動前に `agentstack-runtime-client instruction-configure operator claude` / `codex` で指示 block を準備します。通常 launch は読むだけで、不足・古い版は `INSTRUCTION_PROVIDER_CONFIG_REQUIRED`。詳細は [指示の移行](instruction-migration.md#custom-provider-home) を参照してください。
+
 
 ## 正本と固定配置
 

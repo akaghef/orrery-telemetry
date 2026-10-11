@@ -137,7 +137,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
 
 ## 非対話で入れる（`--assume-yes`）
 
-CI や script から入れる場合、既定のままだと 4 つの承認（Claude settings merge・`~/.claude.json` の MCP entry・Codex `AGENTS.md` block・Claude `CLAUDE.md` block）は警告付きでスキップされます。repository と preview 内容を確認した**ユーザー本人**が、承認を事前に与える場合だけ次を使えます。
+確認の条件と非対話時の扱いは [同意の契約](instruction-migration.md#consent) を参照してください。repository と preview 内容を確認した利用者本人が事前に承認した場合だけ次を使えます。
 
 ```bash
 ./scripts/install.sh --project-key /absolute/path/to/your-project --assume-yes
@@ -305,7 +305,7 @@ Tier 1 が preview / merge に使う helper は単独でも実行できます。
 ~/.agentstack/bin/agentstack-claude-setup
 ```
 
-block だけを外す場合はそれぞれ `--uninstall` を使います。Codex は `$CODEX_HOME/AGENTS.md`、Claude は `AGENTSTACK_CLAUDE_MD_SCOPE=project / global / both` で選んだ `CLAUDE.md` が対象です。marker 外の既存内容は保持します。
+Claude は利用者の `$CLAUDE_CONFIG_DIR/CLAUDE.md`、Codex は `$CODEX_HOME/AGENTS.md` へ設置します。`--uninstall` は記録した marker のみ撤去し、全文 backup を保持します。既存 block・中断・共有 repo・purge は[指示の移行](instruction-migration.md)を参照してください。
 
 ## ORRERY Mail service の扱い
 

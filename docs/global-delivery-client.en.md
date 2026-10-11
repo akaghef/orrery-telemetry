@@ -3,6 +3,8 @@
 [日本語](global-delivery-client.md)
 
 Legacy mode remains the default and global activation remains false. Use a temporary HOME and a freshly prepared isolated server candidate. Live cutover and import of released legacy formats remain outside this change.
+Prepare the fixed Claude / Codex provider HOME with `agentstack-runtime-client instruction-configure operator claude` / `codex` before launch. Normal launch only reads the block; missing or stale instructions return `INSTRUCTION_PROVIDER_CONFIG_REQUIRED`. See [instruction migration](instruction-migration.en.md#custom-provider-home).
+
 
 ## Authorities and layout
 

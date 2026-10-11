@@ -116,7 +116,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_PATH` | Homebrew と system path | service に渡す `PATH` |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | launcher / hook / dashboard / Bridge の MCP endpoint |
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | merge 対象 settings |
-| `AGENTSTACK_CLAUDE_MD_SCOPE` | `project` | `agentstack-claude-setup` が managed block を書く先。`project / global / both` |
+| `AGENTSTACK_CLAUDE_MD_SCOPE` | `global` | 利用者単位のみ。明示 project/both は拒否。[移行](instruction-migration.md) |
 
 健康な ORRERY Mail listener が既にある場合、installer は server を更新・再起動せず、稼働中の immutable render に記録された deployment metadata を採用します。metadata 導入前の managed render は、render ID と candidate directory の決定論的対応が一意な場合だけ採用します。生成する `env.sh` の `AGENTSTACK_MAIL_ENV` と `AGENTSTACK_MAIL_ENROLL_BIN` は同じ deployment を指します。既知の legacy render に enrollment CLI が無い場合は Mail と既設 autostart を維持し、enrollment だけ unavailable として保存します。
 

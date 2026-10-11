@@ -3424,6 +3424,8 @@ ${TASK}"
             exit 1
         fi
         if [[ "$WARM_CLAIMED" == true ]]; then
+            WARM_IDENTITY="$(AGENT_NAME= TMUX_PANE="$(tmux display-message -t "=$CHILD_NAME" -p '#{pane_id}')" bash -c '. "$1"; printf "%s" "$RESOLVED_AGENT"' _ "$HOOKS_DIR/resolve-agent-name.sh")"
+            [[ "$WARM_IDENTITY" == "$CHILD_NAME" ]] || { echo "LAUNCH_IDENTITY_UNAVAILABLE: warm session identity mismatch" >&2; exit 1; }
             # A warm session is already running: the prompt can only be pasted.
             CLAUDE_LAUNCH_EPOCH="$(date +%s)"
             send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3

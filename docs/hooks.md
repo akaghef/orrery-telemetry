@@ -201,3 +201,5 @@ Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks
 隔離 global client の準備は [global child client](global-child-client.md) を参照してください。既定の旧運用は維持します。
 
 明示的な隔離起動・配送と operator の復旧は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。
+
+SessionStart は旧 block の件数だけを案内します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。 [Details](instruction-migration.md#legacy-blocks).

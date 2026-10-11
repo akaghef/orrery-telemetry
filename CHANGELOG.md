@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### 利用者単位の指示 block と移行の復旧
+
+旧 source の hardlink は計画時に拒否し、purge は history を含む全 receipt の未解消 marker を確認します。明示 cleanup は指定した1件だけに限定し、通常 uninstall は異常な file を保持・警告して残りを続けます。同意の説明を1契約へ集約し、移行 notice を参加 session に限り、setup の明示 project key を優先します。
+
+- Claude の既定を利用者の CLAUDE.md へ統一し、Codex と共通の parser・renderer・read-only plan・receipt に接続しました。既知の旧 block は新 target の検証後に marker 間だけ撤去し、複数 source の全文 backup を個別に保持します。
+- doctor／SessionStart の祖先検出、記録済み marker の uninstall、未解消時の purge 拒否を追加しました。symlink は固定解決先の CAS、hardlink は固定拒否で手動 copy を案内します。
+- identity の無い bare session の raw 自動登録を止め、既存 identity の復旧と非参加の案内を共通 catalog から表示します。編集 guard の block／warn-open は維持します。Mail の既定は旧 mode・activation=false のままです。
+
+
+履歴も含めた receipt の plan hash 検証を共通化し、破損時は purge 前に停止して backup を保持します。自動検出した marker の無い hardlink は変更せず飛ばし、無関係な利用者の指示で setup が止まる後退を修正しました。
+
 ### daemon binding の相手を一覧にする（orrery-daemon-binding-v2）
 
 固定 daemon の profile の単数 `peer_name` / `peer_id` を、name と数値 ID の組の一覧 `peers`（1〜16件）に置き換えました。旧 v1 profile は一覧と並べて読まず `profile-legacy-v1` で止め、operator が1回書き換えます。whois と送信は一覧の相手ごとに数値 row を照合し、一覧外の送り主・別 project は ACK 前に拒否します。一覧の name で数値 ID が違う Mail は保留用にそのまま返し、1人の入替で他の相手を止めません。相手が Mail に無いときは `daemon-peer-missing`、別 ID は `daemon-peer-changed` とし、`PEER_STATUS` だけがこの2つを「その相手だけ使えない」と定めます。他の失敗は障害のままです。name は Mail の正規形（英字で始まる英数字）に揃えました。global client の profile と公開 Mail tool は変わりません。

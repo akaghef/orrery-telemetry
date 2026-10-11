@@ -312,6 +312,10 @@ else
   echo "⚠️  agent registration failed; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
 fi
 
+IDENTITY_POLICY="$HOOKS_DIR/session-identity-policy.sh"
+[[ -f "$IDENTITY_POLICY" ]] || IDENTITY_POLICY="$SCRIPT_DIR/../hooks/session-identity-policy.sh"
+. "$IDENTITY_POLICY"
+ags_require_launch_identity || { return 2 2>/dev/null || exit 2; }
 finalize_agent_name
 if [[ -z "$REGISTERED_AGENT_NAME" && "$REQUIRE_FRESH_BINDING" == "1" ]]; then
   echo "⚠️  reserved/resumed Codex identity could not be registered; refusing to start without a fresh history binding expectation." >&2

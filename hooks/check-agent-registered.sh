@@ -125,9 +125,11 @@ if [ ! -f "$FLAG" ] && [ -f "$POLICY_LIB" ]; then
 fi
 
 if [ ! -f "$FLAG" ]; then
-    echo "AGENT NOT REGISTERED: call register_agent before using this tool." >&2
-    echo "Follow the session startup procedure and register with ORRERY Mail before working." >&2
-    echo "  1. ensure_project -> 2. register_agent -> 3. fetch_inbox" >&2
+    if command -v agentstack_instruction_message >/dev/null 2>&1; then
+        agentstack_instruction_message identity-binding-unresolved >&2
+    else
+        "${AGENTSTACK_PYTHON:-python3}" "$(dirname "$_ags_global_loader")/instruction_blocks.py" --message identity-binding-unresolved >&2 || true
+    fi
     exit 2
 fi
 

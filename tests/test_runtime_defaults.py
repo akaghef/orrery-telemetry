@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import hashlib
 import os
 import re
 import pathlib
@@ -23,6 +25,11 @@ from service_teardown import (  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+_instruction_spec = importlib.util.spec_from_file_location(
+    "runtime_defaults_instruction_blocks", ROOT / "bin/lib/instruction_blocks.py"
+)
+_instruction_blocks = importlib.util.module_from_spec(_instruction_spec)
+_instruction_spec.loader.exec_module(_instruction_blocks)
 INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
 # These operator-only source entries are deliberately not installer payload.
 # Keep this literal list narrow: all other tracked bin entries must be copied.
@@ -314,6 +321,19 @@ def test_runtime_code_has_no_legacy_claude_fallback():
     ).stdout.split("\0")
     paths = [ROOT / rel for rel in tracked if rel]
     for path in paths:
+        if path == ROOT / "bin/lib/instruction_templates.json":
+            # Historical bytes prove a user's old block, never configure a
+            # runtime path. Keep this exception a typed, content-addressed data
+            # catalog; every executable payload still goes through the scan.
+            catalog = json.loads(path.read_text(encoding="utf-8"))
+            assert isinstance(catalog, list) and catalog
+            for item in catalog:
+                assert set(item) == {"provider", "template_id", "renderer_id", "template"}
+                assert item["provider"] in {"claude", "codex"}
+                assert item["renderer_id"] == "legacy-sed-v1"
+                assert isinstance(item["template"], str)
+                assert hashlib.sha256(item["template"].encode()).hexdigest() == item["template_id"]
+            continue
         if path.is_file() and path.suffix not in {".png", ".pyc"}:
             try:
                 text = path.read_text(encoding="utf-8")
@@ -500,6 +520,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert settings.read_text(encoding="utf-8") == original_settings
         assert json.loads(claude_json.read_text()) == original_claude_json
         assert not (home / ".codex" / "AGENTS.md").exists()
+        claude_target = _instruction_blocks.Engine("claude", env=env).target
+        assert not claude_target.exists()
         assert not (project / "CLAUDE.md").exists()
     finally:
         _stop_fake_dashboard(env)
@@ -539,9 +561,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
         assert any((install_dir / "backups").iterdir())
     finally:
         _stop_fake_dashboard(env)
@@ -550,7 +571,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     settings.write_text(original_settings, encoding="utf-8")
     claude_json.write_text(json.dumps(original_claude_json), encoding="utf-8")
     (home / ".codex" / "AGENTS.md").unlink()
-    (project / "CLAUDE.md").unlink()
+    claude_target.unlink()
     env["AGENTSTACK_ASSUME_YES"] = "not-a-boolean"
     from_flag = subprocess.run(
         [*command, "--assume-yes"],
@@ -570,9 +591,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
     finally:
         _stop_fake_dashboard(env)
 

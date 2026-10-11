@@ -2026,7 +2026,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--context')
     parser.add_argument('operation', choices=['mode', 'observe', 'reconnect', 'bootstrap', 'launch', 'call',
-                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply'])
+                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure'])
     parser.add_argument('args', nargs='*')
     a = parser.parse_args(argv)
     try:
@@ -2048,6 +2048,9 @@ def main(argv=None):
             return 0
         if client is None:
             raise ClientError('CONTEXT_REQUIRED')
+        if a.operation == 'instruction-configure':
+            if len(a.args)!=2 or a.args[0]!='operator':raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')
+            print(json.dumps(runtime_delivery(client).instruction_configure(a.args[1])));return 0
         if a.operation in ('codex-plan','codex-apply'):
             if a.args != ['operator']:
                 raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')

@@ -1007,9 +1007,9 @@ exit 0
         assert "<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        claude_target = home / ".claude" / "CLAUDE.md"
+        assert "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
 
         status = subprocess.run(
             ["bash", str(install_dir / "dashboard" / "agentctl.sh"), "status"],

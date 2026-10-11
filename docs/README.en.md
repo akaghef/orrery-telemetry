@@ -71,3 +71,5 @@ Documents without a translation are labelled with their original language. Image
 - [Caller, interruption and acceptance tables](global-child-client-contract.md) — Contract tables generated from the global client fixture.
 
 - [Global client delivery and launch](global-delivery-client.en.md) — Fixed layout, notification retry, explicit recovery and provider preparation.
+
+- [Instruction block migration](instruction-migration.en.md) — User scope, recovery and backup retention.

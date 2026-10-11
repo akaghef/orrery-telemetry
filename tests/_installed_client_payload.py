@@ -40,3 +40,11 @@ def copy_client_library(install_root: Path) -> None:
         target = library / Path(relative).name
         if not target.exists():
             shutil.copy2(ROOT / relative, target)
+
+    # The launcher's identity policy is in the installer's core hooks payload.
+    # Complete custom layouts include it; deliberately partial tests stay partial.
+    assert 'copy_core_tree "$REPO_ROOT/hooks" "$HOOKS_DIR" "hooks"' in (ROOT / 'scripts/install.sh').read_text()
+    hooks=install_root/'hooks';hooks.mkdir(parents=True,exist_ok=True)
+    for name in ('session-identity-policy.sh','project-context.sh'):
+        target=hooks/name
+        if not target.exists():shutil.copy2(ROOT/'hooks'/name,target)

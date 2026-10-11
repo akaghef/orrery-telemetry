@@ -46,19 +46,22 @@ def _approval_prompt_count() -> int:
     # confirmation runs once per run_managed_setup call.
     confirms = len(re.findall(r"^confirm_\w+\(\) \{$", INSTALLER, re.M))
     managed_runs = len(re.findall(r'^\s*run_managed_setup "', INSTALLER, re.M))
-    assert "confirm_managed_setup()" in INSTALLER
-    return confirms - 1 + managed_runs
+    assert "confirm_managed_setup()" not in INSTALLER
+    assert "The engine owns the single consent prompt" in INSTALLER
+    return confirms + managed_runs
 
 
-def test_docs_state_the_real_number_of_approval_prompts() -> None:
-    count = _approval_prompt_count()
-    assert count == 4, count
-    assert f"{count} つの承認" in _read("docs/install.md")
-    assert f"{count} 回 `yes`" in _read("docs/getting-started.md")
-    words = {4: "four"}
-    assert f"`yes` {words[count]} times" in _read("docs/getting-started.en.md")
-    assert f"`yes` {words[count]} times" in _read("AGENTS.md")
-    assert "once more" not in _read("AGENTS.md")
+def test_docs_share_the_actual_conditional_consent_contract() -> None:
+    assert _approval_prompt_count() == 4  # Maximum approval sites, not a fixed prompt count.
+    for name in ('AGENTS.md', 'CLAUDE.md', 'docs/install.en.md', 'docs/getting-started.en.md'):
+        assert 'instruction-migration.en.md#consent' in _read(name)
+        assert 'four typed confirmations' not in _read(name)
+        assert 'four approvals' not in _read(name)
+    for name in ('docs/install.md','docs/getting-started.md'):
+        assert 'instruction-migration.md#consent' in _read(name)
+    contract = _read('docs/instruction-migration.md')
+    assert '最大4つ' in contract and '`[Y/n]`、Enter は消す' in contract
+    assert '新しい利用者 file を作るだけなら同意は不要' in contract
 
 
 def _event_hook_count() -> int:

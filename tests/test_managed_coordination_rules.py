@@ -124,7 +124,7 @@ def test_codex_coordination_routes_are_ordered_and_do_not_force_raw_recovery():
         "### 2. Bound ORRERY proxy",
         "### 3. Raw/direct connection after shell registration",
         "### 4. Recovering an existing identity over raw/direct MCP",
-        "### 5. Registering a genuinely new raw/direct session",
+        "### 5. Sessions without an existing identity",
         "### Shared boundaries",
     )
     offsets = [codex.index(heading) for heading in headings]
@@ -149,7 +149,7 @@ def test_claude_coordination_routes_are_ordered_and_keep_hook_contract():
         "### 2. Bound ORRERY proxy",
         "### 3. Raw/direct connection after shell registration",
         "### 4. Recovering an existing identity over raw/direct MCP",
-        "### 5. Registering a genuinely new raw/direct session",
+        "### 5. Sessions without an existing identity",
         "### Shared boundaries",
         "### Claude Code hook boundary",
     )
@@ -164,7 +164,7 @@ def test_claude_coordination_routes_are_ordered_and_keep_hook_contract():
     assert "proxy binding, not ORRERY Mail reachability" in claude
     assert "A generic `register_agent failed` does not by itself prove" in claude
     assert "set `AGENT_NAME` to that exact existing name" in claude
-    assert 'program="claude-code"' in claude
+    assert 'agentstack-reregister "$AGENT_NAME" claude-code' in claude
     assert "proxy use alone does not prove that a flag exists" in claude
     assert "Sessions with a resolved `AGENT_NAME` are separately exempt" in claude
     assert spawn.count("Follow the child-agent startup procedure in CLAUDE.md") == 2
@@ -183,7 +183,7 @@ def test_claude_setup_renders_routes_and_reservations_once_in_an_isolated_home(
     project = tmp_path / "project"
     claude_home.mkdir(parents=True)
     project.mkdir()
-    target = project / "CLAUDE.md"
+    target = claude_home / "CLAUDE.md"
     target.write_text("# Personal project instructions\n", encoding="utf-8")
     env = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -193,12 +193,12 @@ def test_claude_setup_renders_routes_and_reservations_once_in_an_isolated_home(
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_TEMPLATE_HOME": str(ROOT),
         "AGENTSTACK_PROJECT_KEY": str(project),
-        "AGENTSTACK_CLAUDE_MD_SCOPE": "project",
+        "AGENTSTACK_CLAUDE_MD_SCOPE": "global",
     }
 
     for _ in range(2):
         result = subprocess.run(
-            ["/bin/bash", str(ROOT / "bin" / "agentstack-claude-setup")],
+            ["/bin/bash", str(ROOT / "bin" / "agentstack-claude-setup"), "--assume-yes"],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -206,7 +206,7 @@ def test_claude_setup_renders_routes_and_reservations_once_in_an_isolated_home(
             timeout=30,
         )
         assert result.returncode == 0, result.stderr
-        assert "installed managed block into" in result.stdout
+        assert "instruction migration: complete" in result.stdout
 
     generated = target.read_text(encoding="utf-8")
     assert generated.count("<!-- >>> claude-agent-stack") == 1
@@ -245,7 +245,7 @@ def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
 
     for _ in range(2):
         result = subprocess.run(
-            ["/bin/bash", str(ROOT / "bin" / "agentstack-codex-setup")],
+            ["/bin/bash", str(ROOT / "bin" / "agentstack-codex-setup"), "--assume-yes"],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -253,7 +253,7 @@ def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
             timeout=30,
         )
         assert result.returncode == 0, result.stderr
-        assert "installed managed block into" in result.stdout
+        assert "instruction migration: complete" in result.stdout
 
     generated = target.read_text(encoding="utf-8")
     assert generated.count("<!-- >>> claude-agent-stack") == 1

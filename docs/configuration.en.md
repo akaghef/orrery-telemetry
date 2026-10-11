@@ -109,7 +109,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_PATH` | Homebrew and system paths | `PATH` passed to services |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | MCP endpoint for launchers / hooks / dashboard / Bridge |
 | `AGENTSTACK_CLAUDE_SETTINGS` | `~/.claude/settings.json` | Settings merge target |
-| `AGENTSTACK_CLAUDE_MD_SCOPE` | `project` | Where `agentstack-claude-setup` writes managed blocks: `project / global / both` |
+| `AGENTSTACK_CLAUDE_MD_SCOPE` | `global` | User scope only; explicit project/both is refused. [Migration](instruction-migration.en.md) |
 
 When a healthy ORRERY Mail listener already exists, the installer adopts the deployment metadata recorded with its immutable render without updating or restarting the server. A managed render created before that metadata existed is adopted only when its render ID maps uniquely and deterministically to a candidate directory. The generated `AGENTSTACK_MAIL_ENV` and `AGENTSTACK_MAIL_ENROLL_BIN` in `env.sh` therefore identify the same deployment. If a known legacy render has no enrollment CLI, Mail and its existing autostart remain usable while enrollment is recorded as unavailable.
 

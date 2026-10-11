@@ -22,6 +22,16 @@ import sys
 import uuid
 
 _CONTRACT = None
+_INSTRUCTION_ENGINE = Path(__file__).with_name('instruction_blocks.py')
+_INSTRUCTION_API = None
+
+
+def instruction_api():
+    global _INSTRUCTION_API
+    if _INSTRUCTION_API is None:
+        _INSTRUCTION_API = runpy.run_path(str(_INSTRUCTION_ENGINE))
+    return _INSTRUCTION_API
+
 
 
 def contract():
@@ -539,6 +549,14 @@ class RuntimeDelivery:
         if value is None:self.fail('PERSISTENT_EXECUTION_REQUIRED')
         return self.validate_execution(value)
 
+    def instruction_configure(self, provider):
+        if provider not in ('claude','codex'):self.fail('ARGUMENTS_UNSUPPORTED')
+        with self.client.operation_mutex():
+            home=self.directory(self.client.runtime_dir/'provider-home'/provider)
+            provider_instructions=instruction_api()['provider_instructions']
+            provider_instructions(home,provider,self.client.config['wrapper_root'],'',configure=True)
+        return {'ok':True,'configured':True}
+
     def configure_execution(self, value):
         c=self.client
         with c.operation_mutex():
@@ -751,6 +769,11 @@ class RuntimeDelivery:
             provider_session_id=saved_id
         binary=os.environ.get('AGENTSTACK_'+provider.upper()+'_BIN') or {'claude':'claude','codex':'codex','gemini':'agy','daemon':sys.executable}[provider]
         home=self.directory(c.runtime_dir/'provider-home'/provider)
+        if provider in ('claude','codex'):
+            instructions=instruction_api()
+            provider_instructions,Refused=instructions['provider_instructions'],instructions['Refused']
+            try:provider_instructions(home,provider,c.config['wrapper_root'],'')
+            except (OSError,Refused):self.fail('INSTRUCTION_PROVIDER_CONFIG_REQUIRED')
         extra_servers, tool_flags, tool_prompt = self.child_tool_plan(provider,home,row['cwd'])
         proxy=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(c.path),'proxy']
         if provider=='claude':
