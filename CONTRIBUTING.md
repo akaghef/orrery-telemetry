@@ -74,10 +74,53 @@ Extend that test when you add such a fact instead of relying on review.
 When a change adds an endpoint or field that other programs (ORRERY cockpit
 and others) rely on, or changes what one means, raise the `api` generation in
 `GET /api/version` (`dashboard/server.py`) by one and say so in the
-CHANGELOG. Do not raise it for anything else; see `docs/api.md`.
+CHANGELOG fragment. Do not raise it for anything else; see `docs/api.md`.
 
 The docs must not contradict the implementation. If no docs change is needed,
 that should be an explicit review decision, not an accidental omission.
+
+## Changelog fragments and releases
+
+Each PR adds one uniquely named `changelog.d/<name>.md` (for example,
+`changelog.d/251-changelog-fragments.md` or a descriptive branch name).
+Start with `### A user-facing change`, followed by the same prose or bullets
+used in a released CHANGELOG section. Use Japanese, describe the resulting
+behavior, and record any API generation change here. Use `../docs/...` for
+links from a fragment to repository documentation; the release script rebases
+inline and reference-definition links one directory up.
+
+Do not add an `Unreleased` section or pending items to `CHANGELOG.md`, and do
+not duplicate a fragment there. The docs consistency check rejects
+`Unreleased` headings. `CHANGELOG.md` contains released changes only.
+
+To release, start from an up-to-date clean branch and run:
+
+```bash
+python3 scripts/changelog-release.py YYYY.MM.DD
+```
+
+Replace `YYYY.MM.DD` with the new release date. The stdlib-only script inserts
+a version section before the newest release, in filename order, then removes
+the consumed `.md` fragments. It leaves the introduction and older releases
+intact. With no fragments, including a second run, it does nothing. It refuses
+an already released version when fragments remain; do not append new changes
+to an existing release. If interrupted after the CHANGELOG write, review the
+saved section and remaining fragments before completing their removal; do not
+rerun with another version. Run only one release process at a time.
+
+Review the generated diff and update the root `VERSION` to the same release
+date in the release commit. The script deliberately does not change `VERSION`
+or the dashboard `API_GENERATION`: that generation changes only for API
+compatibility changes, not for assembling release notes. Check the release
+with:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest -q tests/test_changelog_release.py tests/test_docs_consistency.py
+```
+
+Commit `CHANGELOG.md`, `VERSION`, and the consumed fragment removals together.
+The PR adding a change edits only its own fragment; assembling notes is a
+release operation.
 
 ## Shell compatibility (macOS bash 3.2)
 

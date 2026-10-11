@@ -20,6 +20,22 @@ def _read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
+def test_pending_changelog_items_use_fragments() -> None:
+    changelog = _read("CHANGELOG.md")
+    assert not re.search(r"^##\s+Unreleased\b", changelog, re.M | re.I), (
+        "add one changelog.d/<name>.md per PR; do not write Unreleased directly"
+    )
+    assert "[changelog.d/](changelog.d/)" in changelog
+
+
+def test_pending_changelog_guard_rejects_direct_unreleased(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setitem(globals(), "_read", lambda _: "## Unreleased\n\n### New\n")
+    with pytest.raises(AssertionError, match="one changelog.d"):
+        test_pending_changelog_items_use_fragments()
+
+
 def _default_mail_port() -> str:
     # explicit > previous env.sh > this default (hooks/project-context.sh).
     match = re.search(
