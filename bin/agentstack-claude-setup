@@ -2,7 +2,14 @@
 # User instruction block setup; common parser/plan/receipt lives in the engine.
 set -euo pipefail
 AGENTSTACK_HOME="${AGENTSTACK_HOME:-$HOME/.agentstack}"
-# Capture the old work folder before installer/env updates it.
+# Installer passes the old key separately as AGENTSTACK_LEGACY_PROJECT_KEY.
+# env.sh supplies defaults; an explicitly selected current key takes priority.
+_ags_setup_project_set="${AGENTSTACK_PROJECT_KEY+x}"
+_ags_setup_project="${AGENTSTACK_PROJECT_KEY-}"
 [[ -f "$AGENTSTACK_HOME/env.sh" ]] && . "$AGENTSTACK_HOME/env.sh"
+if [[ "$_ags_setup_project_set" == x ]]; then
+    export AGENTSTACK_PROJECT_KEY="$_ags_setup_project"
+fi
+unset _ags_setup_project_set _ags_setup_project
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "${AGENTSTACK_PYTHON:-python3}" "$SCRIPT_DIR/lib/instruction_blocks.py" --provider claude "$@"

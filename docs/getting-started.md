@@ -42,7 +42,7 @@ cd orrery-telemetry
 
 `--project-key` には、agent に作業させたい project フォルダの絶対パスを渡します。この repository 自体のパスではありません。
 
-installer は、あなたの Claude Code / Codex の設定に触れる前に変更内容を表示し、合計 4 回の承認を求めます。既存の設定は保持し、変更前の backup を `~/.agentstack/backups` に置きます。先に変更内容だけ見たいときは `--dry-run` を付けます。
+installer の確認条件は [同意の契約](instruction-migration.md#consent) にまとめています。既存の設定は保持し、変更前の backup を `~/.agentstack/backups` に置きます。変更内容だけを見るには `--dry-run` を付けます。
 
 **成功**: 最後に `Install complete: http://127.0.0.1:8770/` と出て、`~/.agentstack/` ができています。
 

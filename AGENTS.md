@@ -11,14 +11,10 @@ importantly, the three things you must not do.
 
 ## The four rules
 
-**1. Approvals belong to the human.** The installer asks before it merges
-anything into `~/.claude/settings.json` or adds a managed block to a
-`CLAUDE.md` / `AGENTS.md`. Those are the user's files. When you run the
-installer non-interactively it *skips* those steps rather than assuming
-consent — which means the install completes, the dashboard starts, and the
-skills quietly do not work. Do not paper over this. Either hand the terminal
-back so the user can answer, or use `--assume-yes` **only if they told you
-to**. Never add that flag on your own initiative to get a clean run.
+**1. Approvals belong to the human.** Follow the single
+[consent contract](docs/instruction-migration.en.md#consent) for installer
+and standalone setup. Hand the terminal back at human approval steps. Use
+`--assume-yes` only when the user explicitly chose it.
 
 **2. Never invent a path or a value to get past an error.** The installer
 stops when it cannot determine something — which database ORRERY Mail is
@@ -79,18 +75,10 @@ than a completed install.
 
 Then, for the real run, choose one of two paths.
 
-**Default — hand back at the approvals.** Run `./scripts/install.sh` in a
-terminal the user controls, or tell them to run it themselves. It pauses for a
-four approvals — the settings merge, the `~/.claude.json` MCP entry,
-the Codex `AGENTS.md` block, and the Claude `CLAUDE.md` block. Reuse of an
-already-running ORRERY Mail is reported, not prompted for. This is the right
-choice when you are unsure, and when the user has not said otherwise.
-
-**Opt-in — `./scripts/install.sh --assume-yes`.** Use this only when the user
-has explicitly said they trust the repo and do not want to be asked. It
-pre-approves the settings merge and the managed blocks, and prints one line
-per item it approved so the decision stays auditable. It does **not** suppress
-errors: the version, port, and database checks above still stop the install.
+Run the installer in a terminal the user controls, or tell them to run it.
+The [consent contract](docs/instruction-migration.en.md#consent) explains
+interactive prompts, non-interactive skips, and explicit `--assume-yes`.
+Reuse of a running ORRERY Mail is reported without another approval.
 
 ## After installing
 

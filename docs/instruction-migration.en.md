@@ -34,9 +34,15 @@ agentstack-claude-setup --plan --json
 
 Plan creates no file or lock. Its `apply_argv` carries the same source selection and plan ID; another process recomputes and compares them. An ID alone cannot reconstruct source selection.
 
+<a id="consent"></a>
+
+## Consent
+
+The installer has up to four approval sites: settings merge, MCP entry, and the Codex and Claude blocks. Settings/MCP changes require typed `yes`. Block confirmation follows the single contract below. A non-interactive installer without advance approval skips these setup steps with warnings. Direct setup CLI creation needs no confirmation as described below. Reusing a running Mail needs no extra approval.
+
 Creating a new user file without changing existing files needs no confirmation. Rewriting an existing file or removing a source block requires confirmation.
 
-One interactive prompt asks whether to move instructions and remove known source blocks (default remove), explaining shared-repository effects and full-file backup retention. Explicit `--assume-yes` removes only known untracked sources; tracked or unknown Git status remains with a warning. Edited, unknown or malformed blocks stay for a local diff and manual marker-only cleanup. There is no force override. The user target is verified before any source removal.
+One interactive prompt asks whether to move instructions and remove known source blocks (`[Y/n]`; Enter removes), explaining shared-repository effects and full-file backup retention. Explicit `--assume-yes` removes only known untracked sources; tracked or unknown Git status remains with a warning. Edited, unknown or malformed blocks stay for a local diff and manual marker-only cleanup. There is no force override. The user target is verified before any source removal.
 
 ```sh
 agentstack-claude-setup --remove-legacy-block --path /work/repo/CLAUDE.md --dry-run
@@ -81,3 +87,7 @@ These generated files have no user-migration receipt. Claude settings and Codex 
 Setup `--uninstall` and normal uninstall remove only recorded marker spans. Edited blocks remain with a warning. User files are never owned_files. Private full-file backups, receipts and history remain.
 
 Before deleting anything, `agentstack-uninstall --purge-data` checks pending work, edited blocks and retained sources. Any unresolved item returns `INSTRUCTION_BACKUP_PURGE_BLOCKED`. Manually removed retained spans can be resolved by checking their present absence. Only after everything is resolved does purge remove the fixed ledger and full-file backups. There is no automatic backup GC.
+
+`--remove-legacy-block --path X` cleans up X only. If the current user block is missing or changed, `INSTRUCTION_TARGET_REQUIRES_SETUP` directs the user to setup first. Other sources and the user target remain unchanged. Edited or unknown sources get local-diff/manual marker-only review guidance instead of an ineffective cleanup command.
+
+Purge checks sources recorded in all current and history receipts, keeping backups while an older marker remains. Normal uninstall keeps unsafe files (including changed symlinks or hardlinks), warns, and continues with the remaining files. Purge stops on these conditions.

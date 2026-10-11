@@ -179,5 +179,27 @@
       "Desktop CLI/proxy/binding失敗、persistent/windows pre-registration",
       "参加状態を既存binding/profile/specから解決。不正時bare route5へ戻らない、既存identity保持。native Windows実起動は今回未検証と表示"
     ]
+  ],
+  "implementation_review_r1": [
+    [
+      "source hardlink",
+      "plan拒否、backup/write0。targetと同じsnapshot判定"
+    ],
+    [
+      "history retention",
+      "current/historyの全receiptのsource markerが無くなるまでpurge拒否"
+    ],
+    [
+      "explicit cleanup",
+      "指定1sourceだけ。current user target未検証ならsetupを案内してwrite0"
+    ],
+    [
+      "uninstall",
+      "非purgeは1fileの異常をwarn/保持して次へ。purgeは事前拒否"
+    ],
+    [
+      "notices/consent/env",
+      "参加admissionだけnotice。同意はdocsの1契約。明示project keyがenv.shに優先"
+    ]
   ]
 }

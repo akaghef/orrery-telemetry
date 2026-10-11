@@ -397,7 +397,7 @@ class Engine:
             block, kind, reason = None, 'malformed', str(exc)
         return {'source_path': str(path), 'kind': kind, 'template_id': self.known(data, path, receipt) if kind == 'legacy' else None,
                 'block_sha256': sha(block) if block else None, 'reason': reason,
-                'cleanup_argv': [str(self.install / f'bin/agentstack-{self.provider}-setup'), '--remove-legacy-block', '--path', str(path)] if block else []}
+                'cleanup_argv': [str(self.install / f'bin/agentstack-{self.provider}-setup'), '--remove-legacy-block', '--path', str(path)] if kind == 'legacy' and path != self.target else []}
 
     def detect(self, explicit=()):
         findings = []; receipt = self.receipt()
@@ -441,13 +441,13 @@ class Engine:
                      git_state='not-source' if target else git_state(path), strategy='atomic-referent' if target or known else 'read-only')
         return entry
 
-    def plan(self, explicit=(), *, replan=False):
+    def plan(self, explicit=(), *, replan=False, source_only=False):
         r = self.receipt()
         if r and r['stage'] not in TERMINAL and not replan:
             raise Refused('INSTRUCTION_OPERATION_PENDING', f'run --resume --plan-id {r["plan_id"]}')
         target = self.file_plan(self.target, target=True, receipt=r)
         sources, seen = [], {target['resolved_path']}
-        for path in self.source_paths(explicit):
+        for path in (sorted({Path(x).absolute() for x in explicit}, key=str) if source_only else self.source_paths(explicit)):
             try:
                 entry = self.file_plan(path, receipt=r)
                 if entry['resolved_path'] in seen:
@@ -457,7 +457,12 @@ class Engine:
                     if not any(marker in data for marker in (*BEGIN.values(),END)):
                         continue
                 sources.append(entry); seen.add(entry['resolved_path'])
-            except (OSError, Refused, ValueError):
+            except Refused as exc:
+                if exc.reason == 'INSTRUCTION_HARDLINK_REQUIRES_MANUAL_COPY' or source_only:
+                    raise
+                continue
+            except (OSError, ValueError):
+                if source_only:raise
                 # Unknown sources are reported by detection, never blindly removed.
                 continue
         return {'provider':self.provider,'resolved_home':str(self.home.resolve()),'target':target,'sources':sources,'selection_argv':sum((['--path',str(Path(x).absolute())] for x in sorted(set(explicit))), []),'template_sha256':sha(self.template)}
@@ -597,12 +602,18 @@ class Engine:
         path=Path(path).absolute()
         if path == self.target or path.name not in ('CLAUDE.md','AGENTS.md') or path in (self.template_home/'claude/CLAUDE.md',self.template_home/'codex/AGENTS.md'):
             raise Refused('ARGUMENTS_INVALID','not a user instruction source')
-        # A separate source cleanup still uses the same verified migration receipt.
-        p=self.plan([str(path)])
+        # Cleanup never installs or updates the user target. The current
+        # rendered block must already be present before removing this source.
+        _, data = snapshot(self.target)
+        if block_bytes(data or b'') != self.block:
+            raise Refused('INSTRUCTION_TARGET_REQUIRES_SETUP', 'set up the user block first; cleanup changes only the selected source')
+        p=self.plan([str(path)], source_only=True)
+        if any(entry['strategy'] != 'atomic-referent' for entry in p['sources']):
+            raise Refused('INSTRUCTION_DETECTION_UNKNOWN', 'compare locally and remove only the reviewed marker span manually')
         if dry_run:
             return p
-        # Explicit cleanup is interactive; unknown/edited sources remain retained.
         return self.apply(p,sha(canonical(p)))
+
 
 
 @contextmanager
@@ -624,11 +635,18 @@ def purge_admission(install):
             r=read_private(slot/'receipt.json');validate(r,'receipt');receipts.append(str(slot/'receipt.json'))
             if r['stage'] not in TERMINAL:
                 raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED','pending instruction migration')
-            for entry in r['plan']['sources']:
-                if entry['strategy']=='read-only' or any(x['path_sha256']==sha(entry['resolved_path'].encode()) and x['stage']=='retained' for x in r['sources_progress']):
+            history=slot/'history'
+            if history.is_symlink():raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED',history)
+            generations=[r]
+            if history.exists():
+                for path in history.iterdir():
+                    if path.suffix != '.json':raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED',path)
+                    previous=read_private(path);validate(previous,'receipt');generations.append(previous)
+            for generation in generations:
+                for entry in generation['plan']['sources']:
                     _,data=snapshot(entry['requested_path'])
                     if any(marker in (data or b'') for marker in (*BEGIN.values(),END)):
-                        raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED','retained legacy block; remove after local review')
+                        raise Refused('INSTRUCTION_BACKUP_PURGE_BLOCKED','retained legacy block in current/history receipt; remove after local review')
             _,data=snapshot(r['plan']['target']['requested_path'])
             b=block_bytes(data or b'')
             if b and sha(b)!=r['plan']['target']['after_block_sha256']:
@@ -640,16 +658,17 @@ def uninstall_recorded(install, references, *, dry_run=False, purge=False):
     install=Path(install).absolute()
     if purge:purge_admission(install)
     for reference in references:
-        path=Path(reference)
-        if not path.is_relative_to(install/'backups/instruction-migration') or path.name!='receipt.json':
-            raise Refused('INSTRUCTION_PATH_UNSAFE','invalid install receipt reference')
-        r=read_private(path);validate(r,'receipt');plan=r['plan'];provider=plan['provider']
-        env={'HOME':str(install.parent),'AGENTSTACK_HOME':str(install),'AGENTSTACK_PROJECT_KEY':plan['target']['render_inputs']['project_key'] or '',
-             'CLAUDE_CONFIG_DIR':plan['resolved_home'],'CODEX_HOME':plan['resolved_home']}
-        e=Engine(provider,env=env)
-        if e.receipt_path!=path:raise Refused('INSTRUCTION_PATH_UNSAFE','receipt target mismatch')
-        try:e.uninstall(dry_run=dry_run)
-        except Refused as exc:
+        try:
+            path=Path(reference)
+            if not path.is_relative_to(install/'backups/instruction-migration') or path.name!='receipt.json':
+                raise Refused('INSTRUCTION_PATH_UNSAFE','invalid install receipt reference')
+            r=read_private(path);validate(r,'receipt');plan=r['plan'];provider=plan['provider']
+            env={'HOME':str(install.parent),'AGENTSTACK_HOME':str(install),'AGENTSTACK_PROJECT_KEY':plan['target']['render_inputs']['project_key'] or '',
+                 'CLAUDE_CONFIG_DIR':plan['resolved_home'],'CODEX_HOME':plan['resolved_home']}
+            e=Engine(provider,env=env)
+            if e.receipt_path!=path:raise Refused('INSTRUCTION_PATH_UNSAFE','receipt target mismatch')
+            e.uninstall(dry_run=dry_run)
+        except (Refused,OSError,ValueError,KeyError) as exc:
             if purge:raise
             print('warn: kept user instruction block: '+str(exc),file=sys.stderr)
     print('Private full-file instruction backups are retained; uninstall --purge-data removes them after all blocks are resolved.')

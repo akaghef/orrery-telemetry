@@ -368,7 +368,9 @@ printf '%s src=%s resolved=%q AGENT_NAME=%q TMUX_PANE=%q TMUX=%s sess=%q\n' \
     >> "$RUNTIME_DIR/session-start-resolve.log" 2>/dev/null
 
 INSTRUCTION_ENGINE="$HOOKS_DIR/../bin/lib/instruction_blocks.py"
-if [[ -f "$INSTRUCTION_ENGINE" ]]; then
+if [[ -f "$INSTRUCTION_ENGINE" ]] &&
+   command -v agentstack_instruction_admission >/dev/null 2>&1 &&
+   [[ "$(agentstack_instruction_admission)" != unrelated ]]; then
     "${AGENTSTACK_PYTHON:-python3}" "$INSTRUCTION_ENGINE" --provider claude --session-notices 2>/dev/null || true
 fi
 write_live_session_lease "${RESOLVED_AGENT:-}"

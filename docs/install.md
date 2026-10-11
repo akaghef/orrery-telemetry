@@ -137,7 +137,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
 
 ## 非対話で入れる（`--assume-yes`）
 
-CI や script から入れる場合、既定のままだと 4 つの承認（Claude settings merge・`~/.claude.json` の MCP entry・Codex `AGENTS.md` block・Claude `CLAUDE.md` block）は警告付きでスキップされます。repository と preview 内容を確認した**ユーザー本人**が、承認を事前に与える場合だけ次を使えます。
+確認の条件と非対話時の扱いは [同意の契約](instruction-migration.md#consent) を参照してください。repository と preview 内容を確認した利用者本人が事前に承認した場合だけ次を使えます。
 
 ```bash
 ./scripts/install.sh --project-key /absolute/path/to/your-project --assume-yes

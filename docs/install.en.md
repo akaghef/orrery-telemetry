@@ -133,7 +133,7 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
 
 ## Non-interactive installation (`--assume-yes`)
 
-When installing from CI or a script, the four approvals (Claude settings merge, the `~/.claude.json` MCP entry, the Codex `AGENTS.md` block, and the Claude `CLAUDE.md` block) are skipped with warnings by default. The following option may be used only when the **user personally** reviewed the repository and preview and has granted approval in advance.
+See the [consent contract](instruction-migration.en.md#consent) for confirmation conditions and non-interactive behavior. Use the following option only after the user personally reviewed the repository and preview and granted approval in advance.
 
 ```bash
 ./scripts/install.sh --project-key /absolute/path/to/your-project --assume-yes

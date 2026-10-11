@@ -34,9 +34,15 @@ agentstack-claude-setup --plan --json
 
 `--plan` は lock や file を作りません。出力の `apply_argv` は同じ source 選択と plan ID を含み、別 process で再計算して一致したときだけ実行できます。ID だけから source を復元する仕組みはありません。
 
+<a id="consent"></a>
+
+## 同意
+
+installer には最大4つの確認箇所（settings merge、MCP entry、Codex と Claude の block）があります。settings/MCP は変更がある場合に `yes` を要求します。block の確認条件は以下の1契約です。非対話の installer は事前承認が無ければこれらの setup を警告付きでスキップします。直接 setup CLI の新規設置は下記のとおり同意不要です。稼働中 Mail の再利用に追加の承認はありません。
+
 既存 file の内容を変えず、新しい利用者 file を作るだけなら同意は不要です。既存 file の書換え・元 block の削除には確認が必要です。
 
-対話では「利用者側へ移し、既知の元 block を消すか」を一度確認します（既定は消す）。共有 repo の影響と全文 backup の保持を説明します。明示 `--assume-yes` でも、Git 追跡中・Git 状態不明の source は消さず警告します。編集済み・版不明・壊れた marker は保持し、利用者が local diff を確認して marker 間だけを片付けます。自動 force はありません。利用者側への設置を検証してから元 block を消します。
+対話では「利用者側へ移し、既知の元 block を消すか」を一度確認します（`[Y/n]`、Enter は消す）。共有 repo の影響と全文 backup の保持を説明します。明示 `--assume-yes` でも、Git 追跡中・Git 状態不明の source は消さず警告します。編集済み・版不明・壊れた marker は保持し、利用者が local diff を確認して marker 間だけを片付けます。自動 force はありません。利用者側への設置を検証してから元 block を消します。
 
 ```sh
 agentstack-claude-setup --remove-legacy-block --path /work/repo/CLAUDE.md --dry-run
@@ -81,3 +87,7 @@ agentstack-runtime-client instruction-configure operator codex
 setup の `--uninstall`、通常の uninstaller は記録済み marker だけを除去します。変更済みの block は警告して残し、利用者 file 自体は owned_files にしません。全文を含む private backup・receipt・history は残ります。
 
 `agentstack-uninstall --purge-data` は削除前に未完了・編集済み・保持 source を検査し、残っていれば `INSTRUCTION_BACKUP_PURGE_BLOCKED` で停止します。人が保持 marker を削除済みなら現状を再確認して解消できます。全て解消したときだけ固定 ledger と全文 backup も削除します。独自の自動 GC はありません。
+
+`--remove-legacy-block --path X` は X だけを片付けます。利用者側の現行 block が未設置・変更済みなら `INSTRUCTION_TARGET_REQUIRES_SETUP` で止まり、先に setup を案内します。別の source や利用者 target は書き換えません。編集済み・未知の source には cleanup command を出さず、local diff と手動で marker 間だけを消す手順を案内します。
+
+purge は current と history の全 receipt に記録した source を照合します。古い世代の marker が残る間も backup を保持します。通常の uninstall は symlink の変更や hardlink 等で安全に除去できない file を保持して警告し、残りを続けます。purge はその異常で止まります。
