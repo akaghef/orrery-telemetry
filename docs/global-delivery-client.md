@@ -75,7 +75,7 @@ proxy は server fixture の schema から owner・binding の入力を除いて
 
 ## Codex hook trust
 
-固定 provider HOME の mcp.json・settings.json・Gemini mcp_config.json は完全な導出物です。launch gate の operation mutex 内で毎回再生成するため、Python・wrapper・hook の版が変わっても更新できます。利用者の設定はこれらのファイルへ直接追記せず、既存の tool selection の入力へ置きます。同時書換えは `GENERATED_CONFIG_CHANGED`、読取不能は `GENERATED_CONFIG_UNREADABLE` です。private path/permission を直して明示起動をやり直してください。導出物の別の台帳はありません。
+Claude の固定 provider HOME の mcp.json と orrery-hooks.json は導出物で、launch gate の operation mutex 内で再生成します。hooks は `--settings orrery-hooks.json` で渡し、provider が使う settings.json の model・permissions は変更しません。Gemini は native `.gemini/config/mcp_config.json` を唯一の設定として使い、同 mutex 下で `orrery-mail` entry だけを CAS 更新し、他の top-level key と MCP entry を保持します。Codex は既定 config を生成せず `-c` で呼出し時に指定します。同時書換えは `GENERATED_CONFIG_CHANGED`、読取不能は `GENERATED_CONFIG_UNREADABLE`、Gemini の JSON/構造不正は `GENERATED_CONFIG_JSON_INVALID` で上書きせず停止します。private path/permission または JSON を直して明示起動をやり直してください。設定の別の台帳はありません。
 
 通常の launch は trust を承認しません。固定 provider HOME の承認済み plan、plugin payload、native config の trust が一致しなければ `CODEX_HOOK_CONFIGURE_REQUIRED` で止まります。変更前の plan に承認を使い回すこともできません。
 
@@ -119,11 +119,13 @@ hint は ID と binding だけです。owner の pending-only・exact-ID fetch �
 | tmux / standalone hook / persistent / daemon | 旧 watcher の同じ定義から読む30秒 cooldown、回数上限なし。unknown は timeout＋30秒の lease と backoff の両方を待つ |
 | Codex App | poll 0.25秒、coalesce 2秒、1時間12 wake、lease 900秒、backoff 2..300秒、最大5 attempt（既定値。`AGENTSTACK_CODEX_APP_WAKE_*` を旧と同じ reader で適用） |
 
-bare shell・capture timeout・session 不在・Mail disabled・未確定 route は handoff 前なので attempt を増やしません。App の rate 超過と5回上限は blocked とし、dead_letter にはしません。global watcher は signal directory の event で動き、event reader が無ければ旧と同じ2秒 poll、event の取りこぼしは既存 scan 間隔で救済します。待機期限・blocked は通信前に判定します。importance 未満は同 intent の BELOW_MIN_IMPORTANCE とし、下限設定が変わった時だけ再評価します。
+bare shell・capture timeout・session 不在・Mail disabled・未確定 route は handoff 前なので attempt を増やしません。App の rate 超過と5回上限は blocked とし、dead_letter にはしません。global watcher は server の signal directory がまだ無ければ作らず2秒 poll で待ち、存在後は directory の event で動き、event reader が無ければ旧と同じ2秒 poll、event の取りこぼしは既存 scan 間隔で救済します。待機期限・blocked は通信前に判定します。importance 未満は同 intent の BELOW_MIN_IMPORTANCE とし、下限設定が変わった時だけ再評価します。BELOW_MIN_IMPORTANCE と SELF_MESSAGE は operator 対応待ちではなく、doctor の警告には数えません。read/ack 等で hint が消えたら、既存の reconcile が同 intent を片付けます。
 
-unknown の再試行は duplicate_possible を返し、後の未送信だけでは先行 unknown の警告を消しません。同 owner/binding の再 launch は古い intent を新 attempt へ捕まえ直します。本当に owner/credential が変わった場合はその message だけ blocked とし、明示 retry で現在値へ再計画できます。1 message / App root の異常は他の通知を止めません。confirmed 後は server completion の再送だけです。遅れて来た別 attempt・旧 credential generation・旧 launch の callback は拒否します。
+unknown の再試行は duplicate_possible を返し、後の未送信だけでは先行 unknown の警告を消しません。同 owner/binding の再 launch は古い intent を新 attempt へ捕まえ直します。本当に owner/credential が変わった場合はその message だけ blocked とし、明示 retry で現在値へ再計画できます。intent の列挙では数字の候補名だけを取り、存在・実体・permission の確認は message lock 内へ集約します。不正な slot は diagnostics に出し、1 message / App root の異常は他の通知を止めません。confirmed 後は server completion の再送だけです。遅れて来た別 attempt・旧 credential generation・旧 launch の callback は拒否します。
 
 server の top-level status は要求を受けられる readiness、signal.status は通知の配送の健康です。local unknown/blocked は既存 doctor の warning と status/worker log から確認します。dashboard が配送健康を読む UI は後続です。
+
+不正 slot の `repair-local-state` は自動修復や CLI 名ではなく、表示した message の固定 consumer slot の permission/type を利用者が直す案内です。正常な slot は変更せず、symlink の先は辿らず、修復後に diagnostics を再実行してください。
 
 ## lock と隔離試験
 

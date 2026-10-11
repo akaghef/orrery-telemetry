@@ -2098,8 +2098,11 @@
     "confirmed-endedの中断は既存operator_resolutionとliveの共通判定でstatus/prepareを止め、同解消の残りだけ再実行する。新journal無し。",
     "同owner/bindingの旧launch intentはduplicate_possibleを維持して再計画。owner/credential不一致は当該midだけblocked、明示retryでcurrentへ再束縛。hook/watch/Appはmid/root単位で例外を閉じ込める。",
     "待機/blockedをfetch前に判定し、importance下限は同intentのnotify_min_importanceで再評価。Appは1対象につきfetch最大1回。",
-    "固定の導出native設定はoperation mutex下のlaunch gateで再生成。人の入力は別の既存正本に置く。",
+    "Claudeの生成hookは固定orrery-hooks.jsonを--settingsで渡し、providerのsettings.jsonを上書きしない。Geminiのnative mcp_config.jsonはoperation mutex下でorrery-mail entryだけCAS更新し、他key/entryは保持。破損JSONはGENERATED_CONFIG_JSON_INVALIDでbytes不変。Codexは-cの呼出し時設定だけ。",
     "App _seenは各tickで現hint集合へ限定し、route directory消滅時も消す。",
+    "intent列挙は数字の候補名だけ。実体とpermissionと存在は既存message lock内へ一本化し、不正slotをdiagnosticsへ出して他midを継続。",
+    "BELOW_MIN_IMPORTANCE/SELF_MESSAGEはoperator状態ではない。同hintが無くなったら既存reconcileでintentを削除。",
+    "旧shellの数値検証の上下限も宣言から読み、0/1/300/301/非数字の実shell比較で固定。signals directory不在時は作らず2秒pollで待つ。",
     "dashboard API世代はserver.API_GENERATIONの1定義。実socket試験は短い専用fixture、製品の長さ拒否は維持。"
   ]
 }

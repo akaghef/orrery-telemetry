@@ -67,7 +67,7 @@ def test_retry_initial_missing_tmux_server_and_missing_session(server,launch,mon
     import subprocess
     import tempfile
     client,delivery,row=launch
-    socket=Path(tempfile.mkdtemp(prefix='r246tmux-',dir='/private/tmp'))
+    socket=Path(tempfile.mkdtemp(prefix='r246tmux-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None))
     monkeypatch.setenv('TMUX_TMPDIR',str(socket));monkeypatch.delenv('TMUX',raising=False)
     row['phase']='planned';delivery.save(client.outputs['launch'],row,'launch_intent')
     run=subprocess.run
@@ -196,7 +196,7 @@ def test_unknown_duplicate_warning_is_monotonic(server,launch):
 def test_native_config_regenerated_after_interpreter_and_wrapper_change(launch,monkeypatch):
     client,delivery,row=launch;delivery.provider_command(row)
     config=client.runtime_dir/'provider-home/claude/mcp.json'
-    settings=config.with_name('settings.json')
+    settings=config.with_name('orrery-hooks.json')
     before=config.read_bytes()
     monkeypatch.setattr(delivery.provider_command.__globals__['sys'],'executable','/fixture/updated/python')
     monkeypatch.setitem(delivery.provider_command.__globals__,'__file__','/fixture/updated/bin/lib/runtime_delivery.py')

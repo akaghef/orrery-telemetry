@@ -946,7 +946,8 @@ def test_confirmed_completion_recovers_without_signal_or_second_injection(server
     monkeypatch.setattr(api['delivery_contract']()['RuntimeDelivery'],'tmux_target',lambda self: (_ for _ in ()).throw(AssertionError('second injection')))
     fresh.watch_once()
     assert not path.exists()
-    assert fresh.intent_ids()==[] and fresh.diagnostics()==[]
+    assert fresh.intent_ids()==[mid]  # enumeration returns candidate names, not intent existence
+    assert fresh.diagnostics()==[]
 
 
 def test_child_codex_cli_spelling_selects_codex_without_changing_metadata(server,monkeypatch,capsys):

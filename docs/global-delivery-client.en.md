@@ -73,7 +73,7 @@ The bound proxy derives server schemas by removing owner and binding inputs. Loc
 
 ## Codex hook trust
 
-The fixed provider HOME mcp.json, settings.json and Gemini mcp_config.json are wholly derived files, regenerated under the launch gate operation mutex on each launch. Interpreter, wrapper and hook updates can replace them. Put user settings in the existing tool-selection inputs, not in these generated files. Concurrent edits return GENERATED_CONFIG_CHANGED; unreadable files return GENERATED_CONFIG_UNREADABLE. Correct the private path/permissions and retry explicitly. There is no separate generated-state ledger.
+Claude mcp.json and orrery-hooks.json are derived files regenerated under the launch gate operation mutex. Hooks use `--settings orrery-hooks.json`; the provider-owned settings.json model and permissions stay untouched. Gemini keeps its native `.gemini/config/mcp_config.json` as the sole configuration, CAS-updating only the `orrery-mail` entry under the same mutex and preserving other top-level keys and MCP entries. Codex uses per-call `-c` overrides without generating its default config. Concurrent edits return `GENERATED_CONFIG_CHANGED`, unreadable files return `GENERATED_CONFIG_UNREADABLE`, and invalid Gemini JSON or structure returns `GENERATED_CONFIG_JSON_INVALID` without overwriting bytes. Correct private paths/permissions or JSON, then retry explicitly. There is no separate configuration ledger.
 
 Normal launch never approves trust. The approved plan in the fixed provider HOME must match plugin payload and native config trust. Otherwise launch fails with `CODEX_HOOK_CONFIGURE_REQUIRED`. Approval cannot be reused for changed payload.
 
@@ -117,9 +117,11 @@ Hints carry IDs and binding only. Owner pending-only/exact-ID reads select actua
 | tmux / standalone hook / persistent / daemon | Existing 30-second cooldown; no attempt cap; unknown waits for both channel timeout plus 30-second lease and backoff |
 | Codex App | 0.25-second poll; 2-second coalesce; 12 wakes/hour; 900-second lease; 2..300-second backoff; 5 attempts |
 
-Bare shells, capture timeouts, absent sessions, disabled Mail and unresolved routes precede handoff and consume no attempt. App rate/attempt limits block without dead-lettering. Unknown retry reports duplicate_possible. Once confirmed, retry only resends server completion. Late attempt, old credential-generation and old-launch callbacks fail closed.
+The watcher waits with the existing two-second poll when the server-owned signals directory is absent, without creating it. Numeric intent names are candidates only; per-message locking validates existence, type and permissions. Diagnostics report unsafe slots without stopping other messages. BELOW_MIN_IMPORTANCE and SELF_MESSAGE are policy decisions, not operator incidents; existing reconciliation removes these intents after their hint disappears through read/ack or consumption. Bare shells, capture timeouts, absent sessions, disabled Mail and unresolved routes precede handoff and consume no attempt. App rate/attempt limits block without dead-lettering. Unknown retry reports duplicate_possible. Once confirmed, retry only resends server completion. Late attempt, old credential-generation and old-launch callbacks fail closed.
 
 Top-level server status describes request readiness; signal.status describes notification delivery health. Existing doctor warnings and local status/worker logs report unknown or blocked work. Dashboard delivery-health UI remains later work.
+
+For an unsafe slot, `repair-local-state` is a manual instruction, not a CLI operation or automatic repair. Correct the reported message slot type/permissions, leave healthy slots untouched, never follow a symlink, and rerun diagnostics.
 
 ## Lock order and tests
 

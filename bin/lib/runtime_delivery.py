@@ -65,10 +65,13 @@ def legacy_policy():
     poll=number(r'^POLL_INTERVAL=(\d+)')
     scan=number(r'Linux\) SCAN_INTERVAL_DEFAULT=(\d+)') if sys.platform.startswith('linux') else number(r'\*\) SCAN_INTERVAL_DEFAULT=(\d+)')
     configured=os.environ.get('AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL','')
-    if configured.isdecimal() and int(configured)>=1:scan=int(configured)
+    scan_minimum=number(r'SCAN_INTERVAL < (\d+)')
+    if re.fullmatch(r'[0-9]+',configured) and int(configured)>=scan_minimum:scan=int(configured)
     default=number(r'HEADLESS_REPLY_TIMEOUT="\$\{AGENTSTACK_HEADLESS_REPLY_TIMEOUT:-(\d+)\}"')
     timeout=os.environ.get('AGENTSTACK_HEADLESS_REPLY_TIMEOUT','')
-    timeout=int(timeout) if timeout.isdecimal() and 1<=int(timeout)<=default else default
+    minimum=number(r'HEADLESS_REPLY_TIMEOUT < (\d+)')
+    maximum=number(r'HEADLESS_REPLY_TIMEOUT > (\d+)')
+    timeout=int(timeout) if re.fullmatch(r'[0-9]+',timeout) and minimum<=int(timeout)<=maximum else default
     return {'max_attempts':None,'lease':timeout+cooldown,'backoff':lambda n:cooldown,
             'poll':poll,'scan':scan,'coalesce':0,'wakes_per_hour':None,'process_timeout':timeout}
 
@@ -101,6 +104,10 @@ def format_notification(message):
     if isinstance(body, str):
         return text + ' Body preview: ' + line(body[:2000].replace('\r', ' ').replace('\n', ' ⏎ ')) + ' Fetch inbox to read the rest.'
     return text + ' Please call fetch_inbox to read it.'
+
+
+def policy_blocked(row):
+    return row['phase']=='blocked' and row['error'] in ('BELOW_MIN_IMPORTANCE','SELF_MESSAGE')
 
 
 def notification_eligible(message):
@@ -610,12 +617,18 @@ class RuntimeDelivery:
         helper = Path(helper) / 'hooks/prepare-codex-session-binding.py'
         return runpy.run_path(str(helper))['_transcript_header_session_id'](Path(transcript))
 
-    def generated_config(self, path, value):
-        # These fixed native files are wholly derived, never user settings.
-        # Recompute under C so interpreter/wrapper updates cannot strand a root.
+    def generated_config(self, path, value, *, preserve_native=False):
+        # Recompute owned output under C. Gemini has one native config: merge
+        # only our entry, preserving provider/user fields in that same file.
         with self.client.operation_mutex():
             try:previous=self.api['read_private'](path) if path.exists() or path.is_symlink() else None
             except (OSError,ValueError,self.error):self.fail('GENERATED_CONFIG_UNREADABLE')
+            if preserve_native and previous is not None:
+                try:
+                    native=json.loads(previous)
+                    if not isinstance(native,dict) or not isinstance(native.get('mcpServers',{}),dict):raise ValueError()
+                except (ValueError,UnicodeError):self.fail('GENERATED_CONFIG_JSON_INVALID')
+                value={**native,'mcpServers':{**native.get('mcpServers',{}),**value['mcpServers']}}
             def unchanged():
                 current=self.api['read_private'](path) if path.exists() or path.is_symlink() else None
                 if current!=previous:self.fail('GENERATED_CONFIG_CHANGED')
@@ -749,7 +762,7 @@ class RuntimeDelivery:
                 args+=(['exec','resume',provider_session_id] if headless else ['resume',provider_session_id])
         elif provider=='gemini':
             config=self.directory(home/'.gemini/config')/'mcp_config.json'
-            self.generated_config(config,{'mcpServers':{'orrery-mail':{'command':proxy[0],'args':proxy[1:]}}})
+            self.generated_config(config,{'mcpServers':{'orrery-mail':{'command':proxy[0],'args':proxy[1:]}}},preserve_native=True)
             args=[binary,'--input-format','stream-json','--output-format','stream-json']
             if row['launch_kind']=='resume':
                 if not provider_session_id:self.fail('PROVIDER_SESSION_REQUIRED')
@@ -769,7 +782,7 @@ class RuntimeDelivery:
                 PostToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('post-edit')]},
                              {'hooks':[hook('notifications')]}],
                 SessionEnd=[{'hooks':[hook('end-session')]}])
-            settings = home / 'settings.json'
+            settings = home / 'orrery-hooks.json'
             self.generated_config(settings,{'hooks':hooks})
             args += ['--settings',str(settings)]
         elif provider=='codex':
@@ -904,14 +917,15 @@ class RuntimeDelivery:
             self.save(self.launch_path,row,'launch_intent')
             return self.status(row['launch_id'])
 
-    def delivery_status(self, mid):
+    def delivery_status(self, mid, *, missing_ok=False):
         with self.message(mid) as path:
+            if missing_ok and not path.exists() and not path.is_symlink():return None
             row=self.local(path,'delivery_intent')
             verified,reason=self.remote_verified()
             captured={k:row[k] for k in ('expected_server_instance_id','candidate_generation','authority_epoch','agent_id','credential_generation','launch_id')}
             return {'ok':True,'state_sha256':self.state_digest('delivery',mid,row),
-                    'operator_required':row['phase']=='blocked' or not self.captured_matches(row),
-                    'next_operations':['resolve-delivery'],'current':self.status_current(),
+                    'operator_required':not policy_blocked(row) and (row['phase']=='blocked' or not self.captured_matches(row)),
+                    'next_operations':[] if policy_blocked(row) else ['resolve-delivery'],'current':self.status_current(),
                     'remote_owner_verified':verified,'reason':reason or row['error'],
                     'message_id':mid,'phase':row['phase'],'captured':captured,
                     **{k:row[k] for k in ('attempt_id','attempt_count','attempt_expires_at','next_attempt_at','duplicate_possible','operator_resolution')}}
@@ -1151,22 +1165,24 @@ class RuntimeDelivery:
         directory=self.consumer_agent(create=False)/'messages'
         if not directory.exists():return []
         self.api['safe_private_directory'](directory)
-        found=[]
-        for entry in directory.iterdir():
-            if not __import__('re').fullmatch(r'[1-9][0-9]*',entry.name):continue
-            self.api['safe_private_directory'](entry)
-            if (entry/'intent.json').exists() or (entry/'intent.json').is_symlink():
-                found.append(int(entry.name))
-        return found
+        # Names are candidates only. All child admission belongs to message(mid)
+        # inside the caller's per-message exception boundary.
+        return [int(name) for name in os.listdir(directory)
+                if __import__('re').fullmatch(r'[1-9][0-9]*',name)]
 
     def reconcile_confirmed(self):
         # The existing intent recovers an acknowledgement after the server has
         # consumed its hint. There is no second completion ledger.
+        hints=None
         for mid in self.intent_ids():
             try:
                 with self.message(mid) as path:
                     if not path.exists() and not path.is_symlink():continue
                     row=self.local(path,'delivery_intent')
+                    if policy_blocked(row):
+                        if hints is None:hints=set(self.hints())
+                        if mid not in hints:path.unlink()
+                        continue
                     if row['phase'] not in ('external-confirmed','callback-pending'):continue
                     if not self.captured_owner_matches(row):
                         row.update(phase='blocked',error='DELIVERY_ROUTE_CHANGED')
@@ -1200,9 +1216,13 @@ class RuntimeDelivery:
                 warnings.append({'reason':row['error'] or 'LAUNCH_OUTCOME_UNKNOWN',
                     'operation':'launch-status','launch_id':row['launch_id'],'next':'launch-resolve'})
         for mid in self.intent_ids():
-            try:status=self.delivery_status(mid)
+            try:status=self.delivery_status(mid,missing_ok=True)
             except FileNotFoundError:continue  # concurrent completion removed it
-            if status['operator_required']:
+            except (self.error,OSError,ValueError) as exc:
+                warnings.append({'reason':str(exc) if isinstance(exc,self.error) else 'LOCAL_STATE_UNAVAILABLE',
+                    'operation':'delivery-status','message_id':mid,'next':'repair-local-state'})
+                continue
+            if status is not None and status['operator_required']:
                 warnings.append({'reason':status['reason'] or 'DELIVERY_ROUTE_CHANGED',
                     'operation':'delivery-status','message_id':mid,'next':'resolve-delivery'})
         return warnings
@@ -1249,7 +1269,14 @@ class RuntimeDelivery:
         stop=stop or threading.Event()
         settings=legacy_policy()
         directory=self.client.runtime/'signals'
-        self.api['safe_private_directory'](directory)
+        # Signals are server-owned. Wait without creating them when the server
+        # has not yet reconciled; admission and event setup happen afterwards.
+        while not stop.is_set():
+            try:self.api['safe_private_directory'](directory)
+            except FileNotFoundError:
+                stop.wait(settings['poll']);continue
+            break
+        if stop.is_set():return
         events=None
         if shutil.which('fswatch'):
             try:
