@@ -377,7 +377,9 @@ class AgentMailClient:
         self._with_owner_token("whois", arguments, registration_token)
         response = self._request_tool("whois", arguments)
         if _agent_not_found(response, agent_name):
-            raise AgentNotFoundError("whois: no such agent in the project")
+            # Same redacted Mail line as any tool error, so callers keep the
+            # name and "Did you mean" hint; only the type says "missing".
+            raise AgentNotFoundError(_safe_error_text(response["result"]))
         profile = _decode_tool_response(response)
         if not isinstance(profile, dict):
             raise AgentMailError("whois returned a non-object result")

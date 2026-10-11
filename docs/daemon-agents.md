@@ -51,7 +51,7 @@ managementのUUID/row/name/project/retirement/fingerprintとHTTPのUUID/row/prog
 <dev-python> <helper-release>/bin/agentstack-daemon inspect --profile <profile.json>
 ```
 
-startupと各callでmanagement socketの同一UID/private owner credentialと現在のfingerprint/generation、HTTPの同じ永続UUID、whoisのname/数値row/project/program、一覧の各peerを照合する。generation変更は既存helperを止め、operator確認後の再起動を待つ。HTTP redirectは拒否。現在のbundled Mailのread APIがowner-token引数を広告しない場合はlocal-principal transportとhelper側のowner照合が境界で、引数を勝手に加えない。Mail全体にowner別認可を追加した意味ではない。
+startupと各callでmanagement socketの同一UID/private owner credentialと現在のfingerprint/generation、HTTPの同じ永続UUID、自分のwhoisのname/数値row/project/programを照合する。peerの数値row（project・退役も）は、whoisとsend_messageの直前にその対象のpeerだけを照合する。`inspect` は一覧の全peerを照合する。generation変更は既存helperを止め、operator確認後の再起動を待つ。HTTP redirectは拒否。現在のbundled Mailのread APIがowner-token引数を広告しない場合はlocal-principal transportとhelper側のowner照合が境界で、引数を勝手に加えない。Mail全体にowner別認可を追加した意味ではない。
 
 exportはcall(name,args)、wait_for_notification(timeout)、closeのみ。allowlistはnormalized runtime_status、一覧のpeerのwhois、自分のfetch_inbox、ACK、一覧のpeer 1人宛てのsend_message（送信直前にそのpeerの数値rowをwhoisで確認し、不一致なら `daemon-peer-changed`、Mailがそのagentは無いと答えれば `daemon-peer-missing`）。missingの判定はclientの `AgentMailClient.whois` の1か所で、Mailのnot-found定型文面だけを読む（Mailは種別を文面でしか返さないため。native Mailの契約試験で固定し、文面が変わればoutage側に倒れる。Mailが種別を構造化して返すようになったら種別に置き換える）。この2つだけが「そのpeerだけ使えない」を表す固定codeで、`PEER_STATUS` に定義する。consumerはこのmapだけで判定し、Mailの例外文面は照合しない。他の失敗（Mailへ届かない等）は `daemon-operation-failed` のまま障害として扱う。caller/project/token変更、registration/enrollment/retirement、他者inbox、signal/DB読取は不可。sender_id/project_idを保持し、一覧外のsender・別projectはACK前に拒否。一覧のnameで数値IDが違うMailは拒否せずそのまま返し、consumerが保存・ACKせず保留する。1人の入替で他のpeerの受信を止めないため。数値agent IDはCodex Appのsession/subagent IDと別。
 

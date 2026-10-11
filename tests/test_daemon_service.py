@@ -29,7 +29,9 @@ from agentstack_codex_app.agent_mail_client import (
     HttpJsonRpcTransport,
     AgentMailError,
     AgentNotFoundError,
+    _decode_tool_response,
 )
+from agentstack_codex_app.mcp_server import AgentStackProxy
 from agentstack_mail import enrollment_cli as enroll
 
 
@@ -315,6 +317,24 @@ def test_native_not_found_contract_and_changed_text_is_an_outage(native):
             agent_name="GoneLake",
             registration_token=x["peer_token"],
         )
+    # The public proxy whois keeps the same redacted Mail line as before the
+    # type existed (name and "Did you mean" hint), only the type is new.
+    raw = client._request_tool(
+        "whois",
+        {"project_key": x["profile"]["project_key"], "agent_name": "GoneLake", "include_recent_commits": False},
+    )
+    with pytest.raises(AgentMailError) as before:
+        _decode_tool_response(raw)
+    proxy = AgentStackProxy(None, None, client)
+    proxy.bind_direct(
+        agent_name="ExamplePeer",
+        project_key=x["profile"]["project_key"],
+        owner_token=x["peer_token"],
+        program="fixture-peer",
+    )
+    with pytest.raises(AgentNotFoundError) as exc:
+        proxy.whois(proxy.bound_session_id, name="GoneLake")
+    assert str(exc.value) == str(before.value) and "GoneLake" in str(exc.value)
     # If Mail rewords that line, the same answer falls back to a plain error,
     # which the daemon treats as an outage, never as a missing peer.
     real = client.transport
