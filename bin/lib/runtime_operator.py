@@ -147,9 +147,10 @@ class RuntimeOperator:
                 elif client.identity is None:
                     result.update(stage='root_only',next_operations=['replay-registration'])
                 else:
-                    row=client.observe()
+                    has_launch=client.outputs['launch'].exists() or client.outputs['launch'].is_symlink()
+                    row=client.inspect_owner() if has_launch else client.observe()
                     result['agent_id']=row['agent_id']
-                    if client.outputs['launch'].exists() or client.outputs['launch'].is_symlink():
+                    if has_launch:
                         delivery=self.api['runtime_delivery'](client)
                         saved=delivery.launch()
                         observed=delivery.status(saved['launch_id'])
@@ -233,7 +234,7 @@ class RuntimeOperator:
         if client.outputs['child'].exists():client.resume_child({})
         else:
             if client.session_liveness()!='absent':raise self.api['ClientError']('SESSION_LIVENESS_UNKNOWN')
-            observed=client.management('inspect',agent_id=client.identity['agent_id'])
+            observed=client.inspect_owner()
             if observed.get('retired_at') is not None:client.call('unretire_agent')
             client.reconnect()
         if not prepare_only:

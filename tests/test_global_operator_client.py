@@ -134,3 +134,30 @@ def test_installed_operator_uses_installer_payload_and_shared_schema(operator,mo
     assert json.loads(result.stdout)['stage']=='registered_unconfigured'
     config=json.loads((operator.isolation/'agentstack/clients/installed/runtime-client.json').read_text())
     assert config['wrapper_root']==str(installed)
+
+
+@pytest.mark.parametrize('retired',[False,True])
+def test_existing_cancelled_launch_can_resume_same_retired_identity(operator,monkeypatch,retired):
+    import sys
+    operator.create('resume',agent_name='OperatorResume',program='daemon',model='deterministic')
+    client=operator.client('resume')
+    client.save_profile()
+    delivery=operator.api['runtime_delivery'](client)
+    delivery.configure_execution({'argv':[sys.executable], 'interaction':'interactive','cwd':str(client.runtime_dir)})
+    client.record_session({'session_id':'fixture-session','cwd':str(client.runtime_dir),'tool_response':client.call('whois')})
+    row=delivery.prepare_launch('daemon',cwd=client.runtime_dir)
+    status=delivery.status(row['launch_id'])
+    delivery.operator('launch-cancel',{'launch_id':row['launch_id'],'expected_state_sha256':status['state_sha256'],'confirm':True})
+    if retired:client.call('retire_agent')
+    before=operator.read({'kind':'health'})['as_of_revision']
+    assert operator.status('resume')['stage']=='launch_present'
+    assert operator.read({'kind':'health'})['as_of_revision']==before
+    launched=[]
+    monkeypatch.setattr(operator.api['RuntimeClient'],'session_liveness',lambda self:'absent')
+    monkeypatch.setattr(type(delivery),'start',lambda self,*args,**kw:launched.append((args,kw)))
+    result=operator.resume('resume')
+    assert result['agent_id']==client.identity['agent_id']
+    assert launched[0][1]['launch_kind']=='resume'
+    assert launched[0][1]['provider_session_id']=='fixture-session'
+    assert operator.client('resume').management('inspect',agent_id=client.identity['agent_id'])['retired_at'] is None
+    assert operator.client('resume').local_owner()==client.local_owner()

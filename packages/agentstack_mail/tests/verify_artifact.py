@@ -1112,6 +1112,8 @@ REQUIRED_RUNTIME_MODULES = {
     "global_prepare_s2c.py",
     "global_s2c.py",
     "global_s2c_contract.py",
+    "global_ui.py",
+    "global_ui_contract.py",
     "global_reservations.py",
     "schema_contract.py",
     "global_prepare.py",
@@ -1167,6 +1169,7 @@ WHEEL_REQUIRED_SUFFIXES = {
     "agentstack_mail/fixtures/global-server-s2a.json",
     "agentstack_mail/fixtures/global-server-s2b.json",
     "agentstack_mail/fixtures/global-server-s2c.json",
+    "agentstack_mail/fixtures/global-ui.json",
     "agentstack_mail/fixtures/namespace-legacy-delivery-v1.sql",
 } | {f"agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
 
@@ -1179,6 +1182,8 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_global_server_s2c.py",
     "/tests/fixtures/sql_reservations.py",
     "/fixtures/global-server-s2c.json",
+    "/fixtures/global-ui.json",
+    "/tests/test_global_ui.py",
     "/fixtures/global-server-s1.json",
     "/tests/test_namespace_state_migration.py",
     "/tests/test_namespace_state_runtime.py",

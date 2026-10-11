@@ -841,10 +841,7 @@ class RuntimeClient:
             if tool in {'retire_agent', 'unretire_agent'}:
                 # whois intentionally refuses a retired row. Local operator
                 # inspect supplies its generation without reviving it first.
-                inspected = self.management('inspect', agent_id=self.identity['agent_id'])
-                if (inspected.get('credential_generation') != self.identity['credential_generation']
-                        or inspected.get('credential_fingerprint') != hashlib.sha256(args['registration_token'].encode()).hexdigest()[:16]):
-                    raise ClientError('CREDENTIAL_BINDING_MISMATCH')
+                self.inspect_owner()
             if tool == 'register_agent' and self.identity and 'window_row_id' in self.identity:
                 args.update(window_row_id=self.identity['window_row_id'], window_uuid=self.identity['window_uuid'])
             if set(args) - set(schemas[tool].get('properties', {})):
@@ -1141,6 +1138,16 @@ class RuntimeClient:
             if action != 'request_status' and reply.get('agent_id') != values.get('agent_id'):
                 raise ClientError('MANAGEMENT_IDENTITY_MISMATCH')
             return reply
+
+    def inspect_owner(self):
+        # whois refuses retired identities; this existing private projection
+        # proves the same local credential without changing retirement.
+        token = self.local_owner()
+        inspected = self.management('inspect', agent_id=self.identity['agent_id'])
+        if (inspected.get('credential_generation') != self.identity['credential_generation']
+                or inspected.get('credential_fingerprint') != hashlib.sha256(token.encode()).hexdigest()[:16]):
+            raise ClientError('CREDENTIAL_BINDING_MISMATCH')
+        return inspected
 
     def activate_credential(self, token, row, metadata=None):
         identity = {k: row[k] for k in ('agent_id', 'credential_generation', 'name')}
@@ -1891,7 +1898,7 @@ def _serialized(method):
 # provider execution is deliberately outside these methods/scopes.
 for _method in ('observe', 'reconnect', 'activate_credential', 'create', 'enroll',
                 'save_metadata', 'save_profile', 'record_session', 'finalize_registration',
-                'finalize_enrollment', 'replay_pending', 'register_intent'):
+                'finalize_enrollment', 'replay_pending', 'register_intent', 'inspect_owner'):
     if hasattr(RuntimeClient, _method):
         setattr(RuntimeClient, _method, _serialized(getattr(RuntimeClient, _method)))
 
