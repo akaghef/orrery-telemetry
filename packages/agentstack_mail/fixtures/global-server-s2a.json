@@ -18,7 +18,8 @@
     "set_contact_policy",
     "macro_contact_handshake",
     "resolve_agent_identity",
-    "touch_window_identity"
+    "touch_window_identity",
+    "bind_window_identity"
   ],
   "existing_s1_tools": "all 7 names/signatures retained unchanged",
   "capabilities_added": {
@@ -40,6 +41,9 @@
     ],
     "window_touch_v1": [
       "touch_window_identity"
+    ],
+    "window_bind_owner_v1": [
+      "bind_window_identity"
     ]
   },
   "health_change": {
@@ -1808,6 +1812,120 @@
         ],
         "additionalProperties": false
       }
+    },
+    "bind_window_identity": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "window_uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "request_id",
+          "window_uuid"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "candidate_generation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "authority_epoch": {
+            "type": "string",
+            "minLength": 1
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "window_row_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "window_uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "verification": {
+            "const": "server-bound-window"
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "window_row_id",
+          "window_uuid",
+          "verification",
+          "result_as_of",
+          "mutation_revision",
+          "committed_at"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write",
+      "accepted_ignored_arguments": []
     }
   },
   "common_rules": {

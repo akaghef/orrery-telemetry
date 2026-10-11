@@ -832,7 +832,7 @@ class S2bRuntime(S2aRuntime):
         validate(result, TOOLS[tool]["output_schema"], "RESPONSE_INVALID")
         return result
 
-    inbox_extensions = ("before_id", "expected_credential_generation")
+    inbox_extensions = ("before_id", "expected_credential_generation", "notification_pending_only", "message_ids")
 
     def after_lifecycle(self, db, agent_id):
         for row in db.execute(
@@ -850,6 +850,10 @@ class S2bRuntime(S2aRuntime):
         if before is not None and (
             type(before) is not int or not 1 <= before <= 2**63 - 1
         ):
+            raise GlobalError("ARGUMENTS_UNSUPPORTED")
+        pending = args.get("notification_pending_only", False)
+        mids = args.get("message_ids")
+        if type(pending) is not bool or (mids is not None and (not isinstance(mids, list) or not 1 <= len(mids) <= 100 or any(type(mid) is not int or not 1 <= mid <= 2**63 - 1 for mid in mids) or len(set(mids)) != len(mids))):
             raise GlobalError("ARGUMENTS_UNSUPPORTED")
         cutoff = args.get("since_ts")
         if cutoff is not None:
@@ -878,6 +882,8 @@ class S2bRuntime(S2aRuntime):
                 cutoff=cutoff,
                 urgent_only=args["urgent_only"],
                 include_bodies=args["include_bodies"],
+                notification_pending_only=pending,
+                message_ids=mids,
             )
 
     def inbox_snapshot(
@@ -890,10 +896,17 @@ class S2bRuntime(S2aRuntime):
         cutoff=None,
         urgent_only=False,
         include_bodies=False,
+        notification_pending_only=False,
+        message_ids=None,
     ):
         """Select and project inbox rows inside the caller's transaction."""
         clause = "r.agent_id=?"
         params = [aid]
+        if notification_pending_only:
+            clause += " AND " + PENDING
+        if message_ids is not None:
+            clause += " AND m.id IN (" + ",".join("?" for _ in message_ids) + ")"
+            params.extend(message_ids)
         if before is not None:
             clause += " AND m.id<?"
             params.append(before)
@@ -903,7 +916,7 @@ class S2bRuntime(S2aRuntime):
         if urgent_only:
             clause += " AND m.importance IN ('high','urgent')"
         rows = db.execute(
-            "SELECT m.* FROM messages m JOIN message_recipients r ON r.message_id=m.id WHERE "
+            "SELECT m.* FROM messages m JOIN message_recipients r ON r.message_id=m.id JOIN agents a ON a.id=r.agent_id WHERE "
             + clause
             + " ORDER BY m.id DESC LIMIT ?",
             (*params, limit),
@@ -1053,7 +1066,17 @@ class S2bRuntime(S2aRuntime):
         else:
             items = []
             with self.transaction(write=True, binding=binding) as db:
-                self.peer(db, request["recipient_agent_id"])
+                # A completed external handoff may race with retirement. Only
+                # this same-UID callback can finish an existing recipient fact;
+                # public operations still require an active peer.
+                recipient = db.execute(
+                    "SELECT * FROM agents WHERE id=?",
+                    (request["recipient_agent_id"],),
+                ).fetchone()
+                if recipient is None:
+                    raise GlobalError("TARGET_UNAVAILABLE")
+                if recipient["credential_generation"] != request["expected_credential_generation"]:
+                    raise GlobalError("CREDENTIAL_GENERATION_MISMATCH")
                 modified = False
                 for mid in request["message_ids"]:
                     m = db.execute(

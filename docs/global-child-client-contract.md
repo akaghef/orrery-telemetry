@@ -2,7 +2,7 @@
 
 [利用手順](global-child-client.md) / [English guide](global-child-client.en.md)
 
-正本: `packages/agentstack_mail/fixtures/global-client-4b.json`。v2 の講評から、期限の読取と閾値付き renew、応答喪失後の同 UUID replay を実装に反映しています。実起動・proxy・wake は4c待ちです。
+正本: `packages/agentstack_mail/fixtures/global-client-4b.json`。v2 の講評から、期限の読取と閾値付き renew、応答喪失後の同 UUID replay を実装に反映しています。本表は4b時点の準備専用契約です。実起動・proxy・wake の拡張は [global delivery client](global-delivery-client.md) と `global-client-4c.json` を参照してください。
 
 ## 呼び手と tool
 

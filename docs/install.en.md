@@ -479,3 +479,5 @@ The installer does not automatically switch back to the third-party version. If 
 ## Local deterministic daemon helper
 
 [Dedicated bindings and notifications](daemon-agents.en.md) use a fixed local source release, not a newly installed general launcher. They require a Mail build advertising its UUID in HTTP health. Do not impersonate a Claude/Codex profile; live Mail updates, identity creation and deployment require separate operator approval.
+
+For explicit isolated launch, delivery and operator recovery, see [global delivery client](global-delivery-client.en.md). Legacy remains the default.

@@ -1,8 +1,10 @@
 # global client の子・再開の準備
 
+実起動・proxy・window binding・配送は [global delivery client](global-delivery-client.md) を参照してください。このガイドは子の準備を扱います。既定は旧 mode のままです。
+
 [English](global-child-client.en.md)
 
-この経路は隔離した global candidate の明示的な準備用です。既定は旧 mode、`activation_enabled=false` のままです。公開 Mail tool は既存31個から増えません。実行・proxy・wake は後続の4cで対応します。
+この経路は隔離した global candidate の明示的な準備用です。既定は旧 mode、`activation_enabled=false` のままです。準備だけでは provider を起動しません。明示的な実行は起動・配送のガイドに従います。
 
 ## 入口と固定 layout
 
@@ -18,7 +20,7 @@ bash "$AGENTSTACK_HOME/hooks/spawn_child.sh" --child-client-name child_01 \
 agentstack-resume --client-name child_01 --prepare-only --detached
 ```
 
-返り値の `prepared=true` は保存と認証の準備が済んだことです。`runtime_ready=false` は継続し、通常の spawn/resume は副作用前に `GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C` で止まります。新しい window mapping を作りません。既存 mapping だけ touch/verify します。provider 起動・HOME生成・tmux後の状態の検証は4cで行います。
+`prepared=true` は保存と認証の準備が済んだことです。その時点では `runtime_ready=false` です。通常の spawn/resume は続いて固定 launch の handoff に入り、新 window を stable agent ID に原子的に束縛し、既存 window は照合します。正規の provider session の証拠が揃って初めて ready になります。
 
 ## 登録が途中で止まった場合
 
@@ -53,10 +55,10 @@ SessionEnd と cleanup は同じ end 操作です。同 ID の別 session が li
 | 予約更新 | 編集ごとに renew | 期限閾値以下だけ renew、同 UUID 再送 |
 | SessionEnd | 旧 hook 連鎖を維持 | 共通 end で別 session を先に確認 |
 | 通信断 | 既定 warn-open / block | 同じ policy、認証等の拒否と区別 |
-| 新 window / 実行 | 既存 launcher | unmapped / 4c 待ちの固定拒否 |
+| 新 window / 実行 | 既存 launcher | 固定 launch handoff・stable ID binding・正規 session receipt |
 | 旧保管形式 | 既存の形式 | 自動変換せず PR7 の明示 import |
 
-Gemini stdio/proxy・native Windows は既存の未対応理由を維持します。WSL は共通 Unix client を使います。配送/wake は4c、managed block移行はPR5、画面はPR6、利用者向け切替とreleased形式のimportはPR7です。
+Gemini stdio は共通 proxy を使います。Gemini の対話型 root は正規の native receipt が無いため固定拒否です。native Windows は Unix 契約の対象外、WSL は共通 Unix client を使います。managed block移行はPR5、画面はPR6、利用者向け切替とreleased形式のimportはPR7です。
 
 ## 確認するもの
 

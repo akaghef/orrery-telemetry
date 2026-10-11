@@ -1,8 +1,10 @@
 # Preparing global child clients and resume
 
+For execution, proxies, window binding and delivery, see [global delivery client](global-delivery-client.en.md). This guide describes child preparation; legacy remains the default.
+
 [日本語](global-child-client.md)
 
-This is explicit preparation against an isolated global candidate. Legacy remains the default and `activation_enabled=false`. The existing31 Mail tools are unchanged. Actual execution, proxy and wake await4c.
+This is explicit preparation against an isolated global candidate. Legacy remains default and `activation_enabled=false`. Preparation never starts a provider; explicit execution follows the delivery guide.
 
 ## One entry and fixed layout
 
@@ -18,7 +20,7 @@ bash "$AGENTSTACK_HOME/hooks/spawn_child.sh" --child-client-name child_01 \
 agentstack-resume --client-name child_01 --prepare-only --detached
 ```
 
-`prepared=true` means local/authentication preparation; `runtime_ready=false` remains. Ordinary spawn/resume refuses with `GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C` before side effects. No new window mapping is created; only existing mappings are touched/verified. Provider execution, generated HOME and post-tmux evidence are tested in4c.
+`prepared=true` means local/authentication preparation, with `runtime_ready=false`. Normal spawn/resume then enters the fixed launch handoff. A new window binds atomically to the stable agent ID, while an existing window is verified. Only trusted provider session evidence makes runtime ready.
 
 ## Interrupted registration
 
@@ -53,10 +55,10 @@ Expired retained cleanup requires no pending and confirmed retirement; it remove
 | Renewal | every edit | expiry threshold, same-UUID replay |
 | SessionEnd | existing hook chain | one end operation checks other sessions first |
 | Outage | default warn-open / block | same policy, distinguished from authentication refusal |
-| New window / execution | existing launcher | unmapped / fixed4c refusal |
+| New window / execution | existing launcher | fixed launch handoff, stable ID binding and trusted session receipt |
 | Released retained format | existing readers | explicit PR7 import; no automatic conversion |
 
-Gemini stdio/proxy and native Windows keep their existing unsupported reasons. WSL uses the Unix client. Delivery/wake belong to4c, managed blocks to PR5, UI to PR6 and cutover/released-format import to PR7.
+Gemini stdio uses the common proxy. Interactive Gemini roots remain unsupported until a trusted native receipt is available. Native Windows remains outside the Unix contract; WSL uses the Unix client. Managed blocks belong to PR5, UI to PR6 and cutover/released-format import to PR7.
 
 The authoritative fixture is `packages/agentstack_mail/fixtures/global-client-4b.json`:48 source/docs,9 supplemental hits,12 indirect entries and35 acceptance cases. Implementation feedback changes v2 with threshold renewal and next-hook replay. Real HTTP fixtures await matching health/profile/binding. Related validation covers legacy, bash3.2, installer extraction and deployed bytes. Clients never open/close/hash/copy Mail SQLite files.
 

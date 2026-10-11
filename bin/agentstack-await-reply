@@ -153,9 +153,10 @@ def wait_for_reply(fetch, *, timeout, interval=3.0, sender=None, after_id=None,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentstack-await-reply", add_help=True)
-    parser.add_argument("--agent-name", required=True)
+    parser.add_argument("--agent-name", required=False)
     parser.add_argument("--project-key", default=None)
     parser.add_argument("--from", dest="sender", default=None)
+    parser.add_argument("--from-id", dest="sender_id", type=int, default=None)
     parser.add_argument("--after-id", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--interval", type=float, default=3.0)
@@ -179,11 +180,37 @@ def main(argv: list[str] | None = None) -> int:
         print("agentstack-await-reply: --timeout and --interval must be positive", file=sys.stderr)
         return 2
 
+    if client is None and not args.agent_name:
+        parser.error('--agent-name is required in legacy mode')
+    sender_id = args.sender_id
+    if client is not None and args.sender:
+        try:
+            sender_id = client.call('resolve_agent_identity', {'target_name':args.sender})['target']['agent_id']
+        except runtime_api['ClientError'] as exc:
+            print(f"agentstack-await-reply: {exc}", file=sys.stderr)
+            return 2
+    global_deadline = time.monotonic() + args.timeout
     url = _mcp_url()
     def fetch():
         try:
             if client is not None and client.mode == 'global':
-                return client.call('fetch_inbox', {'limit': 20, 'include_bodies': True})
+                rows = []
+                reached = False
+                before = None
+                while time.monotonic() < global_deadline:
+                    parameters = {'limit':20, 'include_bodies':True}
+                    if before is not None:
+                        parameters['before_id'] = before
+                    page = client.call('fetch_inbox', parameters)
+                    reached = True
+                    if sender_id is not None:
+                        rows.extend(row for row in page if row.get('sender', {}).get('agent_id', row.get('sender_id')) == sender_id)
+                    else:
+                        rows.extend(page)
+                    if args.after_id is None or len(page) < 20 or min(row['id'] for row in page) <= args.after_id:
+                        break
+                    before = min(row['id'] for row in page)
+                return rows if reached else None
             response = _call(
                 url,
                 "fetch_inbox",
@@ -206,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         return _messages(response) if response is not None else None
     try:
         code, match = wait_for_reply(fetch, timeout=args.timeout, interval=args.interval,
-                                     sender=args.sender, after_id=args.after_id)
+                                     sender=None if client is not None else args.sender, after_id=args.after_id)
     except runtime_api['ClientError'] as exc:
         print(f"agentstack-await-reply: {exc}", file=sys.stderr)
         return 2

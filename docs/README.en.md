@@ -69,3 +69,5 @@ Documents without a translation are labelled with their original language. Image
 
 - [Global child client preparation](global-child-client.en.md) — Fixed layout, registration intent replay, shared end and reservation hooks.
 - [Caller, interruption and acceptance tables](global-child-client-contract.md) — Contract tables generated from the global client fixture.
+
+- [Global client delivery and launch](global-delivery-client.en.md) — Fixed layout, notification retry, explicit recovery and provider preparation.

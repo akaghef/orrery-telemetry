@@ -171,11 +171,11 @@ def test_child_partial_activation_recovers_same_pending(server, monkeypatch, rol
     assert resumed["agent_id"] == pending["row"]["agent_id"]
 
 
-def test_prepare_only_and_execution_refusal_before_registration(server):
+def test_spawn_requires_prepared_child_before_execution(server):
     c = client(server)
     result = shell(c, "hooks/spawn_child.sh", ["--child-client-name", "new_child"])
     assert (
-        result.returncode == 2 and "GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C" in result.stderr
+        result.returncode == 2 and "CHILD_PREPARATION_REQUIRED" in result.stderr
     )
     assert not (c.clients_parent / "new_child").exists()
 

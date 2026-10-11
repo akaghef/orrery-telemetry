@@ -66,7 +66,7 @@ def main():
                     else:
                         row = client.finalize_registration(args.agent_id)
                     saved = client.save_profile()
-                    print(json.dumps({**saved, **row, 'runtime_execution': 'requires-pr4c'}))
+                    print(json.dumps({**saved, **row, 'runtime_execution': 'explicit-launch-required'}))
                     return 0
             except api['ClientError'] as exc:
                 raise DaemonError(str(exc)) from None

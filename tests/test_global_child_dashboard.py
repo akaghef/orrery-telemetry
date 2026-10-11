@@ -54,4 +54,15 @@ def test_global_jump_refuses_actual_execution_before_process(values, monkeypatch
     result = dashboard.global_child_resume(
         {"client_name": "child_01", "client_config": "/fixture/context", **values}
     )
-    assert result["error"] == "GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C"
+    assert result["error"] == "GLOBAL_EXECUTION_CONFIRMATION_REQUIRED"
+
+
+def test_global_jump_explicit_execution_uses_common_entry(monkeypatch):
+    seen=[]
+    def run(command,**kwargs):
+        seen.append(command)
+        return subprocess.CompletedProcess(command,0,json.dumps({'ok':True,'runtime_ready':False,'phase':'gated'}),'')
+    monkeypatch.setattr(subprocess,'run',run)
+    result=dashboard.global_child_resume({'client_name':'child_01','client_config':'/fixture/context','prepare_only':False,'open':True})
+    assert result['phase']=='gated' and result['runtime_ready'] is False
+    assert '--prepare-only' not in seen[0] and '--detached' in seen[0]

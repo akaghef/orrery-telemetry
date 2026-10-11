@@ -1000,4 +1000,22 @@ PYEOF
   echo "--- copy to here ---"
 fi
 
+# Local global-operation warnings remain available when Mail is offline.
+_ags_doctor_loader="$INSTALL_DIR/bin/lib/global-client-loader.sh"
+if [[ -f "$_ags_doctor_loader" ]]; then
+  . "$_ags_doctor_loader"
+  ags_client_select && _ags_doctor_rc=0 || _ags_doctor_rc=$?
+  if [[ "$_ags_doctor_rc" == 0 ]]; then
+    _ags_doctor_local="$(python3 "$INSTALL_DIR/bin/lib/runtime_client.py" doctor-local)" && _ags_doctor_local_rc=0 || _ags_doctor_local_rc=$?
+    if [[ "$_ags_doctor_local_rc" == 0 ]]; then
+      python3 -c 'import json,sys
+for item in json.loads(sys.argv[1]):
+ target = {key:item[key] for key in ("launch_id","message_id") if key in item}
+ print("WARN global operation: " + item["reason"] + "; target=" + json.dumps(target) + "; inspect with " + item["operation"] + ", then " + item["next"] + ". See docs/global-delivery-client.md")' "$_ags_doctor_local"
+    else
+      echo 'WARN global operation: local state could not be inspected'
+    fi
+  fi
+fi
+
 exit "$status"

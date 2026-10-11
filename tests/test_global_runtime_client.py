@@ -228,14 +228,15 @@ def test_source_bootstrap_exports_canonical_identity_without_exec(prepared, prov
 @pytest.mark.parametrize('provider,entry', [('claude', 'bin/agent-start'),
                                          ('codex', 'bin/agent-start-codex'),
                                          ('gemini', 'bin/agent-start-gemini')])
-def test_launcher_runs_only_stub_with_context_and_sanitized_environment(prepared, provider, entry):
+def test_s1_launch_lacks_global_execution_capability(prepared, provider, entry):
     stub = prepared['root'] / 'provider-stub'
     stub.write_text('#!/bin/sh\nprintf "%s|%s|%s" "$AGENT_NAME" "${PROJECT_KEY-unset}" "$AGENTSTACK_AGENT_ID"\n')
     stub.chmod(0o700)
     r = run(prepared, entry, str(prepared['root']), bash=True,
             extra={'AGENTSTACK_' + provider.upper() + '_BIN': str(stub)})
-    assert r.returncode == 0, r.stderr
-    assert r.stdout.endswith('|unset|1')
+    assert r.returncode == 2, r.stderr
+    assert ({'codex':'CODEX_HOOK_CONFIGURE_REQUIRED','gemini':'GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED'}.get(provider,'CAPABILITY_UNAVAILABLE')) in r.stderr
+    assert r.stdout == ''
 
 
 def test_profile_save_inspect_reconnect_and_explicit_runtime_boundary(prepared):
@@ -246,12 +247,12 @@ def test_profile_save_inspect_reconnect_and_explicit_runtime_boundary(prepared):
     for entry in ('bin/agentstack-persistent', 'bin/agentstack-daemon'):
         r = run(prepared, entry, 'inspect', '--profile', str(profile))
         assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout)['runtime_execution'] == 'requires-pr4c'
+        assert json.loads(r.stdout)['runtime_execution'] == 'explicit-launch-required'
     r = run(prepared, 'bin/agentstack-persistent', 'reconnect', '--profile', str(profile))
     assert r.returncode == 0, r.stderr
     r = run(prepared, 'bin/agentstack-persistent', 'run', '--profile', str(profile))
     assert r.returncode == 2
-    assert 'GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C' in r.stderr
+    assert 'PERSISTENT_EXECUTION_REQUIRED' in r.stderr
 
 
 def test_authenticated_session_index_rejects_foreign_response(prepared):
@@ -342,10 +343,10 @@ def test_profile_mismatch_is_readonly_before_reconnect(prepared):
     assert s1.call(prepared, 'health_check')['mutation_revision'] == revision
 
 
-def test_gemini_stdio_global_is_explicitly_blocked_before_legacy_proxy(prepared):
+def test_gemini_stdio_global_uses_bound_proxy_without_legacy_fallback(prepared):
     r = run(prepared, 'bin/agentstack-gemini-mcp', bash=True)
-    assert r.returncode == 1
-    assert r.stderr.strip() == 'agentstack-gemini-mcp: GLOBAL_STDIO_REQUIRES_PR4C'
+    assert r.returncode == 0
+    assert r.stdout == '' and r.stderr == ''
 
 
 def test_common_shell_register_does_not_preflight_names_or_scopes(prepared):
@@ -504,7 +505,7 @@ def test_new_registration_cannot_overwrite_existing_credential(prepared):
 def test_provider_launch_requires_isolated_configuration_home(prepared, tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
     revision = s1.call(prepared, 'health_check')['mutation_revision']
-    with pytest.raises(ClientError, match='ISOLATED_PROVIDER_HOME_REQUIRED'):
+    with pytest.raises(ClientError, match='CODEX_HOOK_CONFIGURE_REQUIRED'):
         client(prepared).launch('codex', prepared['root'])
     assert s1.call(prepared, 'health_check')['mutation_revision'] == revision
 
@@ -579,7 +580,7 @@ def test_operator_daemon_creation_uses_shared_global_profile_without_project(pre
     assert r.returncode == 0, r.stderr
     row = json.loads(r.stdout)
     assert row['ready'] is False
-    assert row['runtime_execution'] == 'requires-pr4c'
+    assert row['runtime_execution'] == 'explicit-launch-required'
     saved = api['read_json'](profile)
     assert saved['kind'] == api['PROFILE_KIND'] and 'project_key' not in saved
     r = run(prepared, 'bin/agentstack-daemon', 'finalize-create', '--connection', str(prepared['client_path']),

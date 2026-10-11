@@ -204,7 +204,7 @@ def validate_receipt(db, row, instance, candidate):
         ):
             raise ValueError
         validate(response, TOOLS[tool]["output_schema"], "REQUEST_RECEIPT_INVALID")
-        if tool in ("refresh_registration", "set_contact_policy"):
+        if tool in ("refresh_registration", "set_contact_policy", "bind_window_identity"):
             if (
                 any(
                     response[k] != request[k]
@@ -218,6 +218,12 @@ def validate_receipt(db, row, instance, candidate):
                 or response["credential_generation"]
                 != request["expected_credential_generation"]
             ):
+                raise ValueError
+        if tool == "bind_window_identity":
+            if response["window_uuid"] != request["arguments"]["window_uuid"]:
+                raise ValueError
+            window = db.execute("SELECT agent_id,window_uuid FROM window_identities WHERE id=?", (response["window_row_id"],)).fetchone()
+            if window is None or window["agent_id"] != row["agent_id"] or window["window_uuid"] != response["window_uuid"]:
                 raise ValueError
         if tool in (
             "request_contact",
@@ -655,6 +661,19 @@ class S2aRuntime(GlobalRuntime):
                 "macro_contact_handshake",
             ):
                 result = self.contact(db, tool, owner, args, stamp)
+            elif tool == "bind_window_identity":
+                window = db.execute("SELECT * FROM window_identities WHERE window_uuid=?", (args["window_uuid"],)).fetchone()
+                if window is not None and window["agent_id"] != owner["id"]:
+                    raise GlobalError("WINDOW_OWNER_MISMATCH")
+                if window is None:
+                    inserted = db.execute(
+                        "INSERT INTO window_identities(legacy_project_id,window_uuid,display_name,created_ts,last_active_ts,expires_ts,agent_id) VALUES(?,?,?,?,?,?,?)",
+                        (None, args["window_uuid"], owner["name"], stamp.isoformat(), stamp.isoformat(), (stamp + timedelta(seconds=self.window_ttl)).isoformat(), owner["id"]),
+                    )
+                    window = db.execute("SELECT * FROM window_identities WHERE id=?", (inserted.lastrowid,)).fetchone()
+                else:
+                    self.touch(db, owner, window, stamp)
+                result = {**{k:v for k,v in self.identity(owner).items() if k in ("server_instance_id","candidate_generation","authority_epoch","agent_id","credential_generation")}, "window_row_id": window["id"], "window_uuid": window["window_uuid"], "verification": "server-bound-window"}
             elif tool == "set_contact_policy":
                 db.execute(
                     "UPDATE agents SET contact_policy=? WHERE id=?",

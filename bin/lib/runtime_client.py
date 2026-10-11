@@ -25,6 +25,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import subprocess
 import time
+import threading
+from functools import wraps
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,8 +41,8 @@ CLIENT_LAYOUT = {'context': 'runtime-client.json', 'credential': 'credential.jso
     'enrollment': 'credential.enrollment-pending.json',
     'metadata': 'runtime/registration-metadata.json', 'profile': 'profile.json',
     'mutation': 'runtime/mutation-pending.json', 'mutex': 'runtime/mutation.lock', 'child': 'runtime/child-state.json',
-    'operation_lock': 'runtime/child.lock', 'task': 'runtime/task.md'}
-CLIENT_DIRECTORIES = ('runtime', 'runtime/session_index', 'runtime/live-sessions', 'runtime/provider', 'runtime/release-debounce')
+    'operation_lock': 'runtime/child.lock', 'task': 'runtime/task.md', 'launch': 'runtime/launch.json'}
+CLIENT_DIRECTORIES = ('runtime', 'runtime/session_index', 'runtime/live-sessions', 'runtime/provider', 'runtime/release-debounce', 'runtime/provider-home')
 S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITER_FENCED',
     'STALE_RUNTIME_BINDING', 'WINDOW_INPUT_REQUIRED', 'WINDOW_OWNER_MISMATCH',
     'EXISTING_WINDOW_REQUIRED', 'CREDENTIAL_INVALID', 'CREDENTIAL_GENERATION_CONFLICT',
@@ -342,6 +344,8 @@ class RuntimeClient:
         self.recovery = recovery
         self.prepare_recovery_owner()
         self.validate_path_roles()
+        with self.operation_mutex():
+            pass
 
     def directory_contains(self, directory, path):
         # Path.resolve does not canonicalize APFS case/Unicode aliases. Match
@@ -482,6 +486,9 @@ class RuntimeClient:
                     or any(row.get(k) != v for k,v in self.binding.items())):
                 raise ClientError('OUTPUT_SCHEMA_INVALID')
             return
+        if role == 'launch':
+            delivery_contract()['validate'](row, 'launch_intent', ClientError)
+            return
         if role == 'child':
             wire_contract()['validate_schema'](row, child_schema(), 'OUTPUT_SCHEMA_INVALID', error_type=ClientError)
             return
@@ -571,11 +578,21 @@ class RuntimeClient:
             raise ClientError('OUTPUT_OWNER_CONFLICT')
 
     def write_output(self, path, value, role):
+        if role == 'child':
+            value = {k:v for k,v in value.items() if k != 'launch_id'}
         # mkstemp uses O_EXCL for the private temporary file; rename only after
         # the destination's own format/owner and Mail-root boundary are checked.
-        self.output_plan()
-        self.validate_output(path, role)
-        atomic_json(path, value, before_replace=lambda: self.validate_output(path, role))
+        # Context activation updates self.raw before its caller releases F.
+        # Other writers can fence independently at their commit point.
+        def commit():
+            self.output_plan()
+            self.validate_output(path, role)
+            atomic_json(path, value, before_replace=lambda: self.validate_output(path, role))
+        if role == 'context':
+            commit()
+        else:
+            with self.fence():
+                commit()
 
     def registration_metadata(self):
         if self.metadata_path.exists() or self.metadata_path.is_symlink():
@@ -691,7 +708,6 @@ class RuntimeClient:
         if (value.get('kind') != 'orrery-global-credential-v1'
                 or value.get('agent_id') != self.identity['agent_id']
                 or value.get('credential_generation') != self.identity['credential_generation']
-                or any(value.get(k) != self.identity.get(k) for k in ('window_row_id', 'window_uuid'))
                 or any(value.get(k) != v for k, v in self.binding.items())):
             raise ClientError('CREDENTIAL_BINDING_MISMATCH')
         token = value.get('registration_token')
@@ -712,8 +728,9 @@ class RuntimeClient:
         return row
 
     def call(self, tool, arguments=None):
-        with self.fence():
-            _, schemas = self.capabilities()
+        with self.operation_mutex():
+            with self.fence():
+                _, schemas = self.capabilities()
             if tool not in schemas:
                 raise ClientError('CAPABILITY_UNAVAILABLE')
             args = dict(arguments or {})
@@ -747,7 +764,8 @@ class RuntimeClient:
                 if tool in message_contract()['TOOLS'] and (tool != 'macro_contact_handshake' or 'welcome' in self.output_schemas[tool].get('properties',{})):
                     return self.message_mutation(tool, args)
                 return self.s2a_mutation(tool, args, schemas[tool])
-            result = result_value(self.rpc('tools/call', {'name': tool, 'arguments': args}))
+            with self.fence():
+                result = result_value(self.rpc('tools/call', {'name': tool, 'arguments': args}))
             if tool in {'whois', 'register_agent'}:
                 self.validate_identity(result)
                 if tool == 'register_agent' and any(result.get(k) != self.identity.get(k) for k in ('window_row_id', 'window_uuid')):
@@ -811,7 +829,7 @@ class RuntimeClient:
         raw, hashed = contract['request_preimage'](tool, values, tool_contract['accepted_ignored_arguments'], error_type=ClientError)
         payload = json.loads(raw)
         path=self.outputs['mutation']
-        with self.mutation_mutex():
+        with self.mutation_mutex(), self.fence():
             existing_pending = path.exists() or path.is_symlink()
             if existing_pending:
                 self.validate_output(path,'mutation')
@@ -855,6 +873,10 @@ class RuntimeClient:
                 self.validate_identity(result)
             pending.update(phase='committed',receipt=result)
             self.save_mutation(pending)
+            if tool == 'bind_window_identity':
+                config = {**self.config, 'identity': {**self.identity, 'window_row_id':result['window_row_id'], 'window_uuid':result['window_uuid']}}
+                self.write_output(self.path, config, 'context')
+                self.config, self.identity, self.raw = config, config['identity'], read_private(self.path)
             # A matching result is durable before acknowledging the local slot.
             self.clear_mutation(read_private(path))
             return result
@@ -896,7 +918,7 @@ class RuntimeClient:
     def resolve_mutation(self, current, expected_digest, *, expected_old, expected_new, old_agent_id, new_agent_id, confirm=False):
         if not confirm:raise ClientError('MUTATION_PENDING_REQUIRES_RESOLUTION')
         path=self.outputs['mutation']
-        with self.mutation_mutex():
+        with self.mutation_mutex(), self.fence():
             self.validate_output(path,'mutation')
             raw=read_private(path);pending=json.loads(raw)
             if hashlib.sha256(raw).hexdigest()!=expected_digest:
@@ -973,7 +995,7 @@ class RuntimeClient:
         policy = {'closed': 'contacts_only'}.get(policy, policy)
         if policy in {'', 'skip', 'none', 'off', 'disabled'}:
             return
-        with self.fence():
+        with self.operation_mutex():
             _, schemas = self.capabilities()
             if 'set_contact_policy' in schemas:
                 # S1 lacks this capability. No speculative S2 request is sent.
@@ -1015,7 +1037,7 @@ class RuntimeClient:
             identity.update({k: self.identity[k] for k in ('window_row_id', 'window_uuid') if k in self.identity})
         config = {**self.config, 'identity': identity}
         credential = {'kind': 'orrery-global-credential-v1', **self.binding,
-                      **identity, 'registration_token': token}
+                      **{k:v for k,v in identity.items() if k not in ('window_row_id','window_uuid')}, 'registration_token': token}
         # One activation order for create and enrollment, including replay.
         outputs = [(self.credential, credential, 'credential'), (self.path, config, 'context')]
         if metadata is not None:
@@ -1069,6 +1091,32 @@ class RuntimeClient:
 
     @contextmanager
     def operation_mutex(self):
+        key = str(self.outputs['operation_lock'])
+        held = getattr(_OPERATION_HELD, 'paths', None)
+        if held is None:
+            held = _OPERATION_HELD.paths = set()
+        if key in held:
+            yield
+            return
+        with self._operation_mutex_inode():
+            held.add(key)
+            try:
+                try:
+                    current = read_json(self.path)
+                except ClientError as exc:
+                    raise ClientError('CONTEXT_CHANGED') from exc
+                if {k:v for k,v in current.items() if k != 'identity'} != {k:v for k,v in self.config.items() if k != 'identity'}:
+                    raise ClientError('CONTEXT_CHANGED')
+                self.config = current
+                self.raw = read_private(self.path)
+                self.identity = current.get('identity')
+                self.output_plan()
+                yield
+            finally:
+                held.remove(key)
+
+    @contextmanager
+    def _operation_mutex_inode(self):
         # Binding-independent inode, shared by SessionStart/resume/end.
         path = self.outputs['operation_lock']
         if not path.exists() and not path.is_symlink():
@@ -1099,7 +1147,7 @@ class RuntimeClient:
         try:
             candidate = contract['make_intent'](tool, args)
             path = self.outputs['mutation']
-            with self.mutation_mutex():
+            with self.mutation_mutex(), self.fence():
                 existing = path.exists() or path.is_symlink()
                 if existing:
                     self.validate_output(path, 'mutation')
@@ -1228,7 +1276,7 @@ class RuntimeClient:
 
     def release_worker(self, generation, ids):
         time.sleep(self.release_grace_seconds())
-        with self.operation_mutex(), self.fence():
+        with self.operation_mutex():
             current = {row['id']: row for page in self.all_leases() for row in page if row['id'] in ids}
             eligible = []
             slots = []
@@ -1258,7 +1306,7 @@ class RuntimeClient:
         if not isinstance(session, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', session):
             raise ClientError('SESSION_ID_INVALID')
         directory = self.runtime_dir / 'live-sessions'
-        with self.operation_mutex(), self.fence():
+        with self.operation_mutex():
             if refresh:
                 self.reconnect()
             directory.mkdir(mode=0o700, exist_ok=True)
@@ -1273,7 +1321,13 @@ class RuntimeClient:
                 previous = read_json(slot)
                 if previous.get('kind') != evidence['kind'] or previous.get('agent_id') != evidence['agent_id']:
                     raise ClientError('SESSION_OWNER_CONFLICT')
-            atomic_json(slot, evidence)
+                # App lifecycle belongs to this same canonical live slot;
+                # refreshing process evidence must not erase its route state.
+                for key in ('app_state', 'app_subagent'):
+                    if key in previous:
+                        evidence[key] = previous[key]
+            with self.fence():
+                atomic_json(slot, evidence)
         return evidence
 
     def session_liveness(self, exclude=None):
@@ -1311,7 +1365,7 @@ class RuntimeClient:
         return 'absent'
 
     def end_session(self, payload):
-        with self.operation_mutex(), self.fence():
+        with self.operation_mutex():
             directory = self.runtime_dir / 'live-sessions'
             current = payload.get('session_id')
             if not isinstance(current,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',current):
@@ -1328,7 +1382,13 @@ class RuntimeClient:
                 for page in self.all_leases():
                     if page:
                         self.call('release_file_reservations', {'file_reservation_ids': [row['id'] for row in page]})
-            atomic_json(current_slot, {**read_json(current_slot), 'ended': True})
+            with self.fence():
+                atomic_json(current_slot, {**read_json(current_slot), 'ended': True})
+                if self.outputs['launch'].exists():
+                    delivery = runtime_delivery(self)
+                    launch = delivery.launch()
+                    if launch['phase'] == 'running':
+                        delivery.save(self.outputs['launch'], {**launch, 'phase': 'ended'}, 'launch_intent')
             return {'ok': True, 'end': 'last-session', 'changed': True}
 
     def retain_child(self, state):
@@ -1341,8 +1401,6 @@ class RuntimeClient:
             'resume_expires_at': (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()}, 'child')
 
     def prepare_child(self, options):
-        if not options.get('prepare_only'):
-            raise ClientError('GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C')
         name = options.get('child_client_name')
         if not isinstance(name, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', name):
             raise ClientError('CLIENT_NAME_INVALID')
@@ -1390,7 +1448,7 @@ class RuntimeClient:
                 state = {'kind': 'orrery-global-child-state-v1', 'registration_intent_digest': intent_digest,
                     'parent': {'client_name': self.config['client_name'],
                         'server_instance_id': self.binding['expected_server_instance_id'], 'agent_id': parent['agent_id']},
-                    'phase': 'prepared', 'launch_id': None, 'working_directory': options.get('workdir', str(self.isolation)),
+                    'phase': 'prepared', 'working_directory': options.get('workdir', str(self.isolation)),
                     'tools_selection': {'base': options.get('base', 'default'), 'tools': options.get('parsed_tools',{})},
                     'task_delivery': 'embedded' if options.get('embed_task') else 'mail',
                     'resume_expires_at': None, 'active_request_id': None}
@@ -1400,7 +1458,7 @@ class RuntimeClient:
                 child.register_child(self, options.get('name', name), program, model, task)
             row = child.observe()
             return {'mode': 'global', 'prepared': True, 'runtime_ready': False,
-                'execution_reason': 'GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C',
+                'execution_reason': 'GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED',
                 'client_name': name, 'agent_id': row['agent_id'], 'name': row['name'], 'client_config': str(path)}
 
     def register_child(self, parent, name, program, model, task):
@@ -1500,9 +1558,7 @@ class RuntimeClient:
         return {'ok': True, 'identity': row, 'state': state, 'runtime_ready': False}
 
     def resume_child(self, options):
-        if not options.get('prepare_only'):
-            raise ClientError('GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C')
-        with self.operation_mutex(), self.fence():
+        with self.operation_mutex():
             state = read_json(self.outputs['child'])
             if state['phase'] in ('purging', 'purged'):
                 raise ClientError('CHILD_PURGED')
@@ -1519,7 +1575,7 @@ class RuntimeClient:
                 self.call('unretire_agent')
             row = self.reconnect()
             return {'ok':True, **row, 'prepared':True, 'runtime_ready':False,
-                    'execution_reason':'GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C'}
+                    'execution_reason':'GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED'}
 
     def check_profile_destination(self, path=None):
         if path is not None:
@@ -1529,7 +1585,9 @@ class RuntimeClient:
     def save_profile(self, path=None):
         path = self.check_profile_destination(path)
         row = self.observe()
-        value = {'kind': PROFILE_KIND, 'client_config': str(self.path), **row}
+        execution = read_json(path).get('execution') if path.exists() else None
+        value = {'kind': PROFILE_KIND, 'client_config': str(self.path), **{k:v for k,v in row.items() if k not in ('window_row_id','window_uuid')}}
+        if execution is not None:value['execution']=execution
         with self.fence():
             self.write_output(path, value, 'profile')
         return {'ok': True, 'kind': PROFILE_KIND, 'agent_id': row['agent_id'],
@@ -1633,7 +1691,7 @@ class RuntimeClient:
                 previous = read_json(previous_path)
                 if any(previous.get(k) != row.get(k) for k in ('agent_id', 'expected_server_instance_id')):
                     raise ClientError('SESSION_OWNER_CONFLICT')
-            value = {'schema_version': 3, 'binding_kind': 'global-self', **row,
+            value = {'schema_version': 3, 'binding_kind': 'global-self', **{k:v for k,v in row.items() if k not in ('window_row_id','window_uuid')},
                      'agent_name': row['name'], 'session_id': session_id,
                      'transcript_path': payload.get('transcript_path', ''), 'cwd': payload.get('cwd', '')}
             self.write_output(directory / 'self.json', value, 'session')
@@ -1661,35 +1719,7 @@ class RuntimeClient:
             'export ' + key + '=' + shlex.quote(value) for key, value in values.items())
 
     def launch(self, provider, directory):
-        directory = Path(directory).resolve()
-        if not directory.is_dir():
-            raise ClientError('WORKING_DIRECTORY_UNAVAILABLE')
-        home = Path(os.environ.get('HOME', '')).resolve()
-        if not home.is_relative_to(self.isolation.resolve()):
-            raise ClientError('ISOLATED_PROVIDER_HOME_REQUIRED')
-        for key in ('CODEX_HOME', 'CLAUDE_CONFIG_DIR'):
-            if os.environ.get(key) and not Path(os.environ[key]).resolve().is_relative_to(self.isolation.resolve()):
-                raise ClientError('ISOLATED_PROVIDER_HOME_REQUIRED')
-        exports = self.exports(provider)
-        binary = os.environ.get('AGENTSTACK_' + provider.upper() + '_BIN',
-                                {'claude': 'claude', 'codex': 'codex', 'gemini': 'agy'}[provider])
-        args = [binary]
-        if provider == 'codex':
-            args += ['-C', str(directory), '--sandbox', os.environ.get('AGENTSTACK_CODEX_SANDBOX', 'workspace-write'),
-                     '--ask-for-approval', os.environ.get('AGENTSTACK_CODEX_APPROVAL', 'on-request'),
-                     '-c', 'check_for_update_on_startup=false']
-        if provider == 'gemini':
-            args += ['--model', os.environ.get('AGENTSTACK_GEMINI_MODEL', 'gemini-3.8-flash-high'),
-                     '--effort', os.environ.get('AGENTSTACK_GEMINI_EFFORT', 'high')]
-        # The short bash step evaluates only shell-quoted values generated here,
-        # not user command text. Real providers are never started by the tests.
-        with self.fence():
-            os.chdir(directory)
-            os.execv('/bin/bash', ['/bin/bash', '-c', exports + '\nexec "$@"', 'global-launch', *args])
-
-
-RENEW_THRESHOLD_SECONDS = 600
-RENEW_TTL_SECONDS = 1800
+        return runtime_delivery(self).start(provider, directory)
 
 
 def safe_private_directory(path):
@@ -1760,6 +1790,41 @@ def child_schema():
     return json.loads((installed if installed.is_file() else source).read_text())['local_schemas']['child_state']
 
 
+RENEW_THRESHOLD_SECONDS = 600
+RENEW_TTL_SECONDS = 1800
+
+_OPERATION_HELD = threading.local()
+_DELIVERY_RUNTIME = None
+
+
+def delivery_contract():
+    global _DELIVERY_RUNTIME
+    if _DELIVERY_RUNTIME is None:
+        _DELIVERY_RUNTIME = runpy.run_path(str(Path(__file__).with_name('runtime_delivery.py')))
+    return _DELIVERY_RUNTIME
+
+
+def runtime_delivery(client):
+    return delivery_contract()['RuntimeDelivery'](client, globals())
+
+
+def _serialized(method):
+    @wraps(method)
+    def operation(self, *args, **kwargs):
+        with self.operation_mutex():
+            return method(self, *args, **kwargs)
+    return operation
+
+
+# One operation mutex for current-state writers and their readers. External
+# provider execution is deliberately outside these methods/scopes.
+for _method in ('observe', 'reconnect', 'activate_credential', 'create', 'enroll',
+                'save_metadata', 'save_profile', 'record_session', 'finalize_registration',
+                'finalize_enrollment', 'replay_pending'):
+    if hasattr(RuntimeClient, _method):
+        setattr(RuntimeClient, _method, _serialized(getattr(RuntimeClient, _method)))
+
+
 def profile_operation(path, operation):
     # Legacy validation remains in its existing entrypoint, with its original
     # reasons and format; only the explicit new kind selects this adapter.
@@ -1782,18 +1847,20 @@ def profile_operation(path, operation):
         raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
     row = client.observe()
     if any(p.get(k) != row.get(k) for k in ('agent_id', 'credential_generation',
-            'expected_server_instance_id', 'candidate_generation', 'authority_epoch', 'window_row_id', 'window_uuid')):
+            'expected_server_instance_id', 'candidate_generation', 'authority_epoch')):
         raise ClientError('PROFILE_BINDING_MISMATCH')
     if operation == 'run':
-        raise ClientError('GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C')
+        delivery=runtime_delivery(client)
+        execution=delivery.execution()
+        return delivery.start('daemon',execution['cwd'])
     if operation == 'reconnect':
         row = client.reconnect()
     return {'ok': True, 'kind': PROFILE_KIND, **row, 'ready': False,
-            'runtime_execution': 'requires-pr4c'}
+            'runtime_execution': 'explicit-launch-required'}
 
 
 def entry_operation(entry, argv):
-    if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1' and entry in ('pre-edit', 'post-edit', 'end-session', 'session-start', 'registered', 'record-self'):
+    if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1' and entry in ('pre-edit', 'post-edit', 'end-session', 'session-start', 'notifications', 'registered', 'record-self'):
         return 0
     parser = argparse.ArgumentParser(prog=entry)
     parser.add_argument('--context')
@@ -1816,11 +1883,6 @@ def entry_operation(entry, argv):
     context = selected(argv)
     if context is None:
         return 125
-    if entry in ('spawn-child','resume-child') and '--prepare-only' not in argv:
-        existing = configured(context)
-        if existing is not None:
-            with existing.fence():pass
-            raise ClientError('GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C')
     options = parser.parse_args(argv)
     recovery = ('finalize-create', options.agent_id) if entry == 'finalize-child' and options.operator else None
     client = configured(options.context, recovery=recovery)
@@ -1837,11 +1899,11 @@ def entry_operation(entry, argv):
         values['model'] = options.model or values['program']
         result = client.prepare_child(values)
     elif entry in ('spawn-child','resume-child'):
-        if not options.prepare_only:
-            raise ClientError('GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C')
         if not options.child_client_name or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', options.child_client_name):
             raise ClientError('CLIENT_NAME_INVALID')
         path = client.clients_parent / options.child_client_name / CLIENT_LAYOUT['context']
+        if not path.exists() and not path.is_symlink():
+            raise ClientError('CHILD_PREPARATION_REQUIRED')
         target = RuntimeClient(path)
         state = read_json(target.outputs['child'])
         parent = state['parent']
@@ -1866,8 +1928,16 @@ def entry_operation(entry, argv):
                 if options.embed_task:
                     target.write_output(target.outputs['child'],{**state,'task_delivery':'embedded'},'child')
                 result = {**target.observe(),'prepared':True,'runtime_ready':False,
-                          'execution_reason':'GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C'}
-    elif entry in ('pre-edit','post-edit','end-session','session-start','registered','record-self'):
+                          'execution_reason':'GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED'}
+        if not options.prepare_only:
+            program = target.registration_metadata().get('program')
+            provider = {'codex':'codex','codex-cli':'codex','antigravity':'gemini','claude-code':'claude'}.get(program)
+            if provider is None:
+                raise ClientError('PROVIDER_UNAVAILABLE')
+            result = runtime_delivery(target).start(provider, state['working_directory'], detached=True,
+                launch_kind='resume' if entry == 'resume-child' else 'startup',
+                provider_session_id=options.positionals[0] if entry == 'resume-child' and options.positionals else None)
+    elif entry in ('pre-edit','post-edit','end-session','session-start','notifications','registered','record-self'):
         raw = sys.stdin.read(1048577)
         if len(raw) > 1048576:
             raise ClientError('HOOK_INPUT_TOO_LARGE')
@@ -1881,6 +1951,8 @@ def entry_operation(entry, argv):
             result = client.post_edit(payload)
         elif entry == 'end-session':
             result = client.end_session(payload)
+        elif entry == 'notifications':
+            result = {'ok':True}
         elif entry == 'registered':
             result = client.observe()
         elif entry == 'record-self':
@@ -1892,7 +1964,7 @@ def entry_operation(entry, argv):
             else:
                 result = client.record_session(payload)
         else:
-            result = client.record_live(payload, refresh=True)
+            result = runtime_delivery(client).session_start(payload) if client.outputs['launch'].exists() else client.record_live(payload, refresh=True)
     elif entry == 'abandon-child-registration':
         if not options.operator or not options.expected_digest:
             raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')
@@ -1904,7 +1976,7 @@ def entry_operation(entry, argv):
     elif entry == 'cancel-child-resume':
         if not options.operator:
             raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')
-        with client.operation_mutex(),client.fence():
+        with client.operation_mutex():
             state=read_json(client.outputs['child'])
             if state['phase'] != 'resume-planned':
                 raise ClientError('LAUNCH_OUTCOME_UNKNOWN')
@@ -1920,7 +1992,18 @@ def entry_operation(entry, argv):
         result = target.finalize_registration(options.agent_id)
     else:
         raise ClientError('CHILD_OPERATION_UNSUPPORTED')
-    print(json.dumps(result))
+    notifications = []
+    if entry in ('session-start','notifications') and client.outputs['launch'].exists():
+        notifications = runtime_delivery(client).hook_notifications('claude-hook')
+        if notifications:
+            result['hookSpecificOutput'] = {'hookEventName':'SessionStart' if entry == 'session-start' else 'PostToolUse', 'additionalContext':'\n'.join(n['notification'] for n in notifications)}
+    print(json.dumps(result), flush=True)
+    for notice in notifications:
+        delivery = runtime_delivery(client)
+        try:
+            delivery.callback(notice['message_id'], notice['attempt_id'], confirmed=True)
+        except (ClientError, OSError, ValueError) as exc:
+            delivery.report_error(notice['message_id'], exc)
     return 0
 
 
@@ -1943,7 +2026,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--context')
     parser.add_argument('operation', choices=['mode', 'observe', 'reconnect', 'bootstrap', 'launch', 'call',
-                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending'])
+                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply'])
     parser.add_argument('args', nargs='*')
     a = parser.parse_args(argv)
     try:
@@ -1965,7 +2048,35 @@ def main(argv=None):
             return 0
         if client is None:
             raise ClientError('CONTEXT_REQUIRED')
-        if a.operation == 'observe':
+        if a.operation in ('codex-plan','codex-apply'):
+            if a.args != ['operator']:
+                raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')
+            value=runtime_delivery(client).configure_codex(a.operation[6:],json.load(sys.stdin) if a.operation=='codex-apply' else None)
+            print(json.dumps(value));return 0
+        if a.operation == 'daemon-serve':
+            delivery = runtime_delivery(client)
+            delivery.session_start({'session_id':os.environ.get('AGENTSTACK_LAUNCH_ID'),
+                'provider_pid':os.getpid(), 'cwd':os.getcwd()})
+            try:
+                delivery.proxy()
+            finally:
+                client.end_session({'session_id':os.environ.get('AGENTSTACK_LAUNCH_ID')})
+            return 0
+        if a.operation == 'watch':
+            delivery = runtime_delivery(client)
+            delivery.watch()
+        if a.operation == 'doctor-local':
+            print(json.dumps(runtime_delivery(client).diagnostics()))
+            return 0
+        if a.operation == 'proxy':
+            runtime_delivery(client).proxy()
+            return 0
+        if a.operation == 'execute-launch':
+            runtime_delivery(client).execute(*a.args)
+            return 0
+        if a.operation == 'operator-json':
+            value = runtime_delivery(client).operator(a.args[0], json.load(sys.stdin))
+        elif a.operation == 'observe':
             value = client.observe()
         elif a.operation == 'reconnect':
             value = client.reconnect(program=a.args[0] if a.args else None,
@@ -2026,6 +2137,8 @@ def main(argv=None):
             except (ClientError, OSError, ValueError, KeyError):
                 pass  # A changed fence forbids even a local audit write.
         print('runtime-client: ' + reason, file=sys.stderr)
+        if reason == 'CODEX_HOOK_CONFIGURE_REQUIRED':
+            print('Review the fixed provider HOME hook plan with codex-plan operator, then codex-apply operator. See docs/global-delivery-client.md#codex-hook-trust.',file=sys.stderr)
         return 2
 
 
