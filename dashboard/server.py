@@ -8595,8 +8595,8 @@ class Handler(BaseHTTPRequestHandler):
             version = _resolve_version()
             # "api" is the compatibility generation for programs using this
             # API (ORRERY cockpit): raise it only when something they rely on
-            # is added or changes meaning, and say so in the CHANGELOG. It is
-            # managed this way from 2 on; every earlier release reported 1.
+            # is added or changes meaning; record it in a changelog.d fragment.
+            # Managed this way from 2 on; every earlier release reported 1.
             self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": API_GENERATION}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
