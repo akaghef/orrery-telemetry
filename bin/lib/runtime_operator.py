@@ -65,6 +65,14 @@ class RuntimeOperator:
             raise self.api['ClientError']('CHILD_BINDING_MISMATCH')
         return client
 
+    def abandon_registration(self, name, expected_digest):
+        path=self.path_for(name)
+        # An absent root is a missing target, not a private-file failure. Keep
+        # all existing-root admission and pending digest checks in the client.
+        try:path.parent.lstat()
+        except FileNotFoundError:raise self.api['ClientError']('TARGET_UNAVAILABLE')
+        return self.client(name).abandon_registration(expected_digest)
+
     def template(self):
         c=self.config
         # Verify the exact read-only inputs before creating any output. The

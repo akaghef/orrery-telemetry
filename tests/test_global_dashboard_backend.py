@@ -210,3 +210,21 @@ def test_fresh_http_provider_spawn_uses_configuration_without_provider_binary(ui
     assert code==200 and json.loads(raw)['stage']==expected,raw
     assert bool(started)==(program=='claude-code')
     if program=='codex':assert json.loads(raw)['reason']=='CODEX_HOOK_CONFIGURE_REQUIRED'
+
+
+@pytest.mark.parametrize('prepared',[False,True])
+def test_abandon_without_registration_pending_is_not_found(ui,prepared):
+    from dashboard.global_backend import OPERATOR_API
+    operator=OPERATOR_API['RuntimeOperator'](ui[0]['config_path'])
+    path=operator.path_for('no-pending')
+    if prepared:operator.prepare('no-pending')
+    before={str(p):p.read_bytes() for p in path.parent.rglob('*') if p.is_file()} if prepared else {}
+    health=operator.read({'kind':'health'})
+    body={'client_name':'no-pending','expected_digest':'0'*64}
+    assert request(ui,'/api/global/registration-abandon',auth=False,method='POST',body=body)[0]==403
+    code,raw=request(ui,'/api/global/registration-abandon',method='POST',body=body)
+    assert code==404 and json.loads(raw)['reason']=='TARGET_UNAVAILABLE',raw
+    after={str(p):p.read_bytes() for p in path.parent.rglob('*') if p.is_file()} if prepared else {}
+    assert after==before
+    assert path.parent.exists()==prepared
+    assert operator.read({'kind':'health'})==health

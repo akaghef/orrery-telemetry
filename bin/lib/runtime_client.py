@@ -1596,6 +1596,8 @@ class RuntimeClient:
     def abandon_registration(self, expected_digest):
         path = self.outputs['registration']
         with self.operation_mutex(),self.fence():
+            try:path.lstat()
+            except FileNotFoundError:raise ClientError('TARGET_UNAVAILABLE')
             raw=read_private(path)
             if hashlib.sha256(raw).hexdigest()!=expected_digest:
                 raise ClientError('REGISTRATION_PENDING_CONFLICT')

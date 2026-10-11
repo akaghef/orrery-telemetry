@@ -77,7 +77,7 @@ class Backend:
         try:api['wire_contract']()['validate_schema'](payload,schema)
         except ValueError as exc:raise BackendError('QUERY_INVALID',400) from exc
         if path.endswith('/registration-abandon'):
-            return self.operator.client(payload['client_name']).abandon_registration(payload['expected_digest'])
+            return self.operator.abandon_registration(payload['client_name'],payload['expected_digest'])
         if path.endswith('/spawn'):
             cwd=validate_cwd(payload['cwd'])
             return self.operator.spawn(payload['client_name'],agent_name=payload['name'],
