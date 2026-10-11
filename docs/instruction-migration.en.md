@@ -34,6 +34,8 @@ agentstack-claude-setup --plan --json
 
 Plan creates no file or lock. Its `apply_argv` carries the same source selection and plan ID; another process recomputes and compares them. An ID alone cannot reconstruct source selection.
 
+Creating a new user file without changing existing files needs no confirmation. Rewriting an existing file or removing a source block requires confirmation.
+
 One interactive prompt asks whether to move instructions and remove known source blocks (default remove), explaining shared-repository effects and full-file backup retention. Explicit `--assume-yes` removes only known untracked sources; tracked or unknown Git status remains with a warning. Edited, unknown or malformed blocks stay for a local diff and manual marker-only cleanup. There is no force override. The user target is verified before any source removal.
 
 ```sh

@@ -51,15 +51,11 @@ def test_installer_rehearsal_env_writes_codex_block_under_the_test_home(tmp_path
     result = subprocess.run(
         ["bash", str(root / "bin" / "agentstack-codex-setup"), *(["--assume-yes"] if consent else [])],
         env=env,
-        check=consent,
+        check=True,
         capture_output=True,
         text=True,
         timeout=60,
     )
     written = home / ".codex" / "AGENTS.md"
-    if not consent:
-        assert result.returncode == 2 and "confirmation required" in result.stderr
-        assert not written.exists()
-        return
     assert written.is_file(), "the managed block was written outside the test home"
     assert str(project) in written.read_text(encoding="utf-8")

@@ -504,7 +504,13 @@ class Engine:
                 raise Refused('INSTRUCTION_OPERATION_PENDING', 'explicit interactive replan required')
             for entry in [plan['target'],*plan['sources']]:
                 verify(entry, entry['before_sha256'])
-            consent = self.confirm(assume_yes)
+            # Creating a new file needs no permission to rewrite existing user
+            # content. Keep the decision shared by both provider entry points.
+            changes_existing = any(e['before_sha256'] is not None and
+                                   e['before_sha256'] != e['after_sha256']
+                                   for e in [plan['target'], *plan['sources']])
+            consent = (self.confirm(assume_yes) if changes_existing or supersede
+                       else 'not-required')
             if old:
                 atomic(self.ledger / 'history' / (old['plan_id'] + '.json'), canonical(old) + b'\n')
             r = {'kind':'orrery-instruction-migration-v2','plan_id':plan_id,'plan':plan,'consent':consent,'stage':'planned','target_backup':None,'sources_progress':[], 'supersedes': old['plan_id'] if old else None,'updated_at':stamp()}
@@ -543,7 +549,8 @@ class Engine:
                     backup=self.backup(entry,r['plan_id'])
                     r['sources_progress'].append({'path_sha256':key,'backup':backup,'stage':'backed_up'});self.save(r)
             self.save(r,'writing')
-            atomic(target['resolved_path'],replace_block(current or b'',self.block),entry=target)
+            if target['before_sha256'] != target['after_sha256']:
+                atomic(target['resolved_path'],replace_block(current or b'',self.block),entry=target)
         elif digest != target['after_sha256']:
             raise Refused('INSTRUCTION_PLAN_CHANGED', target['requested_path'])
         verify(target,target['after_sha256'],completed=True)
@@ -553,7 +560,7 @@ class Engine:
             self.save(r,'sources_pending')
             progress=next(x for x in r['sources_progress'] if x['path_sha256']==sha(entry['resolved_path'].encode()))
             verify(target,target['after_sha256'],completed=True)
-            allowed=entry['strategy']=='atomic-referent' and r['consent']!='interactive-keep' and (r['consent']=='interactive-remove' or entry['git_state']=='untracked')
+            allowed=entry['strategy']=='atomic-referent' and r['consent'] in ('interactive-remove','assume-yes-known-only') and (r['consent']=='interactive-remove' or entry['git_state']=='untracked')
             if not allowed:
                 progress['stage']='retained';retained=True;self.save(r);continue
             data=snapshot(entry['requested_path'])[1]

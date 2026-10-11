@@ -280,3 +280,34 @@ def test_update_uses_old_project_for_source_proof_and_current_project_for_target
     assert env['AGENTSTACK_PROJECT_KEY'].encode() in e.target.read_bytes()
     assert str(old).encode() not in e.target.read_bytes()
     assert all(m.block_bytes(path.read_bytes()) is None for path in (source,nested))
+
+@pytest.mark.parametrize('provider',['claude','codex'])
+def test_fresh_noninteractive_setup_needs_no_existing_file_consent(env,provider,monkeypatch):
+    e=engine(env,provider)
+    monkeypatch.setattr(m.sys.stdin,'isatty',lambda:False)
+    p=e.plan();r=e.apply(p,m.sha(m.canonical(p)))
+    assert r['stage']=='complete' and r['consent']=='not-required'
+    assert e.target.read_bytes()==e.block
+    # Repeating a correct target without a receipt also changes no user file.
+    e.receipt_path.unlink();before=e.target.stat()
+    p=e.plan();e.apply(p,m.sha(m.canonical(p)))
+    assert e.target.stat().st_ino==before.st_ino
+    assert e.target.stat().st_mtime_ns==before.st_mtime_ns
+
+@pytest.mark.parametrize('existing',['target','source'])
+def test_noninteractive_existing_file_change_requires_consent(env,existing,monkeypatch):
+    e=engine(env)
+    if existing=='target':
+        e.target.parent.mkdir();e.target.write_text('personal instructions\n')
+    else:
+        legacy(e,Path(env['AGENTSTACK_PROJECT_KEY'])/'CLAUDE.md')
+    before=tree(Path(env['HOME']))
+    monkeypatch.setattr(m.sys.stdin,'isatty',lambda:False)
+    p=e.plan()
+    with pytest.raises(m.Refused,match='confirmation required'):
+        e.apply(p,m.sha(m.canonical(p)))
+    # Mutex files are coordination only; no user bytes or receipt may change.
+    after=tree(Path(env['HOME']))
+    assert all(after[k]==v for k,v in before.items())
+    assert not e.receipt_path.exists()
+    assert (existing=='target')==e.target.exists()

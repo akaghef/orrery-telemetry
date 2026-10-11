@@ -381,7 +381,8 @@
           "enum": [
             "interactive-remove",
             "interactive-keep",
-            "assume-yes-known-only"
+            "assume-yes-known-only",
+            "not-required"
           ]
         },
         "stage": {

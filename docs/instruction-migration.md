@@ -34,6 +34,8 @@ agentstack-claude-setup --plan --json
 
 `--plan` は lock や file を作りません。出力の `apply_argv` は同じ source 選択と plan ID を含み、別 process で再計算して一致したときだけ実行できます。ID だけから source を復元する仕組みはありません。
 
+既存 file の内容を変えず、新しい利用者 file を作るだけなら同意は不要です。既存 file の書換え・元 block の削除には確認が必要です。
+
 対話では「利用者側へ移し、既知の元 block を消すか」を一度確認します（既定は消す）。共有 repo の影響と全文 backup の保持を説明します。明示 `--assume-yes` でも、Git 追跡中・Git 状態不明の source は消さず警告します。編集済み・版不明・壊れた marker は保持し、利用者が local diff を確認して marker 間だけを片付けます。自動 force はありません。利用者側への設置を検証してから元 block を消します。
 
 ```sh
