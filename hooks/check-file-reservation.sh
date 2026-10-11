@@ -113,7 +113,7 @@ if [ -z "$AGENT" ]; then
     # instruction this whole change exists to remove.
     if [ -n "$SESSION_ID" ] && [ -f "/tmp/.claude-agent-registered-${SESSION_ID}" ]; then
         echo "AGENT IDENTITY UNRESOLVED: this session is registered, but no identity binding for it was found." >&2
-        echo "Call register_agent again so the binding is rewritten, then retry the edit." >&2
+        agentstack_instruction_message identity-binding-unresolved >&2
         exit 2
     fi
 

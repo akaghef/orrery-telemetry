@@ -458,7 +458,7 @@ def test_claude_setup_reports_a_bad_scope_instead_of_an_unbound_variable():
     r = subprocess.run([_BASH, str(setup), "--print"], capture_output=True,
                        text=True, env=env, stdin=subprocess.DEVNULL, timeout=60)
     assert "unbound variable" not in r.stderr, r.stderr
-    assert "invalid AGENTSTACK_CLAUDE_MD_SCOPE" in r.stderr, r.stderr
+    assert "INSTRUCTION_SCOPE_REQUIRES_MIGRATION" in r.stderr, r.stderr
     assert r.returncode != 0, (
         "an unresolvable scope must fail; a nounset-safe expansion alone would "
         "turn the resolver's death into a silent successful no-op"

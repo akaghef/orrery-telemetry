@@ -59,7 +59,13 @@ def _fake_launch_env(
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
         "  load-buffer) cat \"$4\" >> \"$FAKE_TMUX_LOG\" ;;\n"
-        "  display-message) printf 'ParentAgent\\n' ;;\n"
+        "  display-message)\n"
+        "    if [[ -f \"$FAKE_TMUX_LOG.warm-name\" ]]; then\n"
+        "      name=$(cat \"$FAKE_TMUX_LOG.warm-name\")\n"
+        "      if [[ \"$*\" == *\"-t =$name\"* && \"$*\" == *'#{pane_id}'* ]]; then printf '%s\\n' '%warm-fixture'; exit 0; fi\n"
+        "      if [[ \"$*\" == *'-t %warm-fixture'* ]]; then printf '%s\\n' \"${FAKE_WARM_IDENTITY_OVERRIDE:-$name}\"; exit 0; fi\n"
+        "    fi\n"
+        "    printf 'ParentAgent\\n' ;;\n"
         "esac\n",
     )
     _executable(bindir / "sleep", "#!/bin/bash\nexit 0\n")

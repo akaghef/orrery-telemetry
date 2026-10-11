@@ -42,7 +42,7 @@ cd orrery-telemetry
 
 `--project-key` is the absolute path of the project folder you want the agents to work on, not the path of this repository.
 
-Before touching your Claude Code / Codex configuration the installer shows each change and asks for `yes` four times in total. Existing settings are kept, and a backup of the previous state goes to `~/.agentstack/backups`. Add `--dry-run` to see the planned changes without applying them.
+Before touching your Claude Code / Codex configuration the installer shows each change and asks for four approvals in total. Existing settings are kept, and a backup of the previous state goes to `~/.agentstack/backups`. Add `--dry-run` to see the planned changes without applying them.
 
 **Success**: the last line reads `Install complete: http://127.0.0.1:8770/` and `~/.agentstack/` exists.
 

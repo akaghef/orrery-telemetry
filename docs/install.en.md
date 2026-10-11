@@ -300,7 +300,7 @@ The helpers used by Tier 1 to preview / merge can also run independently.
 ~/.agentstack/bin/agentstack-claude-setup --check
 ```
 
-Use `--uninstall` on each helper to remove only its block. Codex targets `$CODEX_HOME/AGENTS.md`; Claude targets the `CLAUDE.md` selected by `AGENTSTACK_CLAUDE_MD_SCOPE=project / global / both`. Existing content outside the markers is preserved.
+Claude uses the user `$CLAUDE_CONFIG_DIR/CLAUDE.md`; Codex uses `$CODEX_HOME/AGENTS.md`. `--uninstall` removes only recorded markers and retains full-file backups. See [instruction migration](instruction-migration.en.md) for legacy blocks, interrupted work, shared repositories and purge.
 
 ## ORRERY Mail service handling
 

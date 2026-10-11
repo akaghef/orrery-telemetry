@@ -46,18 +46,19 @@ def _approval_prompt_count() -> int:
     # confirmation runs once per run_managed_setup call.
     confirms = len(re.findall(r"^confirm_\w+\(\) \{$", INSTALLER, re.M))
     managed_runs = len(re.findall(r'^\s*run_managed_setup "', INSTALLER, re.M))
-    assert "confirm_managed_setup()" in INSTALLER
-    return confirms - 1 + managed_runs
+    assert "confirm_managed_setup()" not in INSTALLER
+    assert "The engine owns the single consent prompt" in INSTALLER
+    return confirms + managed_runs
 
 
 def test_docs_state_the_real_number_of_approval_prompts() -> None:
     count = _approval_prompt_count()
     assert count == 4, count
     assert f"{count} つの承認" in _read("docs/install.md")
-    assert f"{count} 回 `yes`" in _read("docs/getting-started.md")
+    assert f"{count} 回の承認" in _read("docs/getting-started.md")
     words = {4: "four"}
-    assert f"`yes` {words[count]} times" in _read("docs/getting-started.en.md")
-    assert f"`yes` {words[count]} times" in _read("AGENTS.md")
+    assert f"{words[count]} approvals" in _read("docs/getting-started.en.md")
+    assert f"{words[count]} approvals" in _read("AGENTS.md")
     assert "once more" not in _read("AGENTS.md")
 
 

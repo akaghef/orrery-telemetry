@@ -305,7 +305,7 @@ Tier 1 が preview / merge に使う helper は単独でも実行できます。
 ~/.agentstack/bin/agentstack-claude-setup
 ```
 
-block だけを外す場合はそれぞれ `--uninstall` を使います。Codex は `$CODEX_HOME/AGENTS.md`、Claude は `AGENTSTACK_CLAUDE_MD_SCOPE=project / global / both` で選んだ `CLAUDE.md` が対象です。marker 外の既存内容は保持します。
+Claude は利用者の `$CLAUDE_CONFIG_DIR/CLAUDE.md`、Codex は `$CODEX_HOME/AGENTS.md` へ設置します。`--uninstall` は記録した marker のみ撤去し、全文 backup を保持します。既存 block・中断・共有 repo・purge は[指示の移行](instruction-migration.md)を参照してください。
 
 ## ORRERY Mail service の扱い
 

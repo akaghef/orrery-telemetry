@@ -81,7 +81,7 @@ Then, for the real run, choose one of two paths.
 
 **Default — hand back at the approvals.** Run `./scripts/install.sh` in a
 terminal the user controls, or tell them to run it themselves. It pauses for a
-typed `yes` four times — the settings merge, the `~/.claude.json` MCP entry,
+four approvals — the settings merge, the `~/.claude.json` MCP entry,
 the Codex `AGENTS.md` block, and the Claude `CLAUDE.md` block. Reuse of an
 already-running ORRERY Mail is reported, not prompted for. This is the right
 choice when you are unsure, and when the user has not said otherwise.
@@ -151,3 +151,5 @@ and run `PYTHONPATH=. .venv/bin/python -m pytest -q` before you report a
 change as done.
 
 隔離 global client の子・再開・予約 hook の準備は [global child client](docs/global-child-client.md) を参照してください。実起動と配送は [global delivery client](docs/global-delivery-client.md) を参照してください。既定の旧運用は維持し、実サービスの切替は後続です。
+
+User instruction migration uses the shared setup plan/receipt engine. Read [instruction migration](docs/instruction-migration.md) before editing user blocks. Bare sessions do not auto-register; editing guards retain their configured protection.

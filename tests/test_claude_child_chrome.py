@@ -72,6 +72,8 @@ def _hooks_with_warm_pool(tmp_path: pathlib.Path) -> pathlib.Path:
     hooks.mkdir()
     for entry in (ROOT / "hooks").iterdir():
         (hooks / entry.name).symlink_to(entry)
+    from _installed_client_payload import copy_client_library
+    copy_client_library(tmp_path)
     _executable(
         hooks / "warm_pool.sh",
         "#!/bin/bash\n"
@@ -85,6 +87,7 @@ def _hooks_with_warm_pool(tmp_path: pathlib.Path) -> pathlib.Path:
         "    [[ \"$actual\" == *\" $2=$4 \"* ]] || exit 1\n"
         "    printf 'claim-model %s %s\\n' \"$3\" \"$4\" >> \"$FAKE_WARM_LOG\"\n"
         "    tmux new-session -d -s \"$3\" warm\n"
+        "    printf '%s\\n' \"$3\" > \"$FAKE_TMUX_LOG.warm-name\"\n"
         "    printf '%s\\n' \"${FAKE_WARM_REPORT:-$3 $4}\" ;;\n"
         "esac\n",
     )
@@ -515,6 +518,8 @@ def test_chrome_spawn_stops_when_the_record_cannot_be_written(tmp_path):
     for entry in (ROOT / "hooks").iterdir():
         if entry.name != "claude_chrome_policy.py":
             (hooks / entry.name).symlink_to(entry)
+    from _installed_client_payload import copy_client_library
+    copy_client_library(tmp_path)
     _executable(hooks / "claude_chrome_policy.py",
                 "import sys\nif sys.argv[1] == 'prepare': sys.exit(1)\n"
                 f"exec(open({str(POLICY)!r}).read())\n")
@@ -846,3 +851,13 @@ def test_new_agent_form_offers_chrome_only_for_claude():
     assert "Unchecked follows your Claude settings." in html
     assert "payload.provider==='claude'&&SPM('spm-chrome')" in html
     assert "provider.id==='claude'" in html
+
+
+
+def test_warm_handoff_refuses_a_different_resolved_identity(tmp_path):
+    env,workdir=_launch_env(tmp_path)
+    env['AGENTSTACK_HOOKS_DIR']=str(_hooks_with_warm_pool(tmp_path))
+    env['FAKE_WARM_IDENTITY_OVERRIDE']='AnotherIdentity'
+    result=_spawn(tmp_path,env,workdir,'WarmChild','--model','opus')
+    assert result.returncode!=0 and 'LAUNCH_IDENTITY_UNAVAILABLE' in result.stderr
+    assert 'load-buffer' not in (tmp_path/'tmux.log').read_text()

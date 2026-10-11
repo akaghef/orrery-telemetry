@@ -1,3 +1,14 @@
+# Applicability
+
+Follow this ORRERY block only when ORRERY Mail tools are actually available.
+Use the existing resolved identity or session-bound runtime binding only.
+A Codex Desktop lifecycle binding counts; provisional/retry/degraded means
+unresolved, never permission to register a different identity. Without any
+identity/binding, skip Mail registration and notifications. Editing guards
+still enforce the configured unmanaged-session policy (default block).
+
+__ORRERY_IDENTITY_UNAVAILABLE__
+
 
 # Global preparation context
 
@@ -19,7 +30,7 @@ down the list or add a second registration or authentication ritual.
 | 2 | The provided tool descriptions and argument schemas show a bound ORRERY proxy | Use those proxy tools exactly as described. Do not run `agentstack-reregister` for yourself, register yourself again, or read a token file. Do not add caller identity, project, or token fields that the schema does not accept. (Pre-registering a **child** with `agentstack-preregister-child` is a different identity and stays allowed; see the delegate skill.) |
 | 3 | The connection is confirmed raw/direct and SessionStart explicitly says the shell registered the existing identity | Do not register again. Authenticate the model's separate raw MCP tool session using the raw procedure below. |
 | 4 | The connection is confirmed raw/direct and an existing identity needs recovery | Resolve the existing name, then run the token-safe helper once. Never escape a failure by creating an alias or a new token. |
-| 5 | The connection is confirmed raw/direct and this is a genuinely new, unregistered session | Follow the new raw registration procedure below. Do not reuse this route for a known or reserved identity. |
+| 5 | No existing identity or runtime binding resolves | Skip Mail registration/notifications and ask the operator to use the coordinated launcher. Keep editing guards in effect. |
 | 6 | The connection type or identity is unknown | Inspect the actual tool schema and startup notice. Do not infer proxy use from the server name, `PARENT_AGENT`, or `CODEX_HOME`, and do not fall back from a proxy failure to raw registration. |
 
 ### 1. Embedded canonical task
@@ -96,15 +107,13 @@ Enrollment is an explicit operator procedure; the model must not run
 `agentstack-enroll` on the operator's behalf. A generic registration failure is
 not enough to select this procedure.
 
-### 5. Registering a genuinely new raw/direct session
+### 5. Sessions without an existing identity
 
-Only after confirming both raw/direct transport and the absence of an existing
-or reserved identity, call
-`ensure_project(human_key="__AGENTSTACK_PROJECT_KEY__")`, then
-`register_agent(project_key="__AGENTSTACK_PROJECT_KEY__", program="codex",
-...)`, and finally authenticate the first inbox call with the returned owner
-token. If a name is supplied, use the canonical one; otherwise allow the server
-to generate it. Never use this route to work around an identity conflict.
+Do not create an identity from a bare raw session. Ask the operator to use the
+coordinated launcher. An unresolved existing registration needs recovery of
+that same identity; do not substitute a new name.
+
+__ORRERY_IDENTITY_BINDING_UNRESOLVED__
 
 ### Shared boundaries
 

@@ -727,10 +727,9 @@ report_claude_model_aliases "$INSTALL_DIR/dashboard/claude_models.py"
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-$INSTALL_DIR/worktrees}"
-CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-CLAUDE_SCOPE="${AGENTSTACK_CLAUDE_MD_SCOPE:-project}"
+CLAUDE_SCOPE="${AGENTSTACK_CLAUDE_MD_SCOPE:-global}"
 check_managed_block "Claude CLAUDE.md" agentstack-claude-setup \
-  AGENTSTACK_CLAUDE_MD_SCOPE="$CLAUDE_SCOPE" CLAUDE_HOME="$CLAUDE_HOME" \
+  AGENTSTACK_CLAUDE_MD_SCOPE="$CLAUDE_SCOPE" \
   AGENTSTACK_PROJECT_KEY="$PROJECT_KEY"
 
 report_orphan_worktrees() {

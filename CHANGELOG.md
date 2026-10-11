@@ -10,6 +10,13 @@
 
 ## Unreleased
 
+### 利用者単位の指示 block と移行の復旧
+
+- Claude の既定を利用者の CLAUDE.md へ統一し、Codex と共通の parser・renderer・read-only plan・receipt に接続しました。既知の旧 block は新 target の検証後に marker 間だけ撤去し、複数 source の全文 backup を個別に保持します。
+- doctor／SessionStart の祖先検出、記録済み marker の uninstall、未解消時の purge 拒否を追加しました。symlink は固定解決先の CAS、hardlink は固定拒否で手動 copy を案内します。
+- identity の無い bare session の raw 自動登録を止め、既存 identity の復旧と非参加の案内を共通 catalog から表示します。編集 guard の block／warn-open は維持します。Mail の既定は旧 mode・activation=false のままです。
+
+
 ### 隔離 global client の起動・配送を接続
 
 起動終了の部分保存は同じ解消で完了するまで次起動を拒否します。古い配送 intent と個別の異常は他の通知を止めず、待機中の不要な取得を避けます。通知 event / 2秒 poll と既存 App 設定 reader を共有し、固定 provider 導出設定は gate 内で再生成します。

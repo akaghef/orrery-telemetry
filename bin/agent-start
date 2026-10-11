@@ -86,6 +86,11 @@ else
   echo "warning: AGENTSTACK_PROJECT_KEY unset; launching Claude with preselected AGENT_NAME=${AGENT_NAME:-}" >&2
 fi
 
+IDENTITY_POLICY="$HOOKS_DIR/session-identity-policy.sh"
+[[ -f "$IDENTITY_POLICY" ]] || IDENTITY_POLICY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/hooks/session-identity-policy.sh"
+. "$IDENTITY_POLICY"
+ags_require_launch_identity || exit 2
+
 if [[ -n "${AGENT_NAME:-}" ]]; then
   SESSION="$AGENT_NAME"
   ags_record_managed_agent "$MANAGED_FILE" "$AGENT_NAME"

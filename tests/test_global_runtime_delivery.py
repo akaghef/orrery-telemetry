@@ -7,7 +7,7 @@ import sys
 import uuid
 import pytest
 
-from test_global_runtime_client_s2a import api, context
+from test_global_runtime_client_s2a import api, context as unconfigured_context
 from service_teardown import TEST_LABEL_PREFIX
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'packages/agentstack_mail/tests'))
@@ -15,6 +15,13 @@ spec=importlib.util.spec_from_file_location('delivery_server_fixture',ROOT/'pack
 s2=importlib.util.module_from_spec(spec);spec.loader.exec_module(s2)
 spec2=importlib.util.spec_from_file_location('delivery_message_fixture',ROOT/'packages/agentstack_mail/tests/test_global_server_s2b.py')
 messages=importlib.util.module_from_spec(spec2);spec2.loader.exec_module(messages)
+
+def context(*args, **kwargs):
+    # Fixture operator preparation, separate from normal product launch.
+    client=unconfigured_context(*args, **kwargs)
+    for provider in ('claude','codex'):
+        api['runtime_delivery'](client).instruction_configure(provider)
+    return client
 
 @pytest.fixture
 def server(monkeypatch):
@@ -581,6 +588,7 @@ def test_mail_task_replay_uses_single_parent_intent_and_never_embeds_body(server
     api['atomic_bytes'](child.outputs['task'],b'Private canonical task bytes')
     monkeypatch.setenv('AGENTSTACK_CLAUDE_BIN','/usr/bin/true')
     delivery=api['runtime_delivery'](child)
+    delivery.instruction_configure('claude')
     row=delivery.prepare_launch('claude',cwd=child.isolation)
     command=delivery.provider_command(row)
     assert 'Private canonical task bytes' not in ' '.join(command)
@@ -1076,3 +1084,27 @@ def test_app_respects_shared_execution_switches_before_cold_handoff(launch, monk
     bridge.config = __import__('dataclasses').replace(bridge.config, cold_wake_enabled=True)
     monkeypatch.setenv('AGENTSTACK_MAIL_DISABLED', '1')
     bridge.wake_tick()
+
+@pytest.mark.parametrize('provider',['claude','codex'])
+def test_provider_instruction_configuration_is_explicit_and_stale_launch_is_readonly(server,monkeypatch,provider):
+    client=unconfigured_context(server,window=False)
+    delivery=api['runtime_delivery'](client)
+    row=delivery.prepare_launch(provider,cwd=server['root'])
+    home=client.runtime_dir/'provider-home'/provider
+    name='CLAUDE.md' if provider=='claude' else 'AGENTS.md'
+    with pytest.raises(api['ClientError'],match='INSTRUCTION_PROVIDER_CONFIG_REQUIRED'):
+        delivery.provider_command(row)
+    assert not (home/name).exists()
+    home.mkdir(exist_ok=True,parents=True)
+    target=home/name;target.write_text('outside note\n')
+    delivery.instruction_configure(provider)
+    before=target.read_bytes()
+    assert before.startswith(b'outside note\n')
+    assert not list((client.config['agentstack_home'] and Path(client.config['agentstack_home'])).glob('backups/instruction-migration/*/*/receipt.json'))
+    target.write_bytes(before.replace(b'Applicability',b'Edited applicability',1))
+    stale=target.read_bytes()
+    with pytest.raises(api['ClientError'],match='INSTRUCTION_PROVIDER_CONFIG_REQUIRED'):
+        delivery.provider_command(row)
+    assert target.read_bytes()==stale
+    delivery.instruction_configure(provider)
+    assert target.read_bytes()==before
