@@ -28,7 +28,10 @@ from agentstack_codex_app.agent_mail_client import (
     AgentMailClient,
     HttpJsonRpcTransport,
     AgentMailError,
+    AgentNotFoundError,
+    _decode_tool_response,
 )
+from agentstack_codex_app.mcp_server import AgentStackProxy
 from agentstack_mail import enrollment_cli as enroll
 
 
@@ -78,17 +81,19 @@ def native(tmp_path):
         stderr=log,
         start_new_session=True,
     )
-    client = AgentMailClient(
-        HttpJsonRpcTransport(
-            f"http://127.0.0.1:{port}/api/", timeout=1, allow_redirects=False
-        )
+    url = f"http://127.0.0.1:{port}/api/"
+    # The short timeout is only for polling startup; calls made by the tests
+    # use the client's default, as the other native Mail tests do.
+    probe_client = AgentMailClient(
+        HttpJsonRpcTransport(url, timeout=1, allow_redirects=False)
     )
+    client = AgentMailClient(HttpJsonRpcTransport(url, allow_redirects=False))
     try:
         deadline = time.monotonic() + 30
         while True:
             assert proc.poll() is None, "isolated Mail process exited"
             try:
-                health = client._call_tool_object("health_check", {})
+                health = probe_client._call_tool_object("health_check", {})
                 if control.exists():
                     break
             except AgentMailError:
@@ -99,7 +104,7 @@ def native(tmp_path):
         connection = {
             "kind": "orrery-mail-connection-v1",
             "expected_server_instance_id": instance,
-            "mcp_url": f"http://127.0.0.1:{port}/api/",
+            "mcp_url": url,
             "management_socket": str(control),
             "runtime_dir": str(tmp_path),
             "http_bearer_mode": "disabled",
@@ -118,6 +123,17 @@ def native(tmp_path):
                 "registration_token": peer_token,
             },
         )
+        second_token = "synthetic-second-owner-token-00000000000000"
+        second = client._call_tool_object(
+            "register_agent",
+            {
+                "project_key": project,
+                "name": "ExampleSecondPeer",
+                "program": "fixture-peer",
+                "model": "deterministic",
+                "registration_token": second_token,
+            },
+        )
         receipt = create_identity(
             conn,
             project_key=project,
@@ -130,8 +146,10 @@ def native(tmp_path):
             "agent_id": receipt["agent_id"],
             "project_key": project,
             "connection": str(conn),
-            "peer_name": "ExamplePeer",
-            "peer_id": peer["id"],
+            "peers": [
+                {"name": "ExamplePeer", "id": peer["id"]},
+                {"name": "ExampleSecondPeer", "id": second["id"]},
+            ],
             "pause_path": str(tmp_path / "paused.json"),
             "lock_path": str(tmp_path / "daemon.lock"),
         }
@@ -142,6 +160,7 @@ def native(tmp_path):
             "connection": connection,
             "client": client,
             "peer_token": peer_token,
+            "second_token": second_token,
             "receipt": receipt,
             "root": tmp_path,
             "control": control,
@@ -262,7 +281,7 @@ def test_unknown_creation_is_finalized_only_for_the_same_numeric_row(native):
         finalize_creation(
             x["profile"]["connection"],
             journal_path=journal_path,
-            agent_id=x["profile"]["peer_id"],
+            agent_id=x["profile"]["peers"][0]["id"],
         )
     assert not active.exists()
     for _ in range(2):
@@ -274,3 +293,85 @@ def test_unknown_creation_is_finalized_only_for_the_same_numeric_row(native):
         assert receipt == x["receipt"]
     runtime = DaemonRuntime.open(x["path"])
     runtime.close()
+
+
+def test_native_missing_listed_peer_is_reported_as_that_peer_only(native):
+    x = native
+    profile = {**x["profile"], "peers": [*x["profile"]["peers"], {"name": "GoneLake", "id": 999}]}
+    path = write(x["root"] / "missing-peer.json", profile)
+    runtime = DaemonRuntime.open(path)
+    try:
+        with pytest.raises(DaemonError) as exc:
+            runtime.call("whois", {"agent_name": "GoneLake"})
+        assert str(exc.value) == "daemon-peer-missing"
+        assert runtime.call("whois", {"agent_name": "ExamplePeer"})["name"] == "ExamplePeer"
+    finally:
+        runtime.close()
+
+
+def test_native_not_found_contract_and_changed_text_is_an_outage(native):
+    """Pins Mail's not-found line, the only text the client reads as missing."""
+    x = native
+    client = x["client"]
+    with pytest.raises(AgentNotFoundError):
+        client.whois(
+            project_key=x["profile"]["project_key"],
+            agent_name="GoneLake",
+            registration_token=x["peer_token"],
+        )
+    # The public proxy whois keeps the same redacted Mail line as before the
+    # type existed (name and "Did you mean" hint), only the type is new.
+    raw = client._request_tool(
+        "whois",
+        {"project_key": x["profile"]["project_key"], "agent_name": "GoneLake", "include_recent_commits": False},
+    )
+    with pytest.raises(AgentMailError) as before:
+        _decode_tool_response(raw)
+    proxy = AgentStackProxy(None, None, client)
+    proxy.bind_direct(
+        agent_name="ExamplePeer",
+        project_key=x["profile"]["project_key"],
+        owner_token=x["peer_token"],
+        program="fixture-peer",
+    )
+    with pytest.raises(AgentNotFoundError) as exc:
+        proxy.whois(proxy.bound_session_id, name="GoneLake")
+    assert str(exc.value) == str(before.value) and "GoneLake" in str(exc.value)
+    # If Mail rewords that line, the same answer falls back to a plain error,
+    # which the daemon treats as an outage, never as a missing peer.
+    real = client.transport
+
+    def reworded(payload):
+        response = real(payload)
+        for part in response.get("result", {}).get("content", []):
+            part["text"] = part["text"].replace("not found", "is unknown")
+        return response
+
+    client.transport = reworded
+    try:
+        with pytest.raises(AgentMailError) as exc:
+            client.whois(
+                project_key=x["profile"]["project_key"],
+                agent_name="GoneLake",
+                registration_token=x["peer_token"],
+            )
+        assert not isinstance(exc.value, AgentNotFoundError)
+    finally:
+        client.transport = real
+    profile = {**x["profile"], "peers": [*x["profile"]["peers"], {"name": "GoneLake", "id": 999}]}
+    runtime = DaemonRuntime.open(write(x["root"] / "contract-peer.json", profile))
+    try:
+        guarded = runtime.client.transport
+
+        def reworded_daemon(payload):
+            response = guarded(payload)
+            for part in response.get("result", {}).get("content", []):
+                part["text"] = part["text"].replace("not found", "is unknown")
+            return response
+
+        runtime.client.transport = reworded_daemon
+        with pytest.raises(DaemonError) as exc:
+            runtime.call("whois", {"agent_name": "GoneLake"})
+        assert str(exc.value) == "daemon-operation-failed"
+    finally:
+        runtime.close()

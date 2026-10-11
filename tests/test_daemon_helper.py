@@ -17,6 +17,8 @@ from agentstack_codex_app.daemon_runtime import (
     DaemonRuntime,
     DaemonError,
     KIND,
+    NAME,
+    PEER_STATUS,
     private_text,
     connection_at,
     profile_at,
@@ -53,8 +55,7 @@ def binding(tmp_path):
         "agent_id": 1,
         "project_key": str(tmp_path / "project"),
         "connection": str(conn),
-        "peer_name": "GreenCastle",
-        "peer_id": 2,
+        "peers": [{"name": "GreenCastle", "id": 2}, {"name": "RedRiver", "id": 3}],
         "pause_path": str(tmp_path / "paused.json"),
         "lock_path": str(tmp_path / "daemon.lock"),
     }
@@ -86,7 +87,9 @@ def binding(tmp_path):
         elif name == "whois":
             own = args["agent_name"] == "BlueLake"
             value = {
-                "id": 1 if own else 2,
+                "id": {"BlueLake": 1, "GreenCastle": 2, "RedRiver": 3}[
+                    args["agent_name"]
+                ],
                 "name": args["agent_name"],
                 "project_id": 10,
                 "program": "orrery-daemon" if own else "claude-code",
@@ -216,7 +219,14 @@ def test_runtime_cannot_mutate_binding_or_supply_credentials(binding, method, ar
 
 @pytest.mark.parametrize(
     "field,value",
-    [("sender_id", 3), ("sender_id", True), ("project_id", 11), ("from", "OtherLake")],
+    [
+        ("sender_id", True),
+        ("sender_id", None),
+        ("sender_id", 0),
+        ("project_id", 11),
+        ("from", "OtherLake"),
+        ("from", "BlueLake"),
+    ],
 )
 def test_foreign_inbox_is_rejected_without_ack(binding, field, value):
     binding["faults"]["fetch_inbox"] = lambda: [
@@ -398,3 +408,126 @@ def test_private_profile_and_connection_fail_closed(binding):
     path = write(b["root"] / "bad.json", connection)
     with pytest.raises(DaemonError, match="not-local"):
         connection_at(path)
+
+
+def test_every_listed_peer_is_pinned_for_whois_send_and_inbox(binding):
+    b = binding
+    r = b["runtime"]
+    assert r.call("whois", {"agent_name": "RedRiver"})["id"] == 3
+    b["faults"]["fetch_inbox"] = lambda: [
+        {"id": 1, "project_id": 10, "sender_id": 2, "from": "GreenCastle"},
+        {"id": 2, "project_id": 10, "sender_id": 3, "from": "RedRiver"},
+        # A listed name with another ID crosses for the consumer to hold.
+        {"id": 3, "project_id": 10, "sender_id": 9, "from": "RedRiver"},
+    ]
+    assert [m["id"] for m in r.call("fetch_inbox", {})] == [1, 2, 3]
+    r.call("send_message", {"to": ["RedRiver"], "subject": "s", "body_md": "b"})
+    for to in (["OtherLake"], ["GreenCastle", "RedRiver"], "RedRiver", []):
+        with pytest.raises(DaemonError, match="peer-denied"):
+            r.call("send_message", {"to": to, "subject": "s", "body_md": "b"})
+    with pytest.raises(DaemonError, match="peer-denied"):
+        r.call("whois", {"agent_name": "OtherLake"})
+    assert not any(n == "acknowledge_message" for n, _ in b["calls"])
+
+
+def test_one_changed_peer_stops_only_that_peer(binding):
+    b = binding
+    r = b["runtime"]
+
+    def whois():
+        name = b["calls"][-1][1]["agent_name"]
+        ids = {"BlueLake": 1, "GreenCastle": 2, "RedRiver": 30}
+        return {
+            "id": ids[name],
+            "name": name,
+            "project_id": 10,
+            "program": "orrery-daemon" if name == "BlueLake" else "claude-code",
+        }
+
+    b["faults"]["whois"] = whois
+    with pytest.raises(DaemonError, match="peer-changed"):
+        r.call("send_message", {"to": ["RedRiver"], "subject": "s", "body_md": "b"})
+    assert not any(n == "send_message" for n, _ in b["calls"])
+    r.call("send_message", {"to": ["GreenCastle"], "subject": "s", "body_md": "b"})
+    assert [a["to"] for n, a in b["calls"] if n == "send_message"] == [["GreenCastle"]]
+
+
+@pytest.mark.parametrize(
+    "peers",
+    [
+        None,
+        [],
+        "GreenCastle",
+        [{"name": "GreenCastle"}],
+        [{"name": "GreenCastle", "id": 2, "extra": 1}],
+        [{"name": "GreenCastle", "id": 2}, {"name": "GreenCastle", "id": 3}],
+        [{"name": "GreenCastle", "id": 2}, {"name": "RedRiver", "id": 2}],
+        [{"name": "BlueLake", "id": 2}],
+        [{"name": "GreenCastle", "id": 1}],
+        [{"name": "GreenCastle", "id": True}],
+        [{"name": "Green Castle", "id": 2}],
+        [{"name": "Green-Castle", "id": 2}],
+        [{"name": "P%d" % i, "id": 100 + i} for i in range(17)],
+    ],
+)
+def test_profile_peer_list_is_strict(binding, peers):
+    path = write(binding["root"] / "bad-peers.json", {**binding["profile"], "peers": peers})
+    with pytest.raises(DaemonError, match="profile-invalid"):
+        profile_at(path)
+
+
+def test_single_peer_v1_profile_is_refused_with_a_migration_reason(binding):
+    legacy = {k: v for k, v in binding["profile"].items() if k != "peers"}
+    legacy.update(kind="orrery-daemon-binding-v1", peer_name="GreenCastle", peer_id=2)
+    with pytest.raises(DaemonError, match="profile-legacy-v1"):
+        profile_at(write(binding["root"] / "v1.json", legacy))
+    both = {**binding["profile"], "peer_name": "GreenCastle", "peer_id": 2}
+    with pytest.raises(DaemonError, match="profile-invalid"):
+        profile_at(write(binding["root"] / "both.json", both))
+
+
+def test_missing_peer_is_a_peer_code_and_an_outage_is_not(binding):
+    b = binding
+    r = b["runtime"]
+    original = r.client.transport
+
+    def missing(payload):
+        if payload.get("params", {}).get("arguments", {}).get("agent_name") == "RedRiver":
+            # The shape Mail returns for an unknown agent name (native contract test).
+            text = "Error calling tool 'whois': Agent 'RedRiver' not found in project '/p'."
+            return {"result": {"content": [{"type": "text", "text": text}], "isError": True}}
+        return original(payload)
+
+    r.client.transport = missing
+    with pytest.raises(DaemonError) as exc:
+        r.call("whois", {"agent_name": "RedRiver"})
+    assert str(exc.value) == "daemon-peer-missing" and PEER_STATUS[str(exc.value)] == "missing"
+    with pytest.raises(DaemonError, match="peer-missing"):
+        r.call("send_message", {"to": ["RedRiver"], "subject": "s", "body_md": "b"})
+    assert r.call("whois", {"agent_name": "GreenCastle"})["id"] == 2
+
+    def outage(payload):
+        if payload.get("params", {}).get("arguments", {}).get("agent_name") == "RedRiver":
+            raise OSError("synthetic transport failure")
+        return original(payload)
+
+    def tool_failure(payload):
+        if payload.get("params", {}).get("arguments", {}).get("agent_name") == "RedRiver":
+            text = "Error calling tool 'whois': database is locked"
+            return {"result": {"content": [{"type": "text", "text": text}], "isError": True}}
+        return original(payload)
+
+    for failure in (outage, tool_failure):
+        r.client.transport = failure
+        with pytest.raises(DaemonError) as exc:
+            r.call("whois", {"agent_name": "RedRiver"})
+        assert str(exc.value) == "daemon-operation-failed"
+    assert not any(n == "send_message" for n, _ in b["calls"])
+
+
+@pytest.mark.parametrize("name", ["GreenCastle", "A", "A" * 128, "Green-Castle", "Green_Castle", "1Agent"])
+def test_peer_names_are_mail_canonical(name):
+    from agentstack_mail.utils import sanitize_agent_name
+
+    canonical = sanitize_agent_name(name) == name and name[0].isalpha()
+    assert (NAME.fullmatch(name) is not None) is canonical
