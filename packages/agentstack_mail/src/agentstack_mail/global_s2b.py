@@ -632,18 +632,32 @@ class S2bRuntime(S2aRuntime):
     def query(self, db, tool, owner, args):
         aid = owner["id"]
         saved, qhash = self.cursor(tool, owner, args)
+        visible, visibility_params = VISIBLE, [aid, aid]
+        if args.get('_ui_edge') is not None:
+            a, b = args['_ui_edge']
+            # The same visible recipient projection drives edge membership;
+            # hidden BCC must not leak through either MAX or pagination.
+            edge = "(m.sender_id=? AND EXISTS(SELECT 1 FROM message_recipients er WHERE er.message_id=m.id AND er.agent_id=? AND (er.kind!='bcc' OR m.sender_id=? OR er.agent_id=?)))"
+            visible += " AND (" + edge + " OR " + edge + ")"
+            visibility_params += [a,b,aid,aid,b,a,aid,aid]
+        if args.get('_ui_target') is not None:
+            visible += " AND (m.sender_id=? OR EXISTS(SELECT 1 FROM message_recipients er WHERE er.message_id=m.id AND er.agent_id=? AND (er.kind!='bcc' OR m.sender_id=? OR er.agent_id=?)))"
+            visibility_params += [args['_ui_target'],args['_ui_target'],aid,aid]
+        if args.get('_ui_after') is not None:
+            visible += " AND m.id>?"
+            visibility_params.append(args['_ui_after'])
         maximum = (
             saved["max_message_id"]
             if saved
             else db.execute(
-                "SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE " + VISIBLE,
-                (aid, aid),
+                "SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE " + visible,
+                visibility_params,
             ).fetchone()[0]
         )
         before = saved["before_id"] if saved else None
         cutoff = saved["since_cutoff"] if saved else None
-        clause = VISIBLE + " AND m.id<=?"
-        params = [aid, aid, maximum]
+        clause = visible + " AND m.id<=?"
+        params = [*visibility_params, maximum]
         if before is not None:
             clause += " AND m.id<?"
             params.append(before)

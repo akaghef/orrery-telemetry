@@ -152,3 +152,52 @@ App の履歴 HOME は旧 consumer と同じ共通関数で決めます。`CODEX
 App の cold wake は fixture のみ、実 resume は未確認です。1時間12回に達すると `blocked / WAKE_RATE_LIMITED` になり、handoff の試行回数を増やしません。時間枠が空けば同じ intent から再開します。通知 fact は server に残り、poll は消費しません。
 
 App の `AGENTSTACK_CODEX_APP_COLD_WAKE`、`AGENTSTACK_CODEX_BINARY`、`AGENTSTACK_CODEX_APP_PLUGIN_ID`、`AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK` は旧 consumer と同じ設定 reader を使います。cold wake の明示停止と Mail disabled の間は新しい handoff を作りません。
+
+<a id="operator-ui-access"></a>
+## 隔離 dashboard の operator API
+
+[English](global-delivery-client.en.md#operator-ui-access)
+
+既定の導入・旧 dashboard は変わりません。API 世代15の global backend は、完成した S2c candidate を私有管理 socket 経由で読みます。dashboard は Mail の SQLite を開きません。公開 Mail tool の追加はありません。画面と cockpit の接続は後続なので、`global_dashboard_ui=0` の間は API の世代だけで画面を有効にしないでください。
+
+専用の一時 HOME を使い、`AGENTSTACK_RUNTIME_MODE=global`、`AGENTSTACK_GLOBAL_SERVER_CONFIG`（完成した candidate の `server-config.json`）、`AGENTSTACK_MCP_URL`（同じ隔離 Mail の HTTP endpoint）、`AGENTSTACK_HOME`（同じ isolation root の `agentstack`）、`AGENTSTACK_PORT`（専用の空き port）を明示します。設定が壊れたときに旧 DB へ戻ることはありません。実サービスの切替は別の手順です。
+
+最初にローカルの operator が同じ隔離先の `AGENTSTACK_HOME` を明示して `agentstack-http-operator configure` を実行します。CLI も未設定なら `HTTP_OPERATOR_HOME_REQUIRED` で拒否し、実 HOME を既定にしません。固定の `runtime/http-operator.json` を0600で新規作成し、既存 file は上書きしません。`agentstack-http-operator show` で表示した値を HTTP の `Authorization: Bearer …` に渡します。これは agent の登録 token とは別です。値を URL、ログ、共有ファイルに載せないでください。失効させる場合は、利用する dashboard と cockpit を停止し、この固定 file を operator が退避してから configure し直します。
+
+HTTP は TCP 上の UID を直接証明できません。私有 file を読める利用者の capability を証明にし、loopback・設定済み Host・提示された Origin/Referer/Fetch Metadata を同じ入口で確認します。static の GET/HEAD 以外は、将来追加される route もこの入口を通ります。capability を盗める同 UID/root、XSS、ページへの権限を与えた拡張機能は、この境界では防げません。別の利用者と1台の Mail を共有する用途は支えません。
+
+| 読取 | 選択 |
+|---|---|
+| `/api/agents`、`/api/mail-watcher-health` | operator の roster / 健康。本文なし |
+| `/api/mail/recent`、`/api/mail/message`、`/api/mail/conversation` | 必須の `view_as_agent_id` の可視集合 |
+| `/api/mail/legacy-label` | 同じ可視集合の旧 label。`source` は拒否 |
+| `/api/agent-history` | 独立した target `agent_id`。可視集合との共通部分だけ |
+| `/api/messages-since` | `after_id` より後の可視行を keyset で継続 |
+| `/api/edge-messages` | `a_agent_id` と `b_agent_id` の可視な送受信だけ |
+
+MAX・keyset・limit・返却 revision は1つの read transaction に置き、fetch で read/ack/通知を消費しません。`/api/graph` も同じ可視 metadata page を使います。見られない message、隠れた BCC、不可視な上限 ID を足して集計しません。
+
+### 登録の状態と中断からの復旧
+
+`agentstack-ui-client --client-name` は既存 CLI と同じ slug（小文字英数字で始まり、以降は小文字英数字・`_`・`-`、64文字以内）です。名前から別の root を自動生成しません。`clients --name NAME` で既存 root を探し、同名があればその root を選んでください。複数なら利用者が選びます。
+
+| `status --client-name SLUG` | 次の明示操作 |
+|---|---|
+| absent | `prepare-root --client-name SLUG` |
+| root_only / registration_pending | 同じ `register --client-name SLUG --name NAME --program PROGRAM --model MODEL` |
+| registration_saved | `finalize-registration --client-name SLUG` |
+| registered_unconfigured | 固定 context を指定し、既存の provider configure / Codex plan・人の承認・apply |
+| configured | 既存の明示 launch |
+| launch_present | 同じ launch ID と digest で既存の launch-status / resolution |
+| unavailable | 原因を直す。別の identity は新しい root |
+
+登録は既存の pending 1つに name/program/model/token/binding を保存し、同じ intent だけを再送します。未送信なら1行を作り、応答喪失なら原子的 NAME_CONFLICT→名前の解決→保存済み token の whois で同じ行を確認します。credential/context/metadata の保存途中でも、保存済み row の finalize は ID と token を保ち、再登録しません。status と一覧は provider の設定や context を書き換えません。
+
+別 owner の同名だった場合、pending の SHA-256 を固定して `registration-abandon --client-name SLUG --expected-digest DIGEST` を明示できます。これは所有できない行を確認した場合だけ terminal にし、別の名前の登録や自動採用はしません。未送信・結果不明は同 intent の再送、所有できた行は finalize を使います。通常入口から terminal を解除せず、新 identity には新 root を使います。
+
+`POST /api/global/spawn` はこの共通処理を使い、cwd を既存の spawn roots で確認します。provider の指示配置だけを明示 configure し、Codex trust は自動承認しません。必要な設定が無ければ registered_unconfigured を返します。`POST /api/global/resume` は同じ root の既存 launch/session を使い、operator resolution 待ちなら新しい launch を作りません。通信成功後に disk が失敗した場合も、status から同じ pending/finalize の入口へ戻ってください。
+
+
+名前の照合で Mail に既存の名前があり、一致する client root が無ければ、root/pending の作成前に `NAME_CONFLICT` を返します。`clients` の `name_agent_id` はその読取結果、`diagnostics` は root ごとの異常です。壊れた root は利用できませんが、他の root の一覧と別名の新規登録は続けられます。terminal pending は名前と owner conflict の証拠として保持し、同名の再利用を拒否します。退役済み identity の照合も管理側の owner 検証で行います。
+
+登録直前の競合で pending が残った場合は、`GET /api/global/spawn-status?client_name=SLUG` の `registration_sha256` を確認し、同じ HTTP admission の下で `POST /api/global/registration-abandon` に `{"client_name":"SLUG","expected_digest":"DIGEST"}` を渡せます。digest 不一致では記録を変えません。既存 CLI と同じく別 owner と確認できた intent だけを terminal にし、別の identity には新 root を使います。token は status に返しません。不正 JSON は400 `QUERY_INVALID`、登録の競合は409、transport などの障害は503です。

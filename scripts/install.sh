@@ -1993,7 +1993,7 @@ check_agent_mail_provisioning_dependencies() {
 
 validate_repo_assets() {
   local source
-  for source in "$RUNTIME_SCHEMA_SOURCE" "$RUNTIME_FIXTURE_SOURCE" "${RUNTIME_CLIENT_CONTRACT_SOURCES[@]}"; do
+  for source in "$RUNTIME_SCHEMA_SOURCE" "$RUNTIME_FIXTURE_SOURCE" "${RUNTIME_CLIENT_CONTRACT_SOURCES[@]}" "${RUNTIME_PUBLIC_ENTRY_SOURCES[@]}"; do
     [[ -f "$source" ]] || die "missing runtime client contract: ${source#"$REPO_ROOT"/}; use a complete source checkout or archive"
   done
   [[ -f "$REPO_ROOT/dashboard/server.py" ]] || die "missing dashboard/server.py"
@@ -2264,13 +2264,20 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/scripts/codex_plugin_trust.py"
   "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
   "$REPO_ROOT/bin/lib/runtime_delivery.py"
+  "$REPO_ROOT/bin/lib/runtime_operator.py"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-client-4c.json"
   "$REPO_ROOT/bin/lib/global-client-loader.sh"
   "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py"
   "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_s2c_contract.py"
+  "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_ui_contract.py"
+  "$REPO_ROOT/packages/agentstack_mail/fixtures/global-ui.json"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2b.json"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2c.json"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-client-4b.json"
+)
+RUNTIME_PUBLIC_ENTRY_SOURCES=(
+  "$REPO_ROOT/bin/agentstack-http-operator"
+  "$REPO_ROOT/bin/agentstack-ui-client"
 )
 OPTIONAL_PROVIDER_PAYLOAD=(
   "dashboard/provider_server.py"
@@ -2386,6 +2393,10 @@ install_payload() {
     local runtime_source
     for runtime_source in "${RUNTIME_CLIENT_CONTRACT_SOURCES[@]}"; do
       cp "$runtime_source" "$BIN_DIR/lib/$(basename "$runtime_source")"
+    done
+    for runtime_source in "${RUNTIME_PUBLIC_ENTRY_SOURCES[@]}"; do
+      cp "$runtime_source" "$BIN_DIR/$(basename "$runtime_source")"
+      chmod +x "$BIN_DIR/$(basename "$runtime_source")"
     done
     cp "$REPO_ROOT/bin/agentstack-runtime-client" "$BIN_DIR/agentstack-runtime-client"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"

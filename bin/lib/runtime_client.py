@@ -138,6 +138,75 @@ def message_contract():
             else:sys.modules[key]=value
 
 
+_UI_CONTRACT = None
+
+
+def operator_schemas():
+    global _UI_CONTRACT
+    if _UI_CONTRACT is None:
+        import types
+        modules = {'schema_contract':wire_contract(), 'global_s2b_contract':message_contract()}
+        previous = {name:sys.modules.get(name) for name in modules}
+        try:
+            for name, values in modules.items():
+                module = types.ModuleType(name)
+                module.__dict__.update(values)
+                if name == 'schema_contract':
+                    module.fixture = values['fixture_loader']
+                sys.modules[name] = module
+            installed = Path(__file__).with_name('global_ui_contract.py')
+            source = ROOT / 'packages/agentstack_mail/src/agentstack_mail/global_ui_contract.py'
+            _UI_CONTRACT = runpy.run_path(str(installed if installed.is_file() else source))
+        finally:
+            for name,value in previous.items():
+                if value is None:sys.modules.pop(name,None)
+                else:sys.modules[name]=value
+    return _UI_CONTRACT
+
+
+def management_exchange(config, request):
+    """One private socket transport; callers validate their response contract."""
+    path = absolute(config['management_socket'])
+    info = path.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ClientError('MANAGEMENT_SOCKET_UNSAFE')
+    with socket.socket(socket.AF_UNIX) as stream:
+        stream.settimeout(5)
+        stream.connect(str(path))
+        stream.sendall(json.dumps(request).encode() + b'\n')
+        raw = b''
+        while not raw.endswith(b'\n'):
+            block = stream.recv(16384)
+            if not block or len(raw) + len(block) > 1048576:
+                raise ClientError('MANAGEMENT_RESPONSE_INVALID')
+            raw += block
+    reply = json.loads(raw)
+    return reply
+
+
+def operator_exchange(config, binding, query):
+    """One schema and binding check for client and operator UI reads."""
+    schemas = operator_schemas()
+    validate = wire_contract()['validate_schema']
+    request = {'version': 1, 'action': 'ui_read', **binding, 'query': query}
+    try:
+        validate(request, schemas['REQUEST'])
+    except ValueError as exc:
+        raise ClientError('QUERY_INVALID') from exc
+    reply = management_exchange(config, request)
+    if not isinstance(reply, dict) or reply.get('ok') is not True:
+        raise ClientError(reply.get('reason', 'MANAGEMENT_REJECTED') if isinstance(reply, dict) else 'MANAGEMENT_REJECTED')
+    try:
+        validate(reply, schemas['RESPONSE'])
+    except ValueError as exc:
+        raise ClientError('RESPONSE_INVALID') from exc
+    if reply['binding'] != binding:
+        raise ClientError('MANAGEMENT_BINDING_MISMATCH')
+    if reply['query_kind'] != query['kind'] or (query['kind'] == 'messages' and reply.get('tool') != query['tool']):
+        raise ClientError('RESPONSE_INVALID')
+    return reply
+
+
 def s2a_tools(*, receipt=False):
     return {name for name, value in wire_contract()['fixture']['tool_contracts'].items()
             if not receipt or value.get('operation') == 'write'}
@@ -271,6 +340,74 @@ def result_value(reply):
     raise ClientError('RESPONSE_INVALID')
 
 
+def validate_client_name(value):
+    if not isinstance(value,str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}',value):
+        raise ClientError('CLIENT_NAME_INVALID')
+    return value
+
+
+def local_endpoint(value):
+    url = urlsplit(value)
+    if (url.scheme != 'http' or url.hostname not in {'127.0.0.1','::1'}
+            or not url.port or url.username or url.password or url.query or url.fragment):
+        raise ClientError('ENDPOINT_NOT_LOCAL')
+    return value
+
+
+@contextmanager
+def operation_inode(path):
+    """The fixed operation mutex, also used before a root has a context."""
+    if not path.exists() and not path.is_symlink():
+        try:
+            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(fd,'w') as out:
+                json.dump({'kind':'orrery-client-operation-mutex-v1'},out)
+                out.flush();os.fsync(out.fileno())
+        except FileExistsError:pass
+    def check():
+        if read_json(path)!={'kind':'orrery-client-operation-mutex-v1'}:
+            raise ClientError('OUTPUT_SCHEMA_INVALID')
+    check()
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        info=os.fstat(fd)
+        fcntl.flock(fd,fcntl.LOCK_EX)
+        current=path.lstat()
+        if (info.st_dev,info.st_ino)!=(current.st_dev,current.st_ino):
+            raise ClientError('PRIVATE_FILE_UNSAFE')
+        check()
+        yield
+    finally:os.close(fd)
+
+
+def prepare_client_root(config, name):
+    """One fixed-layout root creation for operator and child entrypoints.
+
+    The template comes from an admitted client or server binding. A second tab
+    shares the same existing operation mutex; it cannot overwrite activation.
+    """
+    validate_client_name(name)
+    local_endpoint(config['mcp_url'])
+    isolation=absolute(config['isolation_root'])
+    home=absolute(config['agentstack_home'])
+    if home!=isolation/'agentstack':raise ClientError('CLIENT_HOME_MISMATCH')
+    safe_private_directory(isolation)
+    parent=home/'clients'
+    root=parent/name
+    for directory in (home,parent,root,root/'runtime'):
+        directory.mkdir(mode=0o700,exist_ok=True)
+        safe_private_directory(directory)
+    path=root/CLIENT_LAYOUT['context']
+    with operation_inode(root/CLIENT_LAYOUT['operation_lock']):
+        if not path.exists() and not path.is_symlink():
+            atomic_json(path,{**config,'client_name':name,'identity':None})
+        saved=read_json(path)
+        if (saved.get('wrapper_root')!=config['wrapper_root'] or any(saved.get(k)!=config[k]
+                for k in ('expected_server_instance_id','candidate_generation','authority_epoch'))):
+            raise ClientError('CHILD_BINDING_MISMATCH')
+    return path
+
+
 class RuntimeClient:
     def __init__(self, path, *, recovery=None):
         self.path = absolute(str(path))
@@ -293,8 +430,7 @@ class RuntimeClient:
         if any(k in c for k in ('runtime_dir', 'credential_file', 'client_root')) or not all(k in c for k in ('agentstack_home', 'client_name')):
             raise ClientError('FIXED_LAYOUT_CONTEXT_REQUIRED')
         name = c['client_name']
-        if not isinstance(name, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', name):
-            raise ClientError('CLIENT_NAME_INVALID')
+        validate_client_name(name)
         self.client_home = absolute(c['agentstack_home'])
         if self.client_home != self.isolation / 'agentstack':
             raise ClientError('CLIENT_HOME_MISMATCH')
@@ -323,11 +459,7 @@ class RuntimeClient:
         if (not isinstance(c.get('lock_identity'), list) or len(c['lock_identity']) != 2
                 or any(not integer(v) for v in c['lock_identity'])):
             raise ClientError('LOCK_IDENTITY_INVALID')
-        url = urlsplit(c.get('mcp_url', ''))
-        if (url.scheme != 'http' or url.hostname not in {'127.0.0.1', '::1'}
-                or not url.port or url.username or url.password or url.query or url.fragment):
-            raise ClientError('ENDPOINT_NOT_LOCAL')
-        self.endpoint = c['mcp_url']
+        self.endpoint = local_endpoint(c.get('mcp_url', ''))
         self.credential = self.outputs['credential']
         self.metadata_path = self.outputs['metadata']
         self.profile_path = self.outputs['profile']
@@ -752,10 +884,7 @@ class RuntimeClient:
             if tool in {'retire_agent', 'unretire_agent'}:
                 # whois intentionally refuses a retired row. Local operator
                 # inspect supplies its generation without reviving it first.
-                inspected = self.management('inspect', agent_id=self.identity['agent_id'])
-                if (inspected.get('credential_generation') != self.identity['credential_generation']
-                        or inspected.get('credential_fingerprint') != hashlib.sha256(args['registration_token'].encode()).hexdigest()[:16]):
-                    raise ClientError('CREDENTIAL_BINDING_MISMATCH')
+                self.inspect_owner()
             if tool == 'register_agent' and self.identity and 'window_row_id' in self.identity:
                 args.update(window_row_id=self.identity['window_row_id'], window_uuid=self.identity['window_uuid'])
             if set(args) - set(schemas[tool].get('properties', {})):
@@ -1001,25 +1130,14 @@ class RuntimeClient:
                 # S1 lacks this capability. No speculative S2 request is sent.
                 self.call('set_contact_policy', {'policy': policy})
 
+    def operator_read(self, query):
+        with self.operation_mutex(), self.fence():
+            return operator_exchange(self.config, self.binding, query)
+
     def management(self, action, **values):
         with self.fence():
             self.capabilities()
-            path = absolute(self.config['management_socket'])
-            info = path.lstat()
-            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-                raise ClientError('MANAGEMENT_SOCKET_UNSAFE')
-            request = {'version': 1, **self.binding, 'action': action, **values}
-            with socket.socket(socket.AF_UNIX) as stream:
-                stream.settimeout(5)
-                stream.connect(str(path))
-                stream.sendall(json.dumps(request).encode() + b'\n')
-                raw = b''
-                while not raw.endswith(b'\n'):
-                    block = stream.recv(16384)
-                    if not block or len(raw) + len(block) > 1048576:
-                        raise ClientError('MANAGEMENT_RESPONSE_INVALID')
-                    raw += block
-            reply = json.loads(raw)
+            reply = management_exchange(self.config, {'version': 1, **self.binding, 'action': action, **values})
             if not isinstance(reply, dict) or not reply.get('ok'):
                 reason = reply.get('reason', '') if isinstance(reply, dict) else ''
                 raise ClientError(reason if known_error(reason) else 'MANAGEMENT_REJECTED')
@@ -1030,6 +1148,16 @@ class RuntimeClient:
             if action != 'request_status' and reply.get('agent_id') != values.get('agent_id'):
                 raise ClientError('MANAGEMENT_IDENTITY_MISMATCH')
             return reply
+
+    def inspect_owner(self):
+        # whois refuses retired identities; this existing private projection
+        # proves the same local credential without changing retirement.
+        token = self.local_owner()
+        inspected = self.management('inspect', agent_id=self.identity['agent_id'])
+        if (inspected.get('credential_generation') != self.identity['credential_generation']
+                or inspected.get('credential_fingerprint') != hashlib.sha256(token.encode()).hexdigest()[:16]):
+            raise ClientError('CREDENTIAL_BINDING_MISMATCH')
+        return inspected
 
     def activate_credential(self, token, row, metadata=None):
         identity = {k: row[k] for k in ('agent_id', 'credential_generation', 'name')}
@@ -1056,38 +1184,11 @@ class RuntimeClient:
             del self._activating_identity
 
     def create(self, name, program, model):
-        if self.identity is not None:
+        if self.identity is not None and not self.outputs['registration'].exists():
             raise ClientError('EXISTING_IDENTITY_REQUIRED')
-        if self.credential.exists() or self.credential.is_symlink():
+        if (self.credential.exists() or self.credential.is_symlink()) and not self.outputs['registration'].exists():
             raise ClientError('CREDENTIAL_ALREADY_PRESENT')
-        journal = self.credential.with_suffix('.registration-pending.json')
-        with self.fence():
-            if journal.exists():
-                raise ClientError('REGISTRATION_PENDING_OPERATOR_REQUIRED')
-            token = secrets.token_urlsafe(32)
-            self.write_output(journal, {'kind': REG_PENDING_KIND, 'name': name, 'program': program, 'model': model, 'registration_token': token, **self.binding}, 'registration')
-            _, schemas = self.capabilities()
-            if 'register_agent' not in schemas:
-                raise ClientError('CAPABILITY_UNAVAILABLE')
-            try:
-                row = result_value(self.rpc('tools/call', {'name': 'register_agent', 'arguments': {
-                    **self.binding, 'name': name, 'program': program, 'model': model,
-                    'registration_token': token}}))
-            except ClientError as exc:
-                if str(exc) in {'NAME_CONFLICT', 'NAME_INVALID'}:
-                    journal.unlink()
-                raise
-            if (not isinstance(row, dict) or any(row.get(k) != self.binding[v] for k, v in (
-                    ('server_instance_id', 'expected_server_instance_id'),
-                    ('candidate_generation', 'candidate_generation'), ('authority_epoch', 'authority_epoch')))
-                    or not integer(row.get('agent_id'), 1) or row.get('credential_generation') != 1
-                    or row.get('name') != name or row.get('registration_token') != token):
-                raise ClientError('REGISTRATION_RESPONSE_MISMATCH')
-            self.write_output(journal, {'kind': REG_PENDING_KIND, 'row': {k: v for k, v in row.items() if k != 'registration_token'},
-                                  'program': program, 'model': model, 'registration_token': token, **self.binding}, 'registration')
-        self.activate_credential(token, row, {'program': program, 'model': model})
-        journal.unlink()
-        return self.observe()
+        return self.register_intent(name, program, model)
 
     @contextmanager
     def operation_mutex(self):
@@ -1117,28 +1218,10 @@ class RuntimeClient:
 
     @contextmanager
     def _operation_mutex_inode(self):
-        # Binding-independent inode, shared by SessionStart/resume/end.
-        path = self.outputs['operation_lock']
-        if not path.exists() and not path.is_symlink():
-            try:
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                with os.fdopen(fd, 'w') as stream:
-                    json.dump({'kind': 'orrery-client-operation-mutex-v1'}, stream)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-            except FileExistsError:
-                pass
-        self.validate_output(path, 'operation_lock')
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        try:
-            info = os.fstat(fd)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            if (info.st_dev, info.st_ino) != (path.stat().st_dev, path.stat().st_ino):
-                raise ClientError('PRIVATE_FILE_UNSAFE')
-            self.validate_output(path, 'operation_lock')
+        path=self.outputs['operation_lock']
+        with operation_inode(path):
+            self.validate_output(path,'operation_lock')
             yield
-        finally:
-            os.close(fd)
 
     def message_mutation(self, tool, args):
         contract = message_contract()
@@ -1402,24 +1485,12 @@ class RuntimeClient:
 
     def prepare_child(self, options):
         name = options.get('child_client_name')
-        if not isinstance(name, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', name):
-            raise ClientError('CLIENT_NAME_INVALID')
+        validate_client_name(name)
         if name == self.config['client_name']:
             raise ClientError('CLIENT_ROOT_OVERLAP')
-        root = self.clients_parent / name
-        path = root / CLIENT_LAYOUT['context']
-        if not root.exists():
-            root.mkdir(mode=0o700)
-        safe_private_directory(root)
-        runtime = root / 'runtime'
-        runtime.mkdir(mode=0o700, exist_ok=True)
-        safe_private_directory(runtime)
-        if not path.exists() and not path.is_symlink():
-            atomic_json(path, {**self.config, 'client_name': name, 'identity': None})
+        path = prepare_client_root(self.config,name)
+        root = path.parent
         saved = read_json(path)
-        if (saved.get('wrapper_root') != self.config['wrapper_root']
-                or any(saved.get(k) != v for k,v in self.binding.items())):
-            raise ClientError('CHILD_BINDING_MISMATCH')
         if saved.get('identity') and not (root / CLIENT_LAYOUT['child']).exists():
             raise ClientError('CLIENT_ROOT_NOT_CHILD')
         pending_path = root / CLIENT_LAYOUT['registration']
@@ -1461,7 +1532,26 @@ class RuntimeClient:
                 'execution_reason': 'GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED',
                 'client_name': name, 'agent_id': row['agent_id'], 'name': row['name'], 'client_config': str(path)}
 
+    def resolve_registration_name(self, name):
+        if self.outputs['child'].exists() or self.outputs['child'].is_symlink():
+            state=read_json(self.outputs['child'])
+            parent_path=self.clients_parent/state['parent']['client_name']/CLIENT_LAYOUT['context']
+            parent=RuntimeClient(parent_path)
+            if parent.identity['agent_id']!=state['parent']['agent_id']:
+                raise ClientError('CHILD_PARENT_MISMATCH')
+            return parent.call('resolve_agent_identity',{'target_name':name})['target']['agent_id']
+        try:
+            return self.operator_read({'kind':'resolve_name','name':name})['data']['agent_id']
+        except ClientError as exc:
+            if str(exc) in {'MANAGEMENT_REJECTED','MANAGEMENT_ACTION_INVALID','MANAGEMENT_ACTION_UNSUPPORTED','ACTION_INVALID'}:
+                raise ClientError('NAME_CONFLICT') from exc
+            raise
+
     def register_child(self, parent, name, program, model, task):
+        return self.register_intent(name, program, model, task)
+
+    def register_intent(self, name, program, model, task=None):
+        """One same-token registration journal for standalone and child roots."""
         path = self.outputs['registration']
         with self.fence():
             if path.exists():
@@ -1478,14 +1568,17 @@ class RuntimeClient:
             if saved.get('row'):
                 return self.finalize_registration(saved['row']['agent_id'])
             self.capabilities()
-            args = {**self.binding, **{k:saved[k] for k in ('name','program','model','task_description','registration_token')}}
+            args = {**self.binding, **{k:saved[k] for k in ('name','program','model','registration_token')}}
+            if task is not None:
+                args['task_description'] = task
             try:
                 row = result_value(self.rpc('tools/call', {'name': 'register_agent', 'arguments': args}))
             except ClientError as exc:
                 if str(exc) != 'NAME_CONFLICT':
                     raise
-                resolved = parent.call('resolve_agent_identity', {'target_name': name})
-                aid = resolved['target']['agent_id']
+                aid = self.resolve_registration_name(name)
+                if aid is None:
+                    raise ClientError('TARGET_UNAVAILABLE')
                 row = result_value(self.rpc('tools/call', {'name':'whois','arguments':{
                     **self.binding, 'agent_id': aid, 'registration_token':token}}))
             if (not integer(row.get('agent_id'),1) or row.get('name') != name
@@ -1507,12 +1600,8 @@ class RuntimeClient:
             if hashlib.sha256(raw).hexdigest()!=expected_digest:
                 raise ClientError('REGISTRATION_PENDING_CONFLICT')
             pending=json.loads(raw)
-            state=read_json(self.outputs['child'])
-            parent_path=self.clients_parent/state['parent']['client_name']/CLIENT_LAYOUT['context']
-            parent=RuntimeClient(parent_path)
-            if parent.identity['agent_id']!=state['parent']['agent_id']:
-                raise ClientError('CHILD_PARENT_MISMATCH')
-            target=parent.call('resolve_agent_identity',{'target_name':pending['name']})['target']['agent_id']
+            target=self.resolve_registration_name(pending['name'])
+            if target is None:raise ClientError('TARGET_UNAVAILABLE')
             try:
                 result_value(self.rpc('tools/call',{'name':'whois','arguments':{
                     **self.binding,'agent_id':target,'registration_token':pending['registration_token']}}))
@@ -1820,7 +1909,7 @@ def _serialized(method):
 # provider execution is deliberately outside these methods/scopes.
 for _method in ('observe', 'reconnect', 'activate_credential', 'create', 'enroll',
                 'save_metadata', 'save_profile', 'record_session', 'finalize_registration',
-                'finalize_enrollment', 'replay_pending'):
+                'finalize_enrollment', 'replay_pending', 'register_intent', 'inspect_owner'):
     if hasattr(RuntimeClient, _method):
         setattr(RuntimeClient, _method, _serialized(getattr(RuntimeClient, _method)))
 

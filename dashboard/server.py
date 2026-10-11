@@ -43,7 +43,8 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 14
+API_GENERATION = 15
+GLOBAL_MODE = os.environ.get("AGENTSTACK_RUNTIME_MODE", "").strip() == "global"
 
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
@@ -186,7 +187,7 @@ THEME_ASSETS = {
     "/tour_cue.js": (os.path.join(HERE, "tour_cue.js"), "text/javascript; charset=utf-8"),
     "/tour_cue.css": (os.path.join(HERE, "tour_cue.css"), "text/css; charset=utf-8"),
 }
-DB_PATH = _resolve_mail_db()
+DB_PATH = "" if GLOBAL_MODE else _resolve_mail_db()
 MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/.agentstack/mail/.env")
 MAIL_HTTP_BEARER_MODE = _env_text(
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE", "auto"
@@ -8478,7 +8479,61 @@ def mail_watcher_health() -> dict:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+def is_public_static(path):
+    return path == '/' or path in THEME_ASSETS
+
+
 class Handler(BaseHTTPRequestHandler):
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        if not GLOBAL_MODE:
+            return True
+        # One rule for every verb and route, including future local operations.
+        # Only exact installed static GET/HEAD resources are public.
+        path = urlparse(self.path).path
+        if self.command in {'GET','HEAD'} and is_public_static(path):
+            return True
+        try:
+            try:
+                from dashboard.http_operator import Admission
+            except ModuleNotFoundError:
+                from http_operator import Admission
+            home = os.environ.get('AGENTSTACK_HOME', '')
+            Admission(home, f'http://{BIND_HOST}:{self.server.server_port}').http(self.headers, self.client_address[0])
+            return True
+        except Exception as exc:
+            self._global_failure(exc)
+            return False
+
+    def _global_failure(self, exc):
+        reason=str(exc)
+        if not re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}',reason):reason='GLOBAL_BACKEND_UNAVAILABLE'
+        status=getattr(exc,'status',None) or ({'QUERY_INVALID':400,'CURSOR_INVALID':400,
+            'UI_VIEWPOINT_REQUIRED':400,'NAME_INVALID':400,'CLIENT_NAME_INVALID':400,
+            'TARGET_UNAVAILABLE':404,'MESSAGE_UNAVAILABLE':404,
+            **dict.fromkeys(('NAME_CONFLICT','OWNER_REQUIRED','REGISTRATION_PENDING_CONFLICT',
+                'REGISTRATION_OWNER_CONFLICT','EXISTING_IDENTITY_REQUIRED','EXISTING_CLIENT_REQUIRED',
+                'CLIENT_SELECTION_REQUIRED','CLIENT_ROOT_IS_CHILD','REGISTRATION_OWNERSHIP_VERIFIED_RETRY_REQUIRED'),409)}.get(reason,503))
+        self._send(status,json.dumps({'ok':False,'reason':reason}).encode(),'application/json; charset=utf-8')
+
+    def _global_get(self, path):
+        try:
+            try:
+                from dashboard.global_backend import Backend
+            except ModuleNotFoundError:
+                from global_backend import Backend
+            if path == '/api/version':
+                payload = {'name':'orrery-telemetry','version':_resolve_version(),'api':API_GENERATION,
+                    'runtime_mode':'global','capabilities':{'operator_http_admission':1,'ui_read':1,
+                    'global_spawn':1,'instruction_migration':0,'global_dashboard_ui':0}}
+            else:
+                backend = Backend(os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG',''))
+                payload = backend.get(path,parse_qs(urlparse(self.path).query,keep_blank_values=True))
+            self._send(200,json.dumps(payload,ensure_ascii=False).encode(),'application/json; charset=utf-8')
+        except Exception as exc:
+            self._global_failure(exc)
+
     def log_message(self, *a):  # サイレント
         pass
 
@@ -8488,7 +8543,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _single_flight(self, key: tuple, compute) -> bytes | None:
         """A shared display body, or None after answering 503 busy."""
@@ -8505,8 +8561,16 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return None
 
+    def do_HEAD(self):
+        if GLOBAL_MODE and is_public_static(urlparse(self.path).path):
+            self.do_GET()
+        else:self.send_error(501,'Unsupported method')
+
     def do_GET(self):
         path = urlparse(self.path).path
+        if GLOBAL_MODE and not is_public_static(path):
+            self._global_get(path)
+            return
         if path == "/":
             try:
                 with open(INDEX_HTML, "rb") as f:
@@ -8791,6 +8855,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if GLOBAL_MODE:
+            try:
+                try:
+                    from dashboard.global_backend import Backend, BackendError
+                except ModuleNotFoundError:
+                    from global_backend import Backend, BackendError
+                if self.headers.get_content_type()!='application/json':raise BackendError('JSON_REQUIRED',415)
+                lengths=self.headers.get_all('Content-Length',[])
+                if len(lengths)!=1 or not lengths[0].isascii() or not lengths[0].isdigit():raise BackendError('QUERY_INVALID',400)
+                length=int(lengths[0])
+                if not 0<length<=65536:raise BackendError('PAYLOAD_TOO_LARGE',413)
+                try:payload=json.loads(self.rfile.read(length))
+                except (json.JSONDecodeError,UnicodeDecodeError) as exc:
+                    raise BackendError('QUERY_INVALID',400) from exc
+                def cwd(value):
+                    if not os.path.isabs(value) or not os.path.isdir(value):raise BackendError('SPAWN_DIRECTORY_INVALID',400)
+                    resolved=os.path.realpath(value)
+                    if not any(_is_within_root(resolved,root) for root in _spawn_roots()):raise BackendError('SPAWN_DIRECTORY_OUTSIDE_ROOTS',400)
+                    return resolved
+                result=Backend(os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG','')).post(path,payload,cwd,_open_terminal_tmux)
+                self._send(200 if result.get('ok') else 409,json.dumps(result,ensure_ascii=False).encode(),'application/json; charset=utf-8')
+            except Exception as exc:
+                self._global_failure(exc)
+            return
         if path not in ("/api/jump", "/api/kill", "/api/exit",
                         "/api/annotate", "/api/spawn", "/api/reactivate",
                         "/api/jserr"):
@@ -9103,6 +9191,15 @@ def _log_js_error(body: dict) -> dict:
 
 
 def main():
+    if GLOBAL_MODE:
+        # Isolation-only global backend starts no legacy maintenance, providers,
+        # ttyd cleanup or child processes. Request failures never fall back.
+        srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
+        print(f'agent-dashboard global backend on http://{BIND_HOST}:{PORT}/',flush=True)
+        try:srv.serve_forever()
+        except KeyboardInterrupt:pass
+        finally:srv.server_close()
+        return
     _start_supervisor_watchdog()
     _start_child_resume_maintenance()
 
