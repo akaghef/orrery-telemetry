@@ -249,3 +249,5 @@ legacy の Mail runner は従来の service argv を直接実行し、global の
 App の単独配備と marketplace にも正本の共通 loader を同梱します。core の root に対する同じ admission を呼び、旧 mode の単独配備を維持します。
 
 Mail を無効にした global hook は owner の context/credential を読む前に skip します。旧 mode の hook の skip 契約は変えません。dashboard demo は合成の legacy DB 専用で、継承した global の owner 設定を使いません。
+
+Codex/Gemini launcher は新しい tmux pane に選択済みの mode/config/context を渡します。project がある直接 bootstrap は env.sh でその project/MCP URL を上書きせず、mode が未固定の場合だけ共通 selector で installed default を補います。watcher wrapper は環境と `--server-config PATH` / `--server-config=PATH` のどれでも同じ選択結果で config-only / owner watch を分岐します。古い helper の select 未対応は、共通の partial admission に戻し固定理由で拒否します。

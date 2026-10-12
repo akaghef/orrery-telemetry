@@ -2384,13 +2384,15 @@ def main(argv=None):
     parser.add_argument('--runtime-mode', choices=['legacy','global'])
     parser.add_argument('--server-config')
     parser.add_argument('operation', choices=['mode', 'observe', 'reconnect', 'bootstrap', 'launch', 'call',
-                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure', 'watch-service'])
+                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure', 'watch-service', 'watch-auto'])
     parser.add_argument('args', nargs='*')
     a = parser.parse_args(argv)
     try:
         choice = selected(argv)
         if a.operation == 'mode':
             print(choice['mode']); return 0
+        if a.operation == 'watch-auto':
+            a.operation = 'watch-service' if choice['server_config'] is not None else 'watch'
         if a.operation == 'watch-service':
             if choice['mode'] != 'global' or choice['server_config'] is None:
                 raise ClientError('SERVER_CONFIG_REQUIRED')

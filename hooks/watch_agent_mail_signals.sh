@@ -18,8 +18,7 @@ _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/glo
 . "$_ags_global_loader"
 ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
 if [[ "$_ags_selected_rc" == 0 ]]; then
-    if [[ -n "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]]; then _ags_watch_entry=watch-service; else _ags_watch_entry=watch; fi
-    exec python3 "$(dirname "$_ags_global_loader")/runtime_client.py" "$_ags_watch_entry" "$@"
+    exec python3 "$(dirname "$_ags_global_loader")/runtime_client.py" watch-auto "$@"
 fi
 [[ "$_ags_selected_rc" == 125 ]] || exit "$_ags_selected_rc"
 

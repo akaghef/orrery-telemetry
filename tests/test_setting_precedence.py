@@ -767,5 +767,5 @@ def test_the_installed_layout_finds_the_shared_order(tmp_path):
 def test_every_launcher_loads_env_sh_only_through_ags_load_env():
     for name in ("agent-start", "agent-start-codex", "agent-start-gemini"):
         text = (ROOT / "bin" / name).read_text(encoding="utf-8")
-        assert "\nags_load_env\n" in text, name
+        assert '\nags_load_env "$@"\n' in text, name
         assert "env.sh\"" not in text and "/env.sh" not in text, name

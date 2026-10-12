@@ -30,7 +30,7 @@ ags_load_env() {
   # shellcheck source=../../hooks/project-context.sh
   . "$ctx"
   if declare -F ags_client_bootstrap >/dev/null; then
-    ags_client_bootstrap "$envf" || ags_die "runtime mode bootstrap refused"
+    ags_client_bootstrap "$envf" "$@" || ags_die "runtime mode bootstrap refused"
   else
     agentstack_load_installed_env "$envf"
   fi

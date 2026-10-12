@@ -247,3 +247,5 @@ The legacy Mail runner executes the original service argv directly without the g
 Standalone App installs and marketplace payloads also bundle the canonical shared loader. They call the same admission against the core root, preserving standalone legacy installs.
 
 Disabled global Mail hooks skip before reading owner context or credentials. Legacy hook skip behavior stays unchanged. The dashboard demo uses its synthetic legacy DB and excludes inherited global owner settings.
+
+Codex/Gemini launchers pass selected mode/config/context into each new tmux pane. Direct bootstraps with a live project preserve its project/MCP URL; only an unpinned mode is supplemented through the shared selector. The watcher wrapper uses the selected config for both environment and `--server-config PATH` / `--server-config=PATH` forms. Unsupported select operations in old helpers use the same partial admission and fixed refusal reasons.

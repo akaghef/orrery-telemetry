@@ -17,6 +17,13 @@ ags_client_missing_admission() {
   return 125
 }
 
+ags_client_selection_failure() {
+  local selection_rc="$1"
+  shift
+  [[ "$selection_rc" != 64 ]] || return 2
+  ags_client_missing_admission "$@"
+}
+
 ags_client_select() {
   local response ags_selection_rc
   ags_client_missing_admission "$@" 2>/dev/null && ags_selection_rc=0 || ags_selection_rc=$?
@@ -25,9 +32,8 @@ ags_client_select() {
     ags_client_missing_admission "$@"; return $?
   fi
   response="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select "$@" </dev/null)" && ags_selection_rc=0 || ags_selection_rc=$?
-  if [[ "$ags_selection_rc" == 64 ]]; then return 2; fi
   if [[ "$ags_selection_rc" != 0 ]]; then
-    ags_client_missing_admission "$@"; return $?
+    ags_client_selection_failure "$ags_selection_rc" "$@"; return $?
   fi
   case "$response" in
     orrery-client-global-v1|"orrery-client-global-v1"$'\n'*)
@@ -47,11 +53,16 @@ ags_client_bootstrap() {
   local env_file="$1" inherited_mode="${AGENTSTACK_RUNTIME_MODE-}" mode_set="${AGENTSTACK_RUNTIME_MODE+set}" choice admission_rc
   local inherited_config="${AGENTSTACK_GLOBAL_SERVER_CONFIG-}" config_set="${AGENTSTACK_GLOBAL_SERVER_CONFIG+set}"
   shift
-  local env_rc=0 errexit_set= setting assignment system= explicit_mode= continuation= argument
+  local env_rc=0 errexit_set= setting assignment system= explicit_mode= continuation= supplement_default= argument
   for argument in "$@"; do
     case "$argument" in --continue) continuation=1 ;; --system) system=1 ;; --runtime-mode|--runtime-mode=*) explicit_mode=1 ;; esac
   done
-  if [[ "$continuation" == 1 && "$mode_set" == set && -n "${AGENTSTACK_PROJECT_KEY:-}" ]]; then env_file=; fi
+  if [[ "$continuation" == 1 && -n "${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}" ]]; then
+    # Keep the old project guard. Python supplements only mode/config in a
+    # subprocess; installed assignments cannot overwrite this live shell.
+    env_file=
+    if [[ "$mode_set" != set ]]; then set -- "$@" --bootstrap; supplement_default=1; fi
+  fi
   if [[ "$system" == 1 && ( -e "$env_file" || -L "$env_file" ) ]]; then
     unset AGENTSTACK_RUNTIME_MODE AGENTSTACK_GLOBAL_SERVER_CONFIG AGENTSTACK_CLIENT_CONFIG
   fi
@@ -98,14 +109,18 @@ ags_client_bootstrap() {
   if [[ "$context_set" == set ]]; then export AGENTSTACK_CLIENT_CONFIG="$inherited_context";
   elif [[ "$mode_set" == set ]]; then unset AGENTSTACK_CLIENT_CONFIG; fi
   ags_client_missing_admission "$@" 2>/dev/null && admission_rc=0 || admission_rc=$?
-  if [[ "$admission_rc" == 125 ]]; then export AGENTSTACK_RUNTIME_MODE=legacy; return 0; fi
+  if [[ "$admission_rc" == 125 && "$supplement_default" != 1 ]]; then export AGENTSTACK_RUNTIME_MODE=legacy; return 0; fi
   if [[ ! -f "$AGS_CLIENT_LOADER_DIR/runtime_client.py" ]]; then
-    ags_client_missing_admission || { [[ "$?" == 125 ]] && return 0; return 2; }
-  fi
-  if [[ "$mode_set" != set ]]; then
-    choice="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select --installed-default --shell "$@")" || return 2
+    admission_rc=2
+  elif [[ "$mode_set" != set ]]; then
+    choice="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select --installed-default --shell "$@")" && admission_rc=0 || admission_rc=$?
   else
-    choice="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select --shell "$@")" || return 2
+    choice="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select --shell "$@")" && admission_rc=0 || admission_rc=$?
+  fi
+  if [[ "$admission_rc" != 0 ]]; then
+    ags_client_selection_failure "$admission_rc" "$@" && admission_rc=0 || admission_rc=$?
+    if [[ "$admission_rc" == 125 ]]; then export AGENTSTACK_RUNTIME_MODE=legacy; return 0; fi
+    return "$admission_rc"
   fi
   eval "$choice"
 }

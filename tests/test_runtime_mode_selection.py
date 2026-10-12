@@ -414,3 +414,48 @@ def test_disabled_global_hook_selection_never_reads_context_owner(selector,tmp_p
     def forbidden(*args,**kwargs):pytest.fail('disabled hook read owner bytes')
     monkeypatch.setitem(selector['selected'].__globals__,'read_json',forbidden)
     assert selector['selected'](['--disabled-hook'])['mode']=='global'
+
+
+@pytest.mark.parametrize('installed', ['legacy','global'])
+@pytest.mark.parametrize('project_variable', ['AGENTSTACK_PROJECT_KEY','PROJECT_KEY'])
+def test_unpinned_continuation_keeps_live_project_and_endpoint(tmp_path,installed,project_variable):
+    env_file=tmp_path/'env.sh'
+    env_file.write_text('export AGENTSTACK_RUNTIME_MODE='+installed+'\nexport AGENTSTACK_PROJECT_KEY=/installed/project\nexport AGENTSTACK_MCP_URL=http://127.0.0.1:1/wrong\n')
+    env={**os.environ,'HOME':str(tmp_path),'AGENTSTACK_HOME':str(tmp_path),
+         project_variable:'/live/project','AGENTSTACK_MCP_URL':'http://127.0.0.1:2/live',
+         'AGENTSTACK_LABEL_PREFIX':'org.agentstack.test.r254-continuation'}
+    for key in ('AGENTSTACK_RUNTIME_MODE','AGENTSTACK_GLOBAL_SERVER_CONFIG','AGENTSTACK_CLIENT_CONFIG','AGENT_NAME','AGENTSTACK_SESSION_ID'):
+        env.pop(key,None)
+    if project_variable=='PROJECT_KEY':env.pop('AGENTSTACK_PROJECT_KEY',None)
+    command='. "$1"; ags_client_bootstrap "$2" --continue || exit $?; printf "%s|%s|%s" "$AGENTSTACK_RUNTIME_MODE" "${AGENTSTACK_PROJECT_KEY:-$PROJECT_KEY}" "$AGENTSTACK_MCP_URL"'
+    result=subprocess.run(['/bin/bash','-c',command,'fixture',str(ROOT/'bin/lib/global-client-loader.sh'),str(env_file)],env=env,capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    assert result.stdout==installed+'|/live/project|http://127.0.0.1:2/live'
+
+
+@pytest.mark.parametrize('provider',['codex','gemini'])
+def test_legacy_launcher_passes_pinned_selection_to_new_tmux_pane(tmp_path,provider):
+    import shutil
+    stack=tmp_path/'stack';(stack/'bin').mkdir(parents=True)
+    shutil.copytree(ROOT/'bin/lib',stack/'bin/lib')
+    shutil.copytree(ROOT/'hooks',stack/'hooks')
+    launcher=stack/'bin'/('agent-start-'+provider)
+    shutil.copyfile(ROOT/'bin'/launcher.name,launcher)
+    (stack/'bin'/('agentstack-'+provider+'-bootstrap')).write_text('return 0\n')
+    capture=tmp_path/'argv.json';fake=tmp_path/'fake-tmux'
+    fake.write_text('#!'+sys.executable+'\nimport json,os,sys\nopen(os.environ["CAPTURE"],"w").write(json.dumps(sys.argv[1:]))\n');fake.chmod(0o755)
+    library=stack/'bin/lib/agentstack-launch.sh'
+    library.write_text(library.read_text()+'\nags_resolve_tmux() { printf "%s" "$FAKE_TMUX"; }\n')
+    (stack/'env.sh').write_text('export AGENTSTACK_RUNTIME_MODE=global\n')
+    env={**os.environ,'HOME':str(tmp_path),'AGENTSTACK_HOME':str(stack),'AGENTSTACK_RUNTIME_MODE':'legacy',
+         'AGENTSTACK_CODEX_BIN':'/usr/bin/true','AGENTSTACK_GEMINI_BIN':'/usr/bin/true',
+         'AGENTSTACK_PROJECT_KEY':str(tmp_path),'AGENTSTACK_LABEL_PREFIX':'org.agentstack.test.r254-pane',
+         'FAKE_TMUX':str(fake),'CAPTURE':str(capture),'SHELL':'/usr/bin/true'}
+    for key in ('TMUX','TMUX_PANE','AGENTSTACK_CLIENT_CONFIG','AGENTSTACK_GLOBAL_SERVER_CONFIG'):env.pop(key,None)
+    result=subprocess.run(['/bin/bash',str(launcher),str(tmp_path)],env=env,capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stderr
+    args=json.loads(capture.read_text())
+    values=[args[i+1] for i,value in enumerate(args[:-1]) if value=='-e']
+    assert 'AGENTSTACK_RUNTIME_MODE=legacy' in values
+    assert 'AGENTSTACK_GLOBAL_SERVER_CONFIG=' in values
+    assert 'AGENTSTACK_CLIENT_CONFIG=' in values

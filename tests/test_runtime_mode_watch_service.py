@@ -226,3 +226,44 @@ def test_watcher_transport_outage_waits_rescue_interval_without_event_spin(tmp_p
     tmp_path.chmod(0o700)
     loop(tmp_path,api,lambda:False,Stop())
     assert waits==[30]
+
+
+@pytest.mark.parametrize('source',['env','argument','equals'])
+def test_watcher_auto_dispatch_uses_selected_config(server,monkeypatch,source):
+    config=str(server['config_path']);calls=[]
+    monkeypatch.delenv('AGENTSTACK_CLIENT_CONFIG',raising=False)
+    monkeypatch.delenv('AGENTSTACK_GLOBAL_SERVER_CONFIG',raising=False)
+    monkeypatch.setenv('AGENTSTACK_RUNTIME_MODE','global')
+    args=['watch-auto']
+    if source=='env':monkeypatch.setenv('AGENTSTACK_GLOBAL_SERVER_CONFIG',config)
+    elif source=='argument':args=['--server-config',config,*args]
+    else:args=['--server-config='+config,*args]
+    monkeypatch.setitem(api['delivery_contract'](),'watch_service',lambda path,namespace:calls.append(str(path)))
+    # The operation must not construct an owner client for a config-only watch.
+    monkeypatch.setitem(api['main'].__globals__,'configured',lambda *a,**k:pytest.fail('owner construction'))
+    assert api['main'](args)==0
+    assert calls==[config]
+
+
+@pytest.mark.parametrize('source',['env','argument','equals'])
+def test_actual_watcher_wrapper_forwards_one_auto_entry(server,tmp_path,monkeypatch,source):
+    import shutil,subprocess,sys
+    from test_global_runtime_delivery import ROOT
+    root=tmp_path/'install';(root/'hooks').mkdir(parents=True);(root/'bin/lib').mkdir(parents=True)
+    for name in ('runtime_client.py','global-client-loader.sh','agentstack-register.sh'):
+        shutil.copyfile(ROOT/'bin/lib'/name,root/'bin/lib'/name)
+    wrapper=root/'hooks/watch_agent_mail_signals.sh'
+    shutil.copyfile(ROOT/'hooks/watch_agent_mail_signals.sh',wrapper)
+    fake=tmp_path/'fake';fake.mkdir();python=fake/'python3'
+    python.write_text('#!'+sys.executable+'\nimport json,subprocess,sys\n'
+        'if sys.argv[2]=="select":sys.exit(subprocess.call([sys.executable,*sys.argv[1:]]))\n'
+        'print(json.dumps(sys.argv[2:]))\n');python.chmod(0o755)
+    env={**os.environ,'PATH':str(fake)+os.pathsep+os.environ['PATH'],'AGENTSTACK_RUNTIME_MODE':'global'}
+    for key in ('AGENTSTACK_CLIENT_CONFIG','AGENTSTACK_GLOBAL_SERVER_CONFIG'):env.pop(key,None)
+    args=[];config=str(server['config_path'])
+    if source=='env':env['AGENTSTACK_GLOBAL_SERVER_CONFIG']=config
+    elif source=='argument':args=['--server-config',config]
+    else:args=['--server-config='+config]
+    result=subprocess.run(['/bin/bash',str(wrapper),*args],env=env,capture_output=True,text=True,timeout=10)
+    assert result.returncode==0,result.stderr
+    assert json.loads(result.stdout)==['watch-auto',*args]

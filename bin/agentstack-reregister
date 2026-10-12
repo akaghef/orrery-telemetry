@@ -38,7 +38,7 @@ fail_diagnostic() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/global-client-loader.sh" || { return 2 2>/dev/null || exit 2; }
-ags_client_bootstrap "${AGENTSTACK_ENV_FILE:-${AGENTSTACK_HOME:-$SCRIPT_DIR/..}/env.sh}" || exit 2
+ags_client_bootstrap "${AGENTSTACK_ENV_FILE:-${AGENTSTACK_HOME:-$SCRIPT_DIR/..}/env.sh}" "$@" || exit 2
 ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
 [[ "$_ags_selected_rc" == 0 || "$_ags_selected_rc" == 125 ]] || { return "$_ags_selected_rc" 2>/dev/null || exit "$_ags_selected_rc"; }
 if [[ "$_ags_selected_rc" == 0 ]]; then
