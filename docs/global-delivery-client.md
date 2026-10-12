@@ -251,3 +251,5 @@ App の単独配備と marketplace にも正本の共通 loader を同梱しま�
 Mail を無効にした global hook は owner の context/credential を読む前に skip します。旧 mode の hook の skip 契約は変えません。dashboard demo は合成の legacy DB 専用で、継承した global の owner 設定を使いません。
 
 Codex/Gemini launcher は新しい tmux pane に選択済みの mode/config/context を渡します。project がある直接 bootstrap は env.sh でその project/MCP URL を上書きせず、mode が未固定の場合だけ共通 selector で installed default を補います。watcher wrapper は環境と `--server-config PATH` / `--server-config=PATH` のどれでも同じ選択結果で config-only / owner watch を分岐します。古い helper の select 未対応は、共通の partial admission に戻し固定理由で拒否します。
+
+mode 未固定の継続で配置済み env.sh を selector が確認できない場合は `RUNTIME_DEFAULT_UNAVAILABLE` で停止します。helper を再配備してから同じ起動を再実行してください。env.sh が legacy でも未確認の設定を成功扱いせず、固定済み legacy と設定ファイルのない既定 legacy は維持します。installer の `--literal` は1つの引数としてだけ扱い、説明文中の同じ文字列には反応しません。

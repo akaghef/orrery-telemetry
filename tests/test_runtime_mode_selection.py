@@ -459,3 +459,91 @@ def test_legacy_launcher_passes_pinned_selection_to_new_tmux_pane(tmp_path,provi
     assert 'AGENTSTACK_RUNTIME_MODE=legacy' in values
     assert 'AGENTSTACK_GLOBAL_SERVER_CONFIG=' in values
     assert 'AGENTSTACK_CLIENT_CONFIG=' in values
+
+
+@pytest.mark.parametrize('provider', ['codex', 'gemini'])
+@pytest.mark.parametrize('helper', ['current', 'missing', 'old'])
+@pytest.mark.parametrize('project_variable', ['AGENTSTACK_PROJECT_KEY', 'PROJECT_KEY'])
+@pytest.mark.parametrize('default', ['legacy', 'global', 'invalid', 'unreadable', 'dangling', 'absent'])
+@pytest.mark.parametrize('pinned', [False, True])
+def test_actual_continuation_never_admits_an_unverified_default(
+    tmp_path, provider, helper, project_variable, default, pinned
+):
+    import shutil
+    stack = tmp_path / 'install'
+    lib = stack / 'bin/lib'
+    lib.mkdir(parents=True)
+    shutil.copyfile(ROOT / 'bin/lib/global-client-loader.sh', lib / 'global-client-loader.sh')
+    if helper == 'current':
+        shutil.copyfile(ROOT / 'bin/lib/runtime_client.py', lib / 'runtime_client.py')
+    elif helper == 'old':
+        (lib / 'runtime_client.py').write_text('raise SystemExit(2)\n')
+    entry = f'agentstack-{provider}-bootstrap'
+    shutil.copyfile(ROOT / 'bin' / entry, stack / 'bin' / entry)
+    # Observe the actual legacy registration boundary, never credentials/network.
+    (lib / 'agentstack-register.sh').write_text(
+        'printf "legacy_register_reached mode=%s url=%s\\n" '
+        '"$AGENTSTACK_RUNTIME_MODE" "$AGENTSTACK_MCP_URL"; exit 0\n'
+    )
+    env_file = stack / 'env.sh'
+    if default == 'dangling':
+        env_file.symlink_to(stack / 'missing-env.sh')
+    elif default != 'absent':
+        value = 'invalid' if default == 'invalid' else ('global' if default == 'unreadable' else default)
+        env_file.write_text(
+            f'export AGENTSTACK_RUNTIME_MODE={value}\n'
+            'export AGENTSTACK_PROJECT_KEY=/must-not-replace-live\n'
+            'export PROJECT_KEY=/must-not-replace-live\n'
+            'export AGENTSTACK_MCP_URL=http://must-not-replace-live.invalid\n'
+        )
+        if default == 'unreadable':
+            env_file.chmod(0)
+    env = {**os.environ, 'HOME': str(tmp_path), 'AGENTSTACK_HOME': str(stack),
+           'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.continuation-default',
+           'AGENTSTACK_MCP_URL': 'http://127.0.0.1:1/live'}
+    for key in ('AGENTSTACK_RUNTIME_MODE', 'AGENTSTACK_CLIENT_CONFIG',
+                'AGENTSTACK_GLOBAL_SERVER_CONFIG', 'AGENTSTACK_ENV_FILE',
+                'AGENTSTACK_PROJECT_KEY', 'PROJECT_KEY', 'AGENT_NAME',
+                'AGENTSTACK_SESSION_ID', 'TMUX', 'TMUX_PANE'):
+        env.pop(key, None)
+    env[project_variable] = '/fixture/live'
+    if pinned:
+        env['AGENTSTACK_RUNTIME_MODE'] = 'legacy'
+    result = subprocess.run(['/bin/bash', str(stack / 'bin' / entry)],
+                            env=env, capture_output=True, text=True, timeout=20)
+    allowed = pinned or default == 'absent' or (helper == 'current' and default == 'legacy')
+    if allowed:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ('legacy_register_reached mode=legacy '
+                                 'url=http://127.0.0.1:1/live\n')
+    else:
+        assert result.returncode != 0
+        assert not result.stdout
+        reason = ('RUNTIME_DEFAULT_UNAVAILABLE' if helper != 'current' or default in ('unreadable', 'dangling')
+                  else 'RUNTIME_MODE_INVALID' if default == 'invalid' else 'CONTEXT_UNAVAILABLE')
+        assert reason in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize('arguments, literal', [
+    (['--task-description', 'use --literal here'], False),
+    (['--task-description', ' --literal '], False),
+    (['--name', '--literal-like'], False),
+    (['--literal=value'], False),
+    (['--literal'], True),
+])
+def test_literal_bootstrap_marker_is_one_complete_argument(tmp_path, arguments, literal):
+    env_file = tmp_path / 'env.sh'
+    env_file.write_text('export AGENTSTACK_RUNTIME_MODE=legacy\n')
+    env = {**os.environ, 'HOME': str(tmp_path), 'AGENTSTACK_HOME': str(tmp_path),
+           'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.literal-argument'}
+    for key in ('AGENTSTACK_RUNTIME_MODE', 'AGENTSTACK_CLIENT_CONFIG',
+                'AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+        env.pop(key, None)
+    script = '. "$1"; env_file="$2"; shift 2; ags_client_bootstrap "$env_file" "$@"'
+    result = subprocess.run(['/bin/bash', '-c', script, 'fixture',
+                             str(ROOT / 'bin/lib/global-client-loader.sh'), str(env_file), *arguments],
+                            env=env, capture_output=True, text=True)
+    # The ordinary entry has no installer literal reader. Only the exact
+    # internal marker may require it; description values must stay ordinary.
+    assert result.returncode == (2 if literal else 0), result.stderr
+    assert ('RUNTIME_DEFAULT_UNAVAILABLE' in result.stderr) is literal

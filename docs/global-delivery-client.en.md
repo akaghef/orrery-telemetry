@@ -249,3 +249,5 @@ Standalone App installs and marketplace payloads also bundle the canonical share
 Disabled global Mail hooks skip before reading owner context or credentials. Legacy hook skip behavior stays unchanged. The dashboard demo uses its synthetic legacy DB and excludes inherited global owner settings.
 
 Codex/Gemini launchers pass selected mode/config/context into each new tmux pane. Direct bootstraps with a live project preserve its project/MCP URL; only an unpinned mode is supplemented through the shared selector. The watcher wrapper uses the selected config for both environment and `--server-config PATH` / `--server-config=PATH` forms. Unsupported select operations in old helpers use the same partial admission and fixed refusal reasons.
+
+An unpinned continuation stops with `RUNTIME_DEFAULT_UNAVAILABLE` if its selector cannot verify an installed env.sh. Redeploy the helper and rerun the same entry. An unverified file is refused even if it says legacy; pinned legacy and the default legacy path without an env.sh remain available. The installer marker `--literal` matches one complete argument, never text inside a description.

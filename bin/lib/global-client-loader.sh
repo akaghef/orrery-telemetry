@@ -53,9 +53,10 @@ ags_client_bootstrap() {
   local env_file="$1" inherited_mode="${AGENTSTACK_RUNTIME_MODE-}" mode_set="${AGENTSTACK_RUNTIME_MODE+set}" choice admission_rc
   local inherited_config="${AGENTSTACK_GLOBAL_SERVER_CONFIG-}" config_set="${AGENTSTACK_GLOBAL_SERVER_CONFIG+set}"
   shift
-  local env_rc=0 errexit_set= setting assignment system= explicit_mode= continuation= supplement_default= argument
+  local env_rc=0 errexit_set= setting assignment system= explicit_mode= continuation= supplement_default= literal= argument
+  local default_env_file="$env_file"
   for argument in "$@"; do
-    case "$argument" in --continue) continuation=1 ;; --system) system=1 ;; --runtime-mode|--runtime-mode=*) explicit_mode=1 ;; esac
+    case "$argument" in --continue) continuation=1 ;; --system) system=1 ;; --literal) literal=1 ;; --runtime-mode|--runtime-mode=*) explicit_mode=1 ;; esac
   done
   if [[ "$continuation" == 1 && -n "${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}" ]]; then
     # Keep the old project guard. Python supplements only mode/config in a
@@ -71,7 +72,7 @@ ags_client_bootstrap() {
   if [[ -e "$env_file" || -L "$env_file" ]]; then
     [[ -f "$env_file" && -r "$env_file" ]] || { printf '%s\n' RUNTIME_DEFAULT_UNAVAILABLE >&2; return 2; }
     set +e
-    if [[ " $* " == *" --literal "* ]]; then
+    if [[ "$literal" == 1 ]]; then
       # The installer already resolves settings as data. Reuse that reader;
       # never execute unrelated assignments or shell expansions during install.
       if ! declare -F agentstack_installed_env_value >/dev/null; then
@@ -118,6 +119,12 @@ ags_client_bootstrap() {
     choice="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select --shell "$@")" && admission_rc=0 || admission_rc=$?
   fi
   if [[ "$admission_rc" != 0 ]]; then
+    # A partial helper cannot prove an installed default that was deliberately
+    # kept out of this live shell. Unknown selection is never legacy success.
+    if [[ "$supplement_default" == 1 && "$admission_rc" != 64 && ( -e "$default_env_file" || -L "$default_env_file" ) ]]; then
+      printf '%s\n' RUNTIME_DEFAULT_UNAVAILABLE >&2
+      return 2
+    fi
     ags_client_selection_failure "$admission_rc" "$@" && admission_rc=0 || admission_rc=$?
     if [[ "$admission_rc" == 125 ]]; then export AGENTSTACK_RUNTIME_MODE=legacy; return 0; fi
     return "$admission_rc"
