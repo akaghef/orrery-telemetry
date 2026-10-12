@@ -158,11 +158,13 @@ App の `AGENTSTACK_CODEX_APP_COLD_WAKE`、`AGENTSTACK_CODEX_BINARY`、`AGENTSTA
 
 [English](global-delivery-client.en.md#operator-ui-access)
 
-既定の導入・旧 dashboard は変わりません。API 世代15の global backend は、完成した S2c candidate を私有管理 socket 経由で読みます。dashboard は Mail の SQLite を開きません。公開 Mail tool の追加はありません。画面と cockpit の接続は後続なので、`global_dashboard_ui=0` の間は API の世代だけで画面を有効にしないでください。
+既定の導入・旧 dashboard は変わりません。API 世代15の global backend は、完成した S2c candidate を私有管理 socket 経由で読みます。dashboard は Mail の SQLite を開きません。公開 Mail tool の追加はありません。API 16 では `global_dashboard_ui=1`・`instruction_migration=1` として [global dashboard](dashboard.md#global-mail-view) を有効にします。cockpit の接続は後続です。API の世代だけで画面の対応を推測しないでください。
 
 専用の一時 HOME を使い、`AGENTSTACK_RUNTIME_MODE=global`、`AGENTSTACK_GLOBAL_SERVER_CONFIG`（完成した candidate の `server-config.json`）、`AGENTSTACK_MCP_URL`（同じ隔離 Mail の HTTP endpoint）、`AGENTSTACK_HOME`（同じ isolation root の `agentstack`）、`AGENTSTACK_PORT`（専用の空き port）を明示します。設定が壊れたときに旧 DB へ戻ることはありません。実サービスの切替は別の手順です。
 
 最初にローカルの operator が同じ隔離先の `AGENTSTACK_HOME` を明示して `agentstack-http-operator configure` を実行します。CLI も未設定なら `HTTP_OPERATOR_HOME_REQUIRED` で拒否し、実 HOME を既定にしません。固定の `runtime/http-operator.json` を0600で新規作成し、既存 file は上書きしません。`agentstack-http-operator show` で表示した値を HTTP の `Authorization: Bearer …` に渡します。これは agent の登録 token とは別です。値を URL、ログ、共有ファイルに載せないでください。失効させる場合は、利用する dashboard と cockpit を停止し、この固定 file を operator が退避してから configure し直します。
+
+隔離 dashboard の URL を開き、Unlock にこの operator capability を貼り付けます。値は sessionStorage に保持して reload に使い、URL には入れません。同じ origin で開いている tab は BroadcastChannel で同じ capability を共有し、Lock も伝えます。別 origin は別に Unlock が必要です。Lock は参加中の online page の Mail と資格情報を消しますが、閉じた・復元した tab、opener・duplicate が持つ sessionStorage のコピー、ページへの権限を与えた拡張機能、別 browser profile のコピーは失効しません。すべてのコピーを失効させるには server の capability を再作成して再起動します。OS 利用者と browser profile が信頼境界です。誤った・古い capability は403、不在・安全でない capability file は503で、旧経路へ fallback しません。
 
 HTTP は TCP 上の UID を直接証明できません。私有 file を読める利用者の capability を証明にし、loopback・設定済み Host・提示された Origin/Referer/Fetch Metadata を同じ入口で確認します。static の GET/HEAD 以外は、将来追加される route もこの入口を通ります。capability を盗める同 UID/root、XSS、ページへの権限を与えた拡張機能は、この境界では防げません。別の利用者と1台の Mail を共有する用途は支えません。
 

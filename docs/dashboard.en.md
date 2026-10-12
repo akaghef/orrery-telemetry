@@ -449,3 +449,22 @@ The public [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) runs 
 - [API reference](api.en.md)
 - [Configuration](configuration.en.md)
 - [Troubleshooting](troubleshooting.en.md)
+
+<a id="global-mail-view"></a>
+## Mail in isolated global mode
+
+Legacy mode remains the default. The global dashboard requires an isolated global server and operator capability. Follow [unlock and Lock](global-delivery-client.en.md#operator-ui-access); never paste an agent owner token. The page checks its screen capability.
+
+Choose a numeric identity in `View as`, then open a NETWORK edge. Mail visible to that viewpoint appears in the existing right drawer. Replies link by `reply_to` message ID; indentation stays bounded even for long chains. Bodies are literal text, never executable HTML. Unavailable earlier Mail gets a short notice without exposing hidden IDs, bodies or recipients. `Load more visible mail` passes through the server’s keyset cursor.
+
+Save `?view=net&view_as_agent_id=ID&message_id=ID`. Old numeric `thread_id` links resolve a visible origin. Old labels retain separate source groups, never inferred replies or subject joins. Conflicting old/new IDs are refused.
+
+Old instructions produce a short English notice with `Details: English / 日本語`. Cleanup only copies a command; nothing is deleted automatically. Dismiss hides that exact finding for this page session. Settings still shows it; changes to path, block hash, version or state bring it back. Findings refresh every 60 seconds and on explicit inspection. Embedded pages defer the notice to their host. See [legacy block migration](instruction-migration.en.md#legacy-blocks). Session-start candidate observations do not prove what instructions the running session loaded.
+
+MAIL shows delivery `signal.status`, separately from server readiness. A red delivery state does not disable requests the server can accept. The roster does not infer process activity; unverified session activity is shown as unavailable.
+
+NEW AGENT uses fixed client slots. Existing names offer resume of the same identity without issuing credentials. Missing configuration or trust returns an explicit operator action. Recent work folders retain ten entries and consume the old scalar once. Work folders are not Mail scopes. The browser uses existing `AGENTSTACK_SPAWN_ROOTS`; deliverables use only explicit `AGENTSTACK_DELIVERABLE_ROOTS`. Unset deliverable roots yield an empty result, with no cwd/project fallback.
+
+Legacy screens and routes are retained. Cockpit’s global bridge and right-pane integration follow separately. A new dashboard with an old cockpit keeps the cockpit’s legacy display and does not infer global screen capabilities.
+
+Global network activity is shown as `ACTIVITY UNKNOWN`. A read projection for actual working/waiting, context, and parent/child state is required before PR7 switches the default.

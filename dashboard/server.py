@@ -43,7 +43,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 15
+API_GENERATION = 16
 GLOBAL_MODE = os.environ.get("AGENTSTACK_RUNTIME_MODE", "").strip() == "global"
 
 # `server.py` is both an executable script and an importable dashboard module
@@ -174,6 +174,8 @@ BIND_HOST = _env_text("AGENTSTACK_BIND_HOST", "127.0.0.1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 THEME_ASSETS = {
+    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","network_node.js")},
+    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google")},
     "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
     "/theme_controller.js": (
         os.path.join(HERE, "theme_controller.js"),
@@ -247,6 +249,12 @@ def _render_dashboard_index(
         + ";"
     ).encode()
     return source.replace(_DASHBOARD_CONFIG_MARKER, replacement, 1)
+
+
+def _global_dashboard_index(source):
+    try:from dashboard.global_page import render
+    except ModuleNotFoundError:from global_page import render
+    return render(_render_dashboard_index(source))
 
 
 def _resolve_version() -> str:
@@ -1781,6 +1789,8 @@ def _deliverable_roots() -> list[str]:
     configured = os.environ.get("AGENTSTACK_DELIVERABLE_ROOTS", "").strip()
     if configured:
         candidates = configured.split(os.pathsep)
+    elif GLOBAL_MODE:
+        return []
     else:
         base = PROJECT_KEY if os.path.isabs(PROJECT_KEY) else ""
         if not base:
@@ -1825,7 +1835,7 @@ def _deliverable_roots() -> list[str]:
 
 def _deliverable_location(path: str, root: str) -> tuple[str, str]:
     """Return ``(relative_path, obsidian_vault_name)`` for one result."""
-    if VAULT:
+    if VAULT and not GLOBAL_MODE:
         vault_root = os.path.realpath(VAULT)
         real_path = os.path.realpath(path)
         try:
@@ -1861,6 +1871,8 @@ def _deliverables_index() -> dict:
                     continue
                 fp = os.path.join(dp, fn)
                 real_fp = os.path.realpath(fp)
+                if GLOBAL_MODE and not _is_within_root(real_fp, root):
+                    continue
                 if real_fp in seen_files:
                     continue
                 seen_files.add(real_fp)
@@ -8526,7 +8538,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/version':
                 payload = {'name':'orrery-telemetry','version':_resolve_version(),'api':API_GENERATION,
                     'runtime_mode':'global','capabilities':{'operator_http_admission':1,'ui_read':1,
-                    'global_spawn':1,'instruction_migration':0,'global_dashboard_ui':0}}
+                    'global_spawn':1,'instruction_migration':1,'global_dashboard_ui':1}}
+            elif path == '/api/fs/dirs':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)-{'path'} or len(query.get('path',[]))>1:
+                    raise ValueError('QUERY_INVALID')
+                payload={'ok':True,'runtime_mode':'global',**spawn_directory_suggestions((query.get('path') or [''])[0])}
+            elif path == '/api/deliverables':
+                payload={'ok':True,'runtime_mode':'global','configured':bool(os.environ.get('AGENTSTACK_DELIVERABLE_ROOTS','').strip()),'items':_deliverables_index()}
             else:
                 backend = Backend(os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG',''))
                 payload = backend.get(path,parse_qs(urlparse(self.path).query,keep_blank_values=True))
@@ -8576,7 +8595,7 @@ class Handler(BaseHTTPRequestHandler):
                 with open(INDEX_HTML, "rb") as f:
                     self._send(
                         200,
-                        _render_dashboard_index(f.read()),
+                        _global_dashboard_index(f.read()) if GLOBAL_MODE else _render_dashboard_index(f.read()),
                         "text/html; charset=utf-8",
                     )
             except FileNotFoundError:

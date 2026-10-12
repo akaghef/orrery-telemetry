@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":15}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":16}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -69,9 +69,20 @@ See [Installation](install.en.md#version) for version resolution order.
 - `version`: when the release was made (a date; see the [CHANGELOG](../CHANGELOG.md)). It is not a compatibility promise
 - `api`: the **compatibility generation** for the programs that use this API ([ORRERY cockpit](https://github.com/gyroid-eth/orrery) and others). It goes up by one only when an endpoint or field those programs rely on is **added or changes meaning**, and a [changelog fragment](../changelog.d/) records it (collected into the CHANGELOG at release; see [Contributing](../CONTRIBUTING.md#changelog-fragments-and-releases)); it does not go up with every release. A program should decide whether a feature it needs is there from `api`, not from the date in `version` (the cockpit warns at startup when `api` is lower than it needs). This scheme starts at `api` 2; every earlier release reports 1, whatever it can do
 
-### Isolated global backend (API 15)
+### Isolated global backend (API 16)
 
-Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read` and `global_spawn` are 1; `instruction_migration` and `global_dashboard_ui` are 0. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads and admission remain unchanged.
+Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read`, `global_spawn`, `instruction_migration` and `global_dashboard_ui` are 1. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads and admission remain unchanged.
+
+API 16 adds the global dashboard reply view and these admitted, read-only routes. Legacy mode remains the default; activation is false.
+
+| Route | Projection |
+| --- | --- |
+| `GET /api/instruction-migration?agent_id=ID&session_id=SESSION` | Optional session selector; canonical instruction findings from that identity’s fixed provider HOME. Unknown or ambiguous ownership returns `disk_state:unknown`, never the dashboard operator’s HOME. |
+| `GET /api/fs/dirs?path=PATH` | Existing spawn-root directory guard, independent of Mail identity and work-folder changes. |
+| `GET /api/deliverables` | `configured` and `items` keyed by agent name; only explicit `AGENTSTACK_DELIVERABLE_ROOTS`. Unset means an empty result. |
+
+Instruction `data` follows the shared [status schema](../bin/lib/instruction_contract.json): provider, target_path, findings, checked_at, disk_state, session_state, evidence_kind and reason. Findings are the existing canonical finding definition. Session-start candidate hashes do not prove effective instruction loading; a cwd change is not a reload. All three routes use the same operator admission as Mail reads.
+
 
 ### Bundled Mail identity (API 12)
 

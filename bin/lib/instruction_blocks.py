@@ -685,6 +685,47 @@ def uninstall_recorded(install, references, *, dry_run=False, purge=False):
     print('Private full-file instruction backups are retained; uninstall --purge-data removes them after all blocks are resolved.')
 
 
+def disk_state(findings):
+    """One aggregate for doctor/UI; findings remain the detailed truth."""
+    kinds={f['kind'] for f in findings}
+    if 'unknown' in kinds:return 'unknown'
+    if kinds & {'edited','malformed'}:return 'needs_review'
+    if 'duplicate' in kinds or {'current','legacy'} <= kinds:return 'legacy_present'
+    if 'legacy' in kinds:return 'update_required'
+    if 'current' in kinds:return 'clean'
+    return 'not_configured'
+
+
+def instruction_status(provider, home, wrapper, cwd, observation=None):
+    # Explicit provider HOME/cwd only. Never inherit the dashboard operator's context.
+    if not isinstance(cwd,(str,Path)) or not str(cwd) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
+        raise Refused('INSTRUCTION_CWD_UNPROVEN')
+    env={'HOME':str(Path(home).parent),'AGENTSTACK_HOME':str(wrapper),
+         'AGENTSTACK_TEMPLATE_HOME':str(wrapper),
+         'CLAUDE_CONFIG_DIR':str(home),'CODEX_HOME':str(home)}
+    engine=Engine(provider,env=env,cwd=cwd)
+    findings=engine.detect()
+    session='unknown'
+    if observation and observation.get('provider')==provider and observation.get('cwd')==str(Path(cwd).absolute()):
+        before=observation.get('candidates',[])
+        current={(f['source_path'],f['block_sha256']) for f in findings if f['block_sha256']}
+        if any((f['source_path'],f['block_sha256']) not in current for f in before if f['block_sha256']):
+            session='reload_required'
+        elif before:session='candidates_unchanged'
+    result={'provider':provider,'target_path':str(engine.target),'findings':findings,
+            'checked_at':stamp(),'disk_state':disk_state(findings),'session_state':session,
+            'evidence_kind':'candidate-observation-not-effective-load','reason':None}
+    validate(result,'status')
+    return result
+
+
+def instruction_observation(provider, home, wrapper, cwd):
+    result=instruction_status(provider,home,wrapper,cwd)
+    return {'provider':provider,'cwd':str(Path(cwd).absolute()),'observed_at':result['checked_at'],
+            'candidates':[{k:f[k] for k in ('source_path','block_sha256','template_id','kind')}
+                          for f in result['findings'] if f['block_sha256']]}
+
+
 def provider_instructions(home, provider, wrapper, project, *, configure=False):
     if provider not in ('claude','codex'):return
     name='CLAUDE.md' if provider=='claude' else 'AGENTS.md'

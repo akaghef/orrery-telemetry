@@ -44,7 +44,7 @@ def request(ui,path,*,auth=True,method='GET',extra=None,body=None):
 def test_api_and_visible_message_bridge_without_sqlite(ui):
     code,raw=request(ui,'/api/version')
     assert code==200 and json.loads(raw)['api']==dashboard.API_GENERATION
-    assert json.loads(raw)['capabilities']['global_dashboard_ui']==0
+    assert json.loads(raw)['capabilities']['global_dashboard_ui']==1
     code,raw=request(ui,'/api/agents?limit=1')
     page=json.loads(raw)
     assert code==200 and page['runtime_mode']=='global' and len(page['data']['items'])==1,raw

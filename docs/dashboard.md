@@ -474,3 +474,22 @@ embed の初期化完了時と reload 後には、dashboard が `agentstack-them
 - [API reference](api.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)
+
+<a id="global-mail-view"></a>
+## 隔離 global mode の Mail 表示
+
+既定は旧 mode のままです。隔離 global server と operator capability を準備した場合だけ、global dashboard が開きます。[解除と Lock](global-delivery-client.md#operator-ui-access)の手順を使い、agent の owner token は貼り付けないでください。画面は対応する capability を確認します。
+
+`View as` で数値 identity を選び、NETWORK の edge を開くと、その視点で見える Mail を同じ右欄で読めます。返信は `reply_to` の message ID で結びます。長い返信も字下げを増やし続けず、返信先のリンクから辿れます。本文は literal text として表示し、埋め込まれた HTML を実行しません。見えない前の Mail は短い案内だけにし、不可視の ID・本文・宛先を補いません。`Load more visible mail` は server の keyset cursor をそのまま使います。
+
+保存する URL は `?view=net&view_as_agent_id=ID&message_id=ID` です。旧 numeric `thread_id` は可視の origin へ変換し、旧 label は source ごとの群を保ちます。件名から返信を推測しません。新旧 ID の矛盾は拒否します。
+
+古い指示があれば Mail 欄に短い英語の案内と `Details: English / 日本語` を出します。片付けは command のコピーまでで、自動削除しません。Dismiss はこの page session の同じ finding を隠すだけです。Settings からいつでも確認でき、path・block hash・版・状態が変われば再表示します。60秒ごとと明示確認時に更新します。埋込表示では host 側の案内にまとめます。詳細は[既存 block の移行](instruction-migration.md#legacy-blocks)へ。起動時の候補の観測は、実際に読み込まれた指示の証明ではありません。
+
+MAIL の `signal.status` は配送の健康です。server readiness と別の値なので、配送が red でも server が受け付けられる要求は使えます。登録一覧から process の活動を推測せず、確認できない session 状態は unavailable と表示します。
+
+NEW AGENT は固定 client slot を使います。同じ名前は既存 identity の resume を案内し、資格情報を再発行しません。設定・trust が不足したら表示された operator 操作へ戻ります。最近の folder は10件、古い scalar は1回だけ移して削除します。folder は作業場所であり Mail の scope ではありません。folder browser は既存の `AGENTSTACK_SPAWN_ROOTS`、成果物は明示 `AGENTSTACK_DELIVERABLE_ROOTS` だけです。成果物未設定なら空と案内し、cwd・project へ fallback しません。
+
+旧 mode の画面と経路は維持します。cockpit の global bridge と右 pane への結線は後続です。新 dashboard と旧 cockpit の組合せでは旧 cockpit の表示を使い、global の画面 capability を推測して有効にしません。
+
+global network の稼働状態は `ACTIVITY UNKNOWN` と表示します。実際の working/waiting・ctx・親子を表示する read 投影は PR7 の切替前に必須です。

@@ -1778,6 +1778,7 @@ class RuntimeClient:
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
                 raise ClientError('SESSION_DIRECTORY_UNSAFE')
             previous_path = directory / 'self.json'
+            previous = None
             if previous_path.exists():
                 previous = read_json(previous_path)
                 if any(previous.get(k) != row.get(k) for k in ('agent_id', 'expected_server_instance_id')):
@@ -1785,6 +1786,22 @@ class RuntimeClient:
             value = {'schema_version': 3, 'binding_kind': 'global-self', **{k:v for k,v in row.items() if k not in ('window_row_id','window_uuid')},
                      'agent_name': row['name'], 'session_id': session_id,
                      'transcript_path': payload.get('transcript_path', ''), 'cwd': payload.get('cwd', '')}
+            if previous_path.exists() and previous.get('session_id')==session_id:
+                if 'instruction_observation' in previous:value['instruction_observation']=previous['instruction_observation']
+            else:
+                # Record candidates once for this session; subsequent cwd/resume
+                # observations are not evidence that instructions were reloaded.
+                try:
+                    launch=read_json(self.outputs['launch']) if self.outputs['launch'].exists() else {}
+                    provider=launch.get('provider')
+                    if (provider in ('claude','codex') and isinstance(value['cwd'],str)
+                            and os.path.isabs(value['cwd']) and Path(value['cwd']).is_dir()):
+                        helper=runpy.run_path(str(ROOT/'bin/lib/instruction_blocks.py'))
+                        home=self.runtime_dir/'provider-home'/provider
+                        try:value['instruction_observation']=helper['instruction_observation'](provider,home,ROOT,value['cwd'])
+                        except helper['Refused']:pass
+                except (OSError,ValueError,ClientError):
+                    pass
             self.write_output(directory / 'self.json', value, 'session')
         return value
 
