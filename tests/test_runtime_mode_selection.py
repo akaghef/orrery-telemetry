@@ -164,3 +164,41 @@ def test_global_installer_is_rejected_before_legacy_service_or_database(tmp_path
                           env=env,capture_output=True,text=True,timeout=30)
     assert result.returncode==2 and 'GLOBAL_INSTALL_REQUIRES_PR7' in result.stderr
     assert not (tmp_path/'must-not-create.sqlite3').exists() and not (tmp_path/'stack').exists()
+
+
+@pytest.mark.parametrize('assignment,mode,reason',[
+    ('export AGENTSTACK_RUNTIME_MODE=legacy\n','legacy',None),
+    ('export AGENTSTACK_RUNTIME_MODE=global\n','global',None),
+    ("export AGENTSTACK_RUNTIME_MODE=''\n",None,'RUNTIME_MODE_INVALID'),
+    ('export AGENTSTACK_RUNTIME_MODE=unknown\n',None,'RUNTIME_MODE_INVALID'),
+    ('export AGENTSTACK_RUNTIME_MODE="$(touch ATTACK_MARKER)"\n',None,'RUNTIME_MODE_INVALID'),
+    ('export AGENTSTACK_RUNTIME_MODE="unterminated\n',None,'RUNTIME_DEFAULT_UNAVAILABLE'),
+])
+def test_installer_bootstrap_reads_only_literal_settings(tmp_path,assignment,mode,reason):
+    # Other assignments are data, never shell evidence or code to execute.
+    env_file=tmp_path/'env.sh'
+    marker=tmp_path/'must-not-execute'
+    env_file.write_text(assignment.replace('ATTACK_MARKER',str(marker))+
+        'export AGENTSTACK_MAIL_ENV="$MISSING_RENDER/service.env"\n')
+    script='. "$1"; . "$2"; ags_client_bootstrap "$3" --literal || exit $?; printf "%s" "$AGENTSTACK_RUNTIME_MODE"'
+    env={k:v for k,v in os.environ.items() if not k.startswith('AGENTSTACK_') and k not in ('AGENT_NAME','PARENT_AGENT')}
+    env.update(HOME=str(tmp_path),AGENTSTACK_LABEL_PREFIX='org.agentstack.test.r1-literal')
+    result=subprocess.run(['/bin/bash','-uc',script,'fixture',str(ROOT/'hooks/project-context.sh'),
+        str(ROOT/'bin/lib/global-client-loader.sh'),str(env_file)],env=env,capture_output=True,text=True)
+    if reason:
+        assert result.returncode==2 and reason in result.stderr,result.stderr
+    else:
+        assert result.returncode==0 and result.stdout==mode,result.stderr
+    assert not marker.exists()
+
+
+def test_literal_default_reader_failure_never_becomes_legacy(tmp_path):
+    fake=tmp_path/'fake';fake.mkdir()
+    python=fake/'python3';python.write_text('#!/bin/sh\nexit 1\n');python.chmod(0o755)
+    env_file=tmp_path/'env.sh';env_file.write_text('export AGENTSTACK_RUNTIME_MODE=global\n')
+    script='. "$1"; . "$2"; ags_client_bootstrap "$3" --literal'
+    env={k:v for k,v in os.environ.items() if not k.startswith('AGENTSTACK_') and k not in ('AGENT_NAME','PARENT_AGENT')}
+    env.update(HOME=str(tmp_path),PATH=str(fake)+':/usr/bin:/bin',AGENTSTACK_LABEL_PREFIX='org.agentstack.test.r1-reader')
+    result=subprocess.run(['/bin/bash','-c',script,'fixture',str(ROOT/'hooks/project-context.sh'),
+        str(ROOT/'bin/lib/global-client-loader.sh'),str(env_file)],env=env,capture_output=True,text=True)
+    assert result.returncode==2 and 'RUNTIME_DEFAULT_UNAVAILABLE' in result.stderr

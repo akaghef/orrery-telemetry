@@ -231,3 +231,5 @@ The ownerless watcher entry is `agentstack-runtime-client watch-service --server
 Terminal, service and cron calls to `agentstack-mailctl` and `agentstack-enroll` use the same selection. Global enrollment uses `inspect --agent-id ID`, or `claim/recover --agent-id ID --request-id UUID --expected-generation N`, over the existing management socket. Supply the new credential on stdin, never argv. The legacy enrollment executable runs only after legacy selection. A newly deployed controller missing its common loader stops with `GLOBAL_ENTRY_UNAVAILABLE` and requires redeployment.
 
 Legacy remains the default and activation remains false. Asking the installer to switch a live installation to global returns `GLOBAL_INSTALL_REQUIRES_PR7`. Running isolated server configuration and changing the user default are separate stages. Dedicated tmux sockets and session naming are not implemented in this stage.
+
+The installer uses the existing literal settings reader for mode defaults; it does not execute other env.sh assignments or command substitutions. Empty or invalid modes are rejected.

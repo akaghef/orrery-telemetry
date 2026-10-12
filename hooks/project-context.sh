@@ -12,7 +12,7 @@ agentstack_installed_env_value() {
         *[!A-Z0-9_]*|"") return 0 ;;
     esac
     [ -f "$env_file" ] || return 0
-    python3 - "$env_file" "$name" <<'PY' 2>/dev/null || true
+    python3 - "$env_file" "$name" "${3:-}" <<'PY' 2>/dev/null || { [[ "${3:-}" != --shell ]]; }
 import pathlib
 import re
 import shlex
@@ -20,10 +20,14 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 name = sys.argv[2]
+shell = sys.argv[3] == '--shell'
+def invalid():
+    if shell: print('false', end='')
+    raise SystemExit(0)
 try:
     raw = path.read_text(encoding="utf-8")
 except (OSError, UnicodeError):
-    raise SystemExit(0)
+    invalid()
 
 pattern = re.compile(r"^\s*export\s+" + re.escape(name) + r"=(.*)$")
 for line in raw.splitlines():
@@ -33,8 +37,12 @@ for line in raw.splitlines():
     try:
         values = shlex.split(match.group(1), comments=True, posix=True)
     except ValueError:
-        raise SystemExit(0)
-    if len(values) == 1:
+        invalid()
+    if shell:
+        if not values and not match.group(1).strip(): values = ['']
+        if len(values) != 1: invalid()
+        print('export ' + name + '=' + shlex.quote(values[0]), end='')
+    elif len(values) == 1:
         print(values[0], end="")
     raise SystemExit(0)
 PY

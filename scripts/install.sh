@@ -4995,10 +4995,11 @@ PY
 }
 
 main() {
+  validate_repo_assets
   # Select once before installer probes or lifecycle actions. Live/global
   # cutover is still a later operator procedure, never a legacy install.
   . "$REPO_ROOT/bin/lib/global-client-loader.sh"
-  ags_client_bootstrap "$ENV_FILE" || return $?
+  ags_client_bootstrap "$ENV_FILE" --literal || return $?
   ags_client_select && _ags_install_rc=0 || _ags_install_rc=$?
   if [[ "$_ags_install_rc" == 0 ]]; then
     printf '%s\n' GLOBAL_INSTALL_REQUIRES_PR7 >&2
@@ -5042,7 +5043,6 @@ main() {
     say "Phase 3a note: Tier2 project enable is a placeholder; no project settings are modified."
   fi
   check_dependencies
-  validate_repo_assets
   check_port
   # A legacy listener can answer health_check but report its database relative
   # to its own working directory. Honor the explicit retirement choice before

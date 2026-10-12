@@ -233,3 +233,5 @@ context のない watcher は `agentstack-runtime-client watch-service --server-
 人・service・cron の `agentstack-mailctl` と `agentstack-enroll` も同じ選択を使います。global の enrollment は `inspect --agent-id ID`、`claim/recover --agent-id ID --request-id UUID --expected-generation N` で既存管理 socket へ接続します。新 credential は stdin から渡し、argv に含めません。旧 enrollment CLI は legacy 選択時だけ呼びます。新しい controller の配布に共通 loader が欠けていれば `GLOBAL_ENTRY_UNAVAILABLE` で止まり、再配備が必要です。
 
 既定は legacy、activation は false のままです。installer に global を渡して本サービスを切り替える操作は `GLOBAL_INSTALL_REQUIRES_PR7` で拒否します。隔離 server config の実行経路と、利用者の既定切替は別の段階です。tmux の専用 socket・名前の変更はこの段階では実装しません。
+
+installer は既存の literal 設定 reader で mode の既定を読み、env.sh の他の代入やコマンド置換を実行しません。空・不正な mode は拒否します。

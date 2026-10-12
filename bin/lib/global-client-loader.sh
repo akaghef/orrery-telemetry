@@ -45,18 +45,28 @@ ags_client_select() {
 ags_client_bootstrap() {
   local env_file="$1" inherited_mode="${AGENTSTACK_RUNTIME_MODE-}" mode_set="${AGENTSTACK_RUNTIME_MODE+set}" choice admission_rc
   local inherited_config="${AGENTSTACK_GLOBAL_SERVER_CONFIG-}" config_set="${AGENTSTACK_GLOBAL_SERVER_CONFIG+set}"
-  local env_rc=0 errexit_set=
+  local env_rc=0 errexit_set= setting assignment
   [[ "$-" != *e* ]] || errexit_set=set
   local inherited_context="${AGENTSTACK_CLIENT_CONFIG-}" context_set="${AGENTSTACK_CLIENT_CONFIG+set}"
   if [[ -e "$env_file" || -L "$env_file" ]]; then
     [[ -f "$env_file" && -r "$env_file" ]] || { printf '%s\n' RUNTIME_DEFAULT_UNAVAILABLE >&2; return 2; }
     set +e
-    if declare -F agentstack_load_installed_env >/dev/null; then
-      agentstack_load_installed_env "$env_file"
+    if [[ "${2:-}" == --literal ]]; then
+      # The installer already resolves settings as data. Reuse that reader;
+      # never execute unrelated assignments or shell expansions during install.
+      if ! declare -F agentstack_installed_env_value >/dev/null; then
+        env_rc=2
+      else
+        for setting in AGENTSTACK_RUNTIME_MODE AGENTSTACK_GLOBAL_SERVER_CONFIG AGENTSTACK_CLIENT_CONFIG; do
+          assignment="$(agentstack_installed_env_value "$setting" "$env_file" --shell)" || { env_rc=2; break; }
+          eval "$assignment" || { env_rc=2; break; }
+        done
+      fi
+    elif declare -F agentstack_load_installed_env >/dev/null; then
+      agentstack_load_installed_env "$env_file" || env_rc=$?
     else
-      . "$env_file"
+      . "$env_file" || env_rc=$?
     fi
-    env_rc=$?
     [[ "$errexit_set" != set ]] || set -e
     if [[ "$env_rc" != 0 ]]; then
       printf '%s\n' RUNTIME_DEFAULT_UNAVAILABLE >&2
