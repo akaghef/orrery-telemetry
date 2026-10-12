@@ -19,7 +19,7 @@ unset AGENTSTACK_PYTHON
 MODE_LOADER="$SCRIPT_DIR/lib/global-client-loader.sh"
 [[ -r "$MODE_LOADER" ]] || fail "GLOBAL_ENTRY_UNAVAILABLE"
 source "$MODE_LOADER"
-ags_client_bootstrap "$ENV_FILE" || fail "could not load installed environment: $ENV_FILE"
+ags_client_bootstrap "$ENV_FILE" --system "$@" || fail "could not load installed environment: $ENV_FILE"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 [[ -n "$PYTHON_BIN" ]] || \
   fail "installed Python is unavailable; re-run install.sh"

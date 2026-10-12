@@ -17,7 +17,7 @@ _ags_mode_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/global-clien
 if [[ -f "$_ags_mode_loader" ]]; then
   . "$_ags_mode_loader"
   if [[ "${AGENTSTACK_MAILCTL_SKIP_ENV:-0}" != 1 ]]; then
-    ags_client_bootstrap "$AGENTSTACK_HOME/env.sh" || exit $?
+    ags_client_bootstrap "$AGENTSTACK_HOME/env.sh" --system "$@" || exit $?
   fi
 else
   printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2

@@ -290,6 +290,7 @@ def _legacy_session_proof():
     """Read the existing non-secret self binding, never a token or project hint."""
     name = os.environ.get('AGENT_NAME')
     session = os.environ.get('AGENTSTACK_SESSION_ID')
+    project = os.environ.get('AGENTSTACK_PROJECT_KEY')
     if not name and not session:
         return False
     directory = Path(os.environ.get('AGENTSTACK_RUNTIME_DIR', str(ROOT / 'runtime'))) / 'session_index'
@@ -312,7 +313,8 @@ def _legacy_session_proof():
                     and row.get('agent_name') and row.get('session_id')
                     and row.get('registered_by') in ('', row['agent_name'])
                     and (not name or row['agent_name'] == name)
-                    and (not session or row['session_id'] == session)):
+                    and (not session or row['session_id'] == session)
+                    and (not project or row.get('project_key') == project)):
                 matches.append(row)
     except (OSError, ValueError, TypeError):
         raise ClientError('LEGACY_SESSION_MODE_UNRESOLVED')
@@ -366,6 +368,11 @@ def selected(argv=None, *, path=None, bootstrap=False):
         raise ClientError('RUNTIME_MODE_INVALID')
     explicit = explicit or os.environ.get('AGENTSTACK_CLIENT_CONFIG')
     context = absolute(str(explicit)) if explicit else ROOT / 'runtime-client.json'
+    # Disabled global hooks do no owner IO. Legacy hooks retain their old path.
+    if '--disabled-hook' in argv and os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1':
+        if mode == 'global' or (mode is None and (explicit or config or context.exists() or context.is_symlink())):
+            return {'mode': 'global', 'context': None, 'server_config': None,
+                    'source': 'disabled-hook', 'reason': None}
     if context.exists() or context.is_symlink():
         document = read_json(context)
         if document.get('kind') != KIND or document.get('mode') != 'global':
@@ -384,7 +391,7 @@ def selected(argv=None, *, path=None, bootstrap=False):
         server = read_json(config_path)
         if server.get('kind') != 'orrery-global-server-s2c-v1':
             raise ClientError('ISOLATED_CONFIG_REQUIRED')
-        if mode == 'legacy' and source != 'installed-default':
+        if mode == 'legacy':
             raise ClientError('RUNTIME_MODE_CONTEXT_CONFLICT')
         mode = 'global'
         if context is not None:
@@ -393,9 +400,7 @@ def selected(argv=None, *, path=None, bootstrap=False):
                      ('runtime_root','runtime_root'),('authority','authority'),('authority_lock','authority_lock')]
             if any(document.get(local) != server.get(remote) for local, remote in pairs):
                 raise ClientError('SERVER_BINDING_MISMATCH')
-    if context is None and mode == 'global' and _legacy_session_proof():
-        if source != 'installed-default':
-            raise ClientError('RUNTIME_MODE_CONTEXT_CONFLICT')
+    if context is None and mode == 'global' and source == 'installed-default' and _legacy_session_proof():
         mode, source = 'legacy', 'legacy-session-proof'
     return {'mode': mode or 'legacy', 'context': context,
             'server_config': config_path,

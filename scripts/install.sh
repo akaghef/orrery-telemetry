@@ -651,6 +651,7 @@ find_usable_codex_bin() {
 }
 # --- end codex launcher resolution ---
 
+resolve_codex_install_setting() {
 resolve_setting CODEX_BIN_SETTING AGENTSTACK_CODEX_BIN "" found
 if [[ "$TIER" == tier0 ]]; then
   # --dashboard-only: see the note above where the helper would otherwise load.
@@ -744,6 +745,7 @@ if [[ -n "$CODEX_BIN_SETTING" ]]; then
     PATH_VALUE="$codex_bin_dir:$PATH_VALUE"
   fi
 fi
+}
 # Product defaults are written out explicitly so env.sh, the service definition
 # and install-state.json all say what a child actually gets.
 AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-1}"
@@ -2985,7 +2987,7 @@ render_native_mail_runner() {
     "$NATIVE_MAIL_VENV/bin/agentstack-mail-service" \
     "$NATIVE_MAIL_VENV/bin/agentstack-mail" "$NATIVE_MAIL_ENV" \
     "$NATIVE_MAIL_STATE_ROOT" "$NATIVE_MAIL_SOURCE_ID" "$NATIVE_MAIL_VENV" \
-    "$MCP_URL" "$NATIVE_MAIL_ENROLL_BIN" "$NATIVE_MAIL_DEPLOYMENT" "$BIN_DIR/lib/runtime_client.py" "$PYTHON_BIN" <<'PY'
+    "$MCP_URL" "$NATIVE_MAIL_ENROLL_BIN" "$NATIVE_MAIL_DEPLOYMENT" "$BIN_DIR/lib/runtime_client.py" "$PYTHON_BIN" "${AGENTSTACK_RUNTIME_MODE:-legacy}" <<'PY'
 import json
 import pathlib
 import shlex
@@ -3004,13 +3006,16 @@ import sys
     deployment_file,
     runtime_client,
     python_bin,
+    runtime_mode,
 ) = sys.argv[1:]
 command = [
-    python_bin, runtime_client, "service-exec", service, "foreground",
+    service, "foreground",
     "--server-executable", server,
     "--env-file", env_file,
     "--state-root", state_root,
 ]
+if runtime_mode == "global":
+    command = [python_bin, runtime_client, "service-exec", *command]
 payload = "\n".join([
     "#!/usr/bin/env bash",
     "set -u",
@@ -4999,13 +5004,14 @@ main() {
   # Select once before installer probes or lifecycle actions. Live/global
   # cutover is still a later operator procedure, never a legacy install.
   . "$REPO_ROOT/bin/lib/global-client-loader.sh"
-  ags_client_bootstrap "$ENV_FILE" --literal || return $?
+  ags_client_bootstrap "$ENV_FILE" --literal --system "$@" || return $?
   ags_client_select && _ags_install_rc=0 || _ags_install_rc=$?
   if [[ "$_ags_install_rc" == 0 ]]; then
     printf '%s\n' GLOBAL_INSTALL_REQUIRES_PR7 >&2
     return 2
   fi
   [[ "$_ags_install_rc" == 125 ]] || return "$_ags_install_rc"
+  resolve_codex_install_setting
   say "ORRERY Telemetry core installer"
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"

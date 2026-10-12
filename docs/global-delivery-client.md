@@ -235,3 +235,17 @@ context のない watcher は `agentstack-runtime-client watch-service --server-
 既定は legacy、activation は false のままです。installer に global を渡して本サービスを切り替える操作は `GLOBAL_INSTALL_REQUIRES_PR7` で拒否します。隔離 server config の実行経路と、利用者の既定切替は別の段階です。tmux の専用 socket・名前の変更はこの段階では実装しません。
 
 installer は既存の literal 設定 reader で mode の既定を読み、env.sh の他の代入やコマンド置換を実行しません。空・不正な mode は拒否します。
+
+### system controller と明示 watcher
+
+hook・worker・直接 source する Codex/Gemini bootstrap は稼働中の mode を保持します。一方、installer・agentctl・mailctl・enroll・persistent launcher は installed default を採り直す system 入口です。呼出 shell の mode と食い違えば `RUNTIME_MODE_INHERITED_CONFLICT` で変更前に拒否します。明示 `--runtime-mode` の指定は共通 selector へ渡します。古い agent shell から system 操作をするときは継承した mode/config/context を外して実行するか、対応する明示引数で意図を指定してください。
+
+既存 env.sh に legacy と global server config が同時に残れば `RUNTIME_MODE_CONTEXT_CONFLICT` です。旧 session の継続証明は mode 未固定で installed default が global のときだけ行い、名前・session・project の自己 binding を照合します。明示/継承 global の operator 操作を ambient agent 名だけで拒否しません。
+
+通常の常駐 watcher は config-only の `watch-service` です。所有者 context だけを明示した shell の watcher 起動は `watch` を使い、同じ route 処理と待機 loop を共有します。この入口は context-only の手動確認にも使うため残しています。Mail の一時的な接続拒否・socket 不在・timeout は rescue 間隔で再試行します。認証・binding・応答形式の不一致は停止し、旧経路へ戻りません。App の partial 配置も共通 loader の admission を必須とし、欠落/未対応は `GLOBAL_ENTRY_UNAVAILABLE` なので共通 client を再配備してください。
+
+legacy の Mail runner は従来の service argv を直接実行し、global の selector に依存しません。global installer の固定拒否は Codex 候補の実行より前です。
+
+App の単独配備と marketplace にも正本の共通 loader を同梱します。core の root に対する同じ admission を呼び、旧 mode の単独配備を維持します。
+
+Mail を無効にした global hook は owner の context/credential を読む前に skip します。旧 mode の hook の skip 契約は変えません。dashboard demo は合成の legacy DB 専用で、継承した global の owner 設定を使いません。

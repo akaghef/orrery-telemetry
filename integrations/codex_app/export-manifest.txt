@@ -32,3 +32,4 @@ tests/test_codex_app_plugin_hooks.py
 tests/test_codex_plugin_lifecycle.py
 tests/test_codex_app_runtime_provider.py
 tests/test_codex_app_schemas.py
+bin/lib/global-client-loader.sh

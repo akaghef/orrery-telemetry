@@ -28,8 +28,8 @@ INSTALL = ROOT / "scripts" / "install.sh"
 def _block() -> str:
     text = INSTALL.read_text(encoding="utf-8")
     start = text.index("# --- codex launcher resolution")
-    end = text.index("# A Node-installed `codex` is a wrapper", start)
-    return text[start:end]
+    end = text.index("\n}\n# Product defaults", start) + len("\n}")
+    return text[start:end] + '\nresolve_codex_install_setting\n'
 
 
 def _helper_load_block() -> str:
@@ -45,8 +45,8 @@ def _dashboard_only_block() -> str:
     # must get through without hooks/codex-bin.sh existing at all (#243).
     text = INSTALL.read_text(encoding="utf-8")
     start = text.index("# --dashboard-only copies no hooks/")
-    end = text.index("# A Node-installed `codex` is a wrapper", start)
-    return text[start:end]
+    end = text.index("\n}\n# Product defaults", start) + len("\n}")
+    return text[start:end] + '\nresolve_codex_install_setting\n'
 
 
 _PROBE_FN = "echo LOADED=$(declare -F codex_bin_problem >/dev/null 2>&1 && echo yes || echo no)\necho HELPER=$CODEX_HELPER\n"
@@ -175,6 +175,7 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
     text = INSTALL.read_text(encoding="utf-8")
     stubs = (
         "set -euo pipefail\n"
+        'PATH_VALUE="$PATH"\n'
         f". {shlex.quote(str(INSTALL.parents[1] / 'hooks' / 'project-context.sh'))}\n"
         f"REPO_ROOT={shlex.quote(str(INSTALL.parents[1]))}\n"
         f"INSTALL_DIR={shlex.quote(str(tmp_path / 'install'))}\n"

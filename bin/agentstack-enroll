@@ -15,7 +15,7 @@ AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 _ags_mode_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/global-client-loader.sh"
 if [[ -f "$_ags_mode_loader" ]]; then
   . "$_ags_mode_loader"
-  ags_client_bootstrap "$AGENTSTACK_HOME_DIR/env.sh" || exit $?
+  ags_client_bootstrap "$AGENTSTACK_HOME_DIR/env.sh" --system "$@" || exit $?
 else
   printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
   exit 2

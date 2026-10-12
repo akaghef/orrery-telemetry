@@ -185,3 +185,44 @@ def test_bootstrap_propagates_installed_env_failure_through_shared_settings(tmp_
     result=subprocess.run(['/bin/bash','-c',script,'fixture',str(ROOT/'hooks/project-context.sh'),
         str(ROOT/'bin/lib/global-client-loader.sh'),str(env_file)],capture_output=True,text=True)
     assert result.returncode==2 and 'RUNTIME_DEFAULT_UNAVAILABLE' in result.stderr
+
+
+@pytest.mark.parametrize('outage',[ConnectionRefusedError,FileNotFoundError,TimeoutError])
+def test_service_waits_through_transport_outage_at_start_and_tick(server,monkeypatch,outage):
+    contract=api['delivery_contract']()
+    service=contract['watch_service']; calls=[]; waits=[]
+    class Stop:
+        def is_set(self):return False
+        def wait(self,seconds):waits.append(seconds)
+    def read(*args,**kwargs):
+        calls.append(1)
+        if len(calls) in (1,3):raise outage('fixture outage')
+        return {}
+    monkeypatch.setitem(api,'operator_exchange',read)
+    def loop(directory,received_api,tick,stop):
+        assert tick() is False
+        assert tick() is None
+    monkeypatch.setitem(service.__globals__,'watch_loop',loop)
+    service(server['config_path'],api,stop=Stop())
+    assert len(calls)==4 and waits==[30]
+
+
+@pytest.mark.parametrize('reason',['MANAGEMENT_BINDING_MISMATCH','OWNER_REQUIRED','WRITER_FENCED','RESPONSE_INVALID'])
+def test_service_auth_or_binding_failure_is_fatal_not_transport_retry(server,monkeypatch,reason):
+    service=api['delivery_contract']()['watch_service']
+    def read(*args,**kwargs):raise api['ClientError'](reason)
+    monkeypatch.setitem(api,'operator_exchange',read)
+    with pytest.raises(api['ClientError'],match='^'+reason+'$'):
+        service(server['config_path'],api,once=True)
+
+
+def test_watcher_transport_outage_waits_rescue_interval_without_event_spin(tmp_path,monkeypatch):
+    contract=api['delivery_contract']();loop=contract['watch_loop'];waits=[]
+    class Stop:
+        stopped=False
+        def is_set(self):return self.stopped
+        def wait(self,seconds):waits.append(seconds);self.stopped=True
+    monkeypatch.setattr(loop.__globals__['shutil'],'which',lambda name:None)
+    tmp_path.chmod(0o700)
+    loop(tmp_path,api,lambda:False,Stop())
+    assert waits==[30]

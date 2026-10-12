@@ -7,7 +7,7 @@ ENV_FILE="${AGENTSTACK_ENV_FILE:-$HERE/../env.sh}"
 _ags_mode_loader="$HERE/../bin/lib/global-client-loader.sh"
 if [[ -f "$_ags_mode_loader" ]]; then
   . "$_ags_mode_loader"
-  ags_client_bootstrap "$ENV_FILE" || exit $?
+  ags_client_bootstrap "$ENV_FILE" --system "$@" || exit $?
 else
   printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
   exit 2

@@ -1292,7 +1292,8 @@ def watch_loop(directory, api, tick, stop=None):
         except OSError:events=None
     try:
         while not stop.is_set():
-            tick()
+            if tick() is False:
+                stop.wait(settings['scan']);continue
             if stop.is_set():break
             if events is None:
                 stop.wait(settings['poll'])
@@ -1365,7 +1366,11 @@ def watch_service(config_path, api, *, stop=None, once=False):
     errors = {}
     def tick():
         # Shared config/binding/auth failure stops this coordinator, not legacy fallback.
-        operator.read({'kind':'health'})
+        try:
+            operator.read({'kind':'health'})
+        except (ConnectionError, FileNotFoundError, TimeoutError):
+            print('global-mail-watcher: TRANSPORT_UNAVAILABLE',file=sys.stderr)
+            return False
         current = operator.isolation
         for part in consumer.relative_to(current).parts:
             current /= part
@@ -1376,6 +1381,8 @@ def watch_service(config_path, api, *, stop=None, once=False):
     if once:
         tick()
         return
-    # Reject a bad shared binding before waiting for server-owned signals.
-    operator.read({'kind':'health'})
+    # Retry transport-only outages before event admission too.
+    while not stop.is_set() and tick() is False:
+        stop.wait(legacy_policy()['scan'])
+    if stop.is_set(): return
     watch_loop(operator.runtime/'signals', api, tick, stop)

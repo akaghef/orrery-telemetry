@@ -233,3 +233,17 @@ Terminal, service and cron calls to `agentstack-mailctl` and `agentstack-enroll`
 Legacy remains the default and activation remains false. Asking the installer to switch a live installation to global returns `GLOBAL_INSTALL_REQUIRES_PR7`. Running isolated server configuration and changing the user default are separate stages. Dedicated tmux sockets and session naming are not implemented in this stage.
 
 The installer uses the existing literal settings reader for mode defaults; it does not execute other env.sh assignments or command substitutions. Empty or invalid modes are rejected.
+
+### System controllers and explicit watchers
+
+Hooks, workers, and directly sourced Codex/Gemini bootstraps preserve their running mode. Installer, agentctl, mailctl, enroll, and the persistent launcher are system entries that reread the installed default. An inherited mode that disagrees fails with `RUNTIME_MODE_INHERITED_CONFLICT` before changes. Explicit `--runtime-mode` arguments go to the same selector. From an old agent shell, remove inherited mode/config/context for a system operation, or supply the supported explicit arguments.
+
+Installed legacy mode together with a leftover global server config fails with `RUNTIME_MODE_CONTEXT_CONFLICT`. Legacy session proof applies only to an unpinned process that encounters a global installed default, matching its name/session/project self binding. An ambient agent name does not block explicitly selected or inherited global operator access.
+
+The normal resident watcher is config-only `watch-service`. A shell explicitly bound only to an owner context uses `watch`, sharing the same route engine and wait loop. This entry remains for context-only manual checks. Temporary connection refusal, missing socket, or timeout retries at the rescue interval. Authentication, binding, and response-contract errors stop without legacy fallback. Partial App installations also require the common loader admission; missing or unsupported helpers fail with `GLOBAL_ENTRY_UNAVAILABLE` and require redeploying the common client.
+
+The legacy Mail runner executes the original service argv directly without the global selector. Global installer refusal precedes any Codex candidate execution.
+
+Standalone App installs and marketplace payloads also bundle the canonical shared loader. They call the same admission against the core root, preserving standalone legacy installs.
+
+Disabled global Mail hooks skip before reading owner context or credentials. Legacy hook skip behavior stays unchanged. The dashboard demo uses its synthetic legacy DB and excludes inherited global owner settings.
