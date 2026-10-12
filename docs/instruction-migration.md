@@ -22,7 +22,7 @@ block は ORRERY Mail tool があるときだけ従います。参加材料は�
 <a id="legacy-blocks"></a>
 ## 古い block が残っているとき
 
-異なる版の block を二重に読むと指示が食い違うことがあります。検出は cwd から親の CLAUDE.md / AGENTS.md に限定し、sibling や HOME 全体を探しません。doctor は残数・file・hash・片付ける command を表示します。SessionStart は件数と人向け doctor の案内だけです。画面側の案内は後続の変更で、このページの日英両方へリンクします。
+異なる版の block を二重に読むと指示が食い違うことがあります。検出は cwd から親の CLAUDE.md / AGENTS.md に限定し、sibling や HOME 全体を探しません。doctor は残数・file・hash・片付ける command を表示します。SessionStart は件数と人向け doctor の案内だけです。global dashboard はこのページの日英両方へリンクします。cockpit の案内は後続です。
 
 更新時は、更新前の `env.sh` の project key と現在の key のフォルダも候補にします。新しい指示は現在の key で描画し、旧 block の一致証明には実際に一致した旧 key を記録します。過去に使った全フォルダの一覧は保存していないため、自動の広域探索はしません。それらの作業フォルダで doctor を実行するか、明示 `--path` で確認してください。
 
@@ -95,3 +95,7 @@ purge は current と history の全 receipt に記録した source を照合し
 自動検出した marker の無い file は移行 source ではないため、hardlink でも変更せず飛ばします。target と明示 `--path`、marker を含む source の hardlink 拒否は維持します。
 
 purge は current/history を同じ receipt reader で schema・kind・canonical plan hash まで検証します。不一致は `INSTRUCTION_PLAN_CHANGED` で削除前に停止し、ledger と backup を保持します。検証済みの receipt を復元してから再試行してください。hash を手で書き換えて回避しないでください。
+
+隔離 global dashboard の案内は、同じ検出 engine と finding を使います。固定 provider HOME と session record の cwd が確認できない場合は unknown と表示し、dashboard の利用者 HOME から推測しません。起動時に記録するのは候補の path・block hash・版だけです。現在の disk が片付いていても、以前の候補が変わった session には再起動を案内します。実際の指示の読込みを証明する表示ではありません。[画面での確認と Dismiss](dashboard.md#global-mail-view)を参照してください。
+
+検出結果の cleanup command は `env HOME=... CLAUDE_CONFIG_DIR=... CODEX_HOME=... AGENTSTACK_HOME=...` などを含み、検出と同じ利用者 target と ledger を使います。隔離 provider の案内を通常の terminal へ貼るときも、この env を省かないでください。対象の現行 block が未設置なら、別 HOME の block で代用せず `INSTRUCTION_TARGET_REQUIRES_SETUP` で拒否します。

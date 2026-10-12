@@ -97,11 +97,16 @@ agentstack-runtime-client codex-apply operator < hook-plan.review.json
 
 Gemini は固定 provider HOME の `.gemini/config/mcp_config.json` と既存の stream renderer を使います。headless の子は実行した provider の `init/conversation_id` だけを session receipt にします。init が無ければ `GEMINI_SESSION_RECEIPT_UNAVAILABLE`、対話型 root は `GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED` で止まり、ready になりません。Gemini は合成 stream provider による fixture 試験のみで、実 agy では未確認です。
 
+<a id="persistent-execution"></a>
+
 ## persistent の operator configure
 
 固定の profile.json に実行設定 `execution` を1つだけ保存します。owner/binding は追加しません。通常 run は設定を読むだけです。旧 persistent profile は `LEGACY_FILE_REQUIRES_IMPORT` のまま、PR7 の明示 import で移します。
 
 ```sh
+client_root="$(dirname "$AGENTSTACK_CLIENT_CONFIG")"
+# 固定 profile がまだ無い場合だけ:
+agentstack-runtime-client save-profile
 agentstack-persistent configure --profile "$client_root/profile.json" --operator <<EOF_JSON
 {"argv":["/absolute/python","/absolute/bot.py"],"interaction":"headless","cwd":"/absolute/private-workdir"}
 EOF_JSON
@@ -158,11 +163,13 @@ App の `AGENTSTACK_CODEX_APP_COLD_WAKE`、`AGENTSTACK_CODEX_BINARY`、`AGENTSTA
 
 [English](global-delivery-client.en.md#operator-ui-access)
 
-既定の導入・旧 dashboard は変わりません。API 世代15の global backend は、完成した S2c candidate を私有管理 socket 経由で読みます。dashboard は Mail の SQLite を開きません。公開 Mail tool の追加はありません。画面と cockpit の接続は後続なので、`global_dashboard_ui=0` の間は API の世代だけで画面を有効にしないでください。
+既定の導入・旧 dashboard は変わりません。API 世代15の global backend は、完成した S2c candidate を私有管理 socket 経由で読みます。dashboard は Mail の SQLite を開きません。公開 Mail tool の追加はありません。API 16 では `global_dashboard_ui=1`・`instruction_migration=1` として [global dashboard](dashboard.md#global-mail-view) を有効にします。cockpit の接続は後続です。API の世代だけで画面の対応を推測しないでください。
 
 専用の一時 HOME を使い、`AGENTSTACK_RUNTIME_MODE=global`、`AGENTSTACK_GLOBAL_SERVER_CONFIG`（完成した candidate の `server-config.json`）、`AGENTSTACK_MCP_URL`（同じ隔離 Mail の HTTP endpoint）、`AGENTSTACK_HOME`（同じ isolation root の `agentstack`）、`AGENTSTACK_PORT`（専用の空き port）を明示します。設定が壊れたときに旧 DB へ戻ることはありません。実サービスの切替は別の手順です。
 
 最初にローカルの operator が同じ隔離先の `AGENTSTACK_HOME` を明示して `agentstack-http-operator configure` を実行します。CLI も未設定なら `HTTP_OPERATOR_HOME_REQUIRED` で拒否し、実 HOME を既定にしません。固定の `runtime/http-operator.json` を0600で新規作成し、既存 file は上書きしません。`agentstack-http-operator show` で表示した値を HTTP の `Authorization: Bearer …` に渡します。これは agent の登録 token とは別です。値を URL、ログ、共有ファイルに載せないでください。失効させる場合は、利用する dashboard と cockpit を停止し、この固定 file を operator が退避してから configure し直します。
+
+隔離 dashboard の URL を開き、Unlock にこの operator capability を貼り付けます。値は sessionStorage に保持して reload に使い、URL には入れません。同じ origin で開いている tab は BroadcastChannel で同じ capability を共有し、Lock も伝えます。別 origin は別に Unlock が必要です。Lock は参加中の online page の Mail と資格情報を消しますが、閉じた・復元した tab、opener・duplicate が持つ sessionStorage のコピー、ページへの権限を与えた拡張機能、別 browser profile のコピーは失効しません。すべてのコピーを失効させるには server の capability を再作成して再起動します。OS 利用者と browser profile が信頼境界です。誤った・古い capability は403、不在・安全でない capability file は503で、旧経路へ fallback しません。
 
 HTTP は TCP 上の UID を直接証明できません。私有 file を読める利用者の capability を証明にし、loopback・設定済み Host・提示された Origin/Referer/Fetch Metadata を同じ入口で確認します。static の GET/HEAD 以外は、将来追加される route もこの入口を通ります。capability を盗める同 UID/root、XSS、ページへの権限を与えた拡張機能は、この境界では防げません。別の利用者と1台の Mail を共有する用途は支えません。
 
@@ -200,4 +207,6 @@ MAX・keyset・limit・返却 revision は1つの read transaction に置き、f
 
 名前の照合で Mail に既存の名前があり、一致する client root が無ければ、root/pending の作成前に `NAME_CONFLICT` を返します。`clients` の `name_agent_id` はその読取結果、`diagnostics` は root ごとの異常です。壊れた root は利用できませんが、他の root の一覧と別名の新規登録は続けられます。terminal pending は名前と owner conflict の証拠として保持し、同名の再利用を拒否します。退役済み identity の照合も管理側の owner 検証で行います。
 
-登録直前の競合で pending が残った場合は、`GET /api/global/spawn-status?client_name=SLUG` の `registration_sha256` を確認し、同じ HTTP admission の下で `POST /api/global/registration-abandon` に `{"client_name":"SLUG","expected_digest":"DIGEST"}` を渡せます。digest 不一致では記録を変えません。既存 CLI と同じく別 owner と確認できた intent だけを terminal にし、別の identity には新 root を使います。token は status に返しません。不正 JSON は400 `QUERY_INVALID`、登録の競合は409、transport などの障害は503です。
+登録直前の競合で pending が残った場合は、`GET /api/global/spawn-status?client_name=SLUG` の `registration_sha256` を確認し、同じ HTTP admission の下で `POST /api/global/registration-abandon` に `{"client_name":"SLUG","expected_digest":"DIGEST"}` を渡せます。digest 不一致では記録を変えません。既存 CLI と同じく別 owner と確認できた intent だけを terminal にし、別の identity には新 root を使います。root または登録 pending が無い場合は404 `TARGET_UNAVAILABLE` です。不正な既存 file の拒否と digest の照合は維持します。token は status に返しません。不正 JSON は400 `QUERY_INVALID`、登録の競合は409、transport などの障害は503です。
+
+API 17 では登録の明示再送で status の digest を照合できます。browser の Lock は queue 済みの引継ぎと進行中の body を失効させ、storage 拒否時は page memory だけで動き reload 後に再 Unlock が必要です。

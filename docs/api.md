@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":15}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":17}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -69,9 +69,20 @@ version の解決順は [インストール](install.md#version)を参照して�
 - `version`: いつの配布物か（日付。[CHANGELOG](../CHANGELOG.md)）。互換性の約束ではありません
 - `api`: この API を使う側（[ORRERY cockpit](https://github.com/gyroid-eth/orrery) など）との**互換の世代**です。利用者が頼る endpoint や field を**足す・意味を変える**ときだけ 1 つ上げ、[changelog の断片](../changelog.d/)に書きます（release 時に CHANGELOG へ集約。[貢献・release 手順](../CONTRIBUTING.md#changelog-fragments-and-releases)）。release のたびには上げません。利用者は、必要な機能があるかを `version` の日付ではなく `api` で判定してください（cockpit は、`api` が必要な世代に足りないと起動時に警告します）。この運用は `api` 2 からで、それより前の版はどれも、中身にかかわらず 1 を返します
 
-### 隔離 global backend（API 15）
+### 隔離 global backend（API 17）
 
-明示 global mode では static 以外の全 route に operator capability の admission を適用します。`/api/version` も認証が必要です。`capabilities` の `operator_http_admission`・`ui_read`・`global_spawn` は1、`instruction_migration`・`global_dashboard_ui` は0です。画面を API 番号だけで有効にせず、対応する capability を確認してください。[設定・権限・中断復旧](global-delivery-client.md#operator-ui-access)を参照してください。旧 mode の payload と入場条件は維持します。
+明示 global mode では static 以外の全 route に operator capability の admission を適用します。`/api/version` も認証が必要です。`capabilities` の `operator_http_admission`・`ui_read`・`global_spawn`・`instruction_migration`・`global_dashboard_ui` は1です。画面を API 番号だけで有効にせず、対応する capability を確認してください。[設定・権限・中断復旧](global-delivery-client.md#operator-ui-access)を参照してください。旧 mode の payload と入場条件は維持します。
+
+API 17 は global dashboard の返信表示と次の認可済み読取 route を追加します。既定は旧 mode、activation は false のままです。
+
+| Route | 投影 |
+| --- | --- |
+| `GET /api/instruction-migration?agent_id=ID&session_id=SESSION` | session は任意。その identity の固定 provider HOME から共通 finding を返します。所有を証明できない・曖昧な場合は `disk_state:unknown` とし、dashboard の利用者 HOME で代用しません。 |
+| `GET /api/fs/dirs?path=PATH` | 既存の spawn-root の directory guard。Mail identity や作業 folder の変更から独立しています。 |
+| `GET /api/deliverables` | `configured` と agent 名を key にした `items`。明示した `AGENTSTACK_DELIVERABLE_ROOTS` だけを使い、未設定なら空です。 |
+
+指示の `data` は共通の [status schema](../bin/lib/instruction_contract.json) の provider・target_path・findings・checked_at・disk_state・session_state・evidence_kind・reason です。finding は既存の1定義を参照します。起動時の候補 hash は実際に読み込まれた指示の証明ではなく、cwd の変更も再読込ではありません。3 route とも Mail 読取と同じ operator admission を通ります。
+
 
 ### 同梱 Mail の識別子（API 12）
 
@@ -647,3 +658,5 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)
+
+登録 pending の画面からの同 intent 再送は `POST /api/global/spawn` に status の `registration_sha256` を `expected_digest` として添えます（API 17）。同じ operation mutex の下で照合し、不一致は `REGISTRATION_PENDING_CONFLICT`、pending が既に無ければ `TARGET_UNAVAILABLE`。登録の認証・名前・program/model の既存照合は維持します。

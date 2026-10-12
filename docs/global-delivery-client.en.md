@@ -95,11 +95,16 @@ This reuses existing plan / apply_trust code. Launch, update and resume never gr
 
 Gemini uses the fixed provider HOME's `.gemini/config/mcp_config.json` and existing stream renderer. Headless children accept session evidence only from provider `init/conversation_id`. Missing init fails with `GEMINI_SESSION_RECEIPT_UNAVAILABLE`; interactive roots fail with `GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED`. Neither becomes ready. Gemini is tested with a synthetic stream-provider fixture only; real agy remains unverified.
 
+<a id="persistent-execution"></a>
+
 ## Operator configuration for persistent execution
 
 The fixed profile.json stores one typed execution object. It adds no owner/binding copies. Regular run only reads it. Released persistent profiles remain LEGACY_FILE_REQUIRES_IMPORT; explicit import belongs to PR7.
 
 ```sh
+client_root="$(dirname "$AGENTSTACK_CLIENT_CONFIG")"
+# Only if this fixed profile is absent:
+agentstack-runtime-client save-profile
 agentstack-persistent configure --profile "$client_root/profile.json" --operator <<EOF_JSON
 {"argv":["/absolute/python","/absolute/bot.py"],"interaction":"headless","cwd":"/absolute/private-workdir"}
 EOF_JSON
@@ -156,11 +161,13 @@ Global watcher reacts to signal-directory events, falling back to the legacy two
 
 [日本語](global-delivery-client.md#operator-ui-access)
 
-Default installation and the legacy dashboard are unchanged. API generation 15 adds an isolated global backend reading a completed S2c candidate through its private management socket. The dashboard never opens Mail SQLite. No public Mail tools are added. The screen and cockpit integration follow separately: never enable the screen from the API number while `global_dashboard_ui=0`.
+Default installation and the legacy dashboard are unchanged. API generation 15 adds an isolated global backend reading a completed S2c candidate through its private management socket. The dashboard never opens Mail SQLite. No public Mail tools are added. API 16 enables `global_dashboard_ui=1` and `instruction_migration=1` for the [global dashboard](dashboard.en.md#global-mail-view); cockpit integration follows separately. Never infer screen support from the API number alone.
 
 Use a dedicated temporary HOME and explicitly set `AGENTSTACK_RUNTIME_MODE=global`, `AGENTSTACK_GLOBAL_SERVER_CONFIG` (the completed candidate's `server-config.json`), `AGENTSTACK_MCP_URL` (that isolated Mail HTTP endpoint), `AGENTSTACK_HOME` (the same isolation root's `agentstack`) and `AGENTSTACK_PORT` (a dedicated free port). Invalid global configuration never falls back to the legacy database. Live cutover is a separate procedure.
 
 An operator first sets `AGENTSTACK_HOME` explicitly to the isolated home and runs `agentstack-http-operator configure` locally. Without that variable, the CLI refuses with `HTTP_OPERATOR_HOME_REQUIRED`; it never defaults to the real HOME. This exclusively creates the fixed `runtime/http-operator.json` with mode 0600; existing files are never overwritten. Use the value from `agentstack-http-operator show` in `Authorization: Bearer …`. This capability is separate from agent registration tokens. Keep it out of URLs, logs and shared files. For revocation, stop both participating servers, set aside this fixed file explicitly and configure again.
+
+Open the isolated dashboard URL and paste this operator capability in Unlock. The page stores it in sessionStorage and reuses it for reloads, never a URL. Same-origin online tabs share this same capability through BroadcastChannel and propagate Lock. A separate origin must be unlocked independently. Lock clears Mail and credentials from participating online pages; it does not revoke a copied, closed or restored tab, an opener/duplicate sessionStorage copy, an extension granted page access, or another browser profile. Use server capability rotation and restart to revoke all copies. The OS user and browser profile are the trust boundary. Wrong/stale capability is 403; an unavailable or unsafe capability file is 503. Neither causes a legacy fallback.
 
 TCP does not prove peer UID. The capability proves access to the user's private file; one admission checks loopback, configured Host and any supplied Origin/Referer/Fetch Metadata. Every route except static GET/HEAD passes this admission, including future routes. Same-UID/root actors able to steal the capability, XSS and extensions granted page access are outside this boundary. Sharing one Mail instance across users is unsupported.
 
@@ -198,4 +205,6 @@ For an existing foreign owner, compute the pending file's SHA-256 and explicitly
 
 Name lookup rejects an existing Mail name with no matching client root as `NAME_CONFLICT` before creating a root or pending record. `clients.name_agent_id` exposes that read result; `diagnostics` reports each unavailable root independently. Such roots remain unusable, while unrelated names and roots can proceed. Terminal pending records retain their known name and owner-conflict evidence and prevent name reuse. Retired identities are checked through the same private owner inspection.
 
-A registration race can still leave a pending intent. Read `registration_sha256` from `GET /api/global/spawn-status?client_name=SLUG`, then use the admitted `POST /api/global/registration-abandon` with `{"client_name":"SLUG","expected_digest":"DIGEST"}`. A mismatched digest leaves the record unchanged. This uses the existing CLI implementation: only proven foreign ownership permits a terminal record, and a different identity requires a new root. Status never exposes the token. Malformed JSON returns 400 `QUERY_INVALID`, registration conflicts return 409, and transport failures return 503.
+A registration race can still leave a pending intent. Read `registration_sha256` from `GET /api/global/spawn-status?client_name=SLUG`, then use the admitted `POST /api/global/registration-abandon` with `{"client_name":"SLUG","expected_digest":"DIGEST"}`. A mismatched digest leaves the record unchanged. This uses the existing CLI implementation: only proven foreign ownership permits a terminal record, and a different identity requires a new root. A missing root or registration pending returns 404 `TARGET_UNAVAILABLE`; existing-file admission and digest checks still apply. Status never exposes the token. Malformed JSON returns 400 `QUERY_INVALID`, registration conflicts return 409, and transport failures return 503.
+
+API 17 additionally accepts the status digest on explicit registration replay. Browser Lock invalidates queued handoffs and in-flight bodies; denied storage uses page memory and requires Unlock after reload.

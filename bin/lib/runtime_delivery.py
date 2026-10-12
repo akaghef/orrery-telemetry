@@ -544,7 +544,9 @@ class RuntimeDelivery:
         return value
 
     def execution(self):
-        profile=self.read(self.client.profile_path)
+        path=self.client.profile_path
+        if not path.exists() and not path.is_symlink():self.fail('PERSISTENT_EXECUTION_REQUIRED')
+        profile=self.read(path)
         value=profile.get('execution')
         if value is None:self.fail('PERSISTENT_EXECUTION_REQUIRED')
         return self.validate_execution(value)

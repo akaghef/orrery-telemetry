@@ -123,6 +123,8 @@ def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path
         assert (ROOT / relative).is_file(), relative
         assert not (install_dir / relative).exists(), relative
     for relative in ("dashboard/server.py", "dashboard/service_runner.py",
+                     "dashboard/global_page.py", "dashboard/global_shell.html", "dashboard/global_ui.js",
+                     "dashboard/global_ui.css", "dashboard/mail_flow.js", "dashboard/network_node.js",
                      "hooks/spawn_child.sh", "hooks/cleanup-child-agent.sh",
                      "hooks/project-context.sh"):
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative

@@ -95,3 +95,7 @@ Purge checks sources recorded in all current and history receipts, keeping backu
 Automatically discovered files without markers are not migration sources; hardlinked files of this kind remain untouched and are skipped. Targets, explicit `--path` files, and sources containing markers retain strict hardlink refusal.
 
 Purge uses the same receipt reader for current/history schema, kind, and canonical plan hash validation. A mismatch returns `INSTRUCTION_PLAN_CHANGED` before deletion and keeps the ledger/backups. Restore a verified receipt before retrying; do not bypass the check by manually changing its hash.
+
+The isolated global dashboard uses this same detector and finding definition. Unknown fixed provider HOME or session cwd is shown as unknown, never inferred from the dashboard operator’s HOME. Session start records only candidate paths, block hashes and versions. A session whose earlier candidates changed still gets a restart notice when disk cleanup is complete. This does not prove effective instruction loading. See [screen inspection and Dismiss](dashboard.en.md#global-mail-view).
+
+Emitted cleanup commands include `env HOME=... CLAUDE_CONFIG_DIR=... CODEX_HOME=... AGENTSTACK_HOME=...` and related detection settings, retaining the same target and ledger even in another terminal. Keep these assignments. A missing current block in the detected provider HOME yields `INSTRUCTION_TARGET_REQUIRES_SETUP`; a block in another HOME cannot substitute for it.

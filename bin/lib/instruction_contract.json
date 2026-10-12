@@ -579,6 +579,70 @@
         "reason",
         "next_argv"
       ]
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "claude",
+            "codex",
+            null
+          ]
+        },
+        "target_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "disk_state": {
+          "enum": [
+            "unknown",
+            "needs_review",
+            "legacy_present",
+            "update_required",
+            "clean",
+            "not_configured"
+          ]
+        },
+        "session_state": {
+          "enum": [
+            "unknown",
+            "reload_required",
+            "candidates_unchanged"
+          ]
+        },
+        "evidence_kind": {
+          "const": "candidate-observation-not-effective-load"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "target_path",
+        "findings",
+        "checked_at",
+        "disk_state",
+        "session_state",
+        "evidence_kind",
+        "reason"
+      ]
     }
   }
 }

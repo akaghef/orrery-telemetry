@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import runpy
+import re
+from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 # Python's module import lock initializes this one operator/client API before
@@ -23,6 +25,48 @@ class Backend:
     def read(self, query):
         return {'runtime_mode':'global',**self.operator.read(query)}
 
+    def instruction(self, agent_id, session_id):
+        helper=OPERATOR_API['API']['delivery_contract']()['instruction_api']()
+        unknown={'provider':None,'target_path':None,'findings':[],
+            'checked_at':datetime.now(timezone.utc).isoformat(),'disk_state':'unknown',
+            'session_state':'unknown','evidence_kind':'candidate-observation-not-effective-load',
+            'reason':'PROVIDER_HOME_UNPROVEN'}
+        # Enumerate fixed client slots via the existing operator, never caller paths.
+        slots=[]
+        if self.operator.clients_parent.exists() or self.operator.clients_parent.is_symlink():
+            OPERATOR_API['API']['safe_private_directory'](self.operator.clients_parent)
+            for entry in sorted(self.operator.clients_parent.iterdir()):
+                try:
+                    path=self.operator.path_for(entry.name)
+                    OPERATOR_API['API']['safe_private_directory'](entry)
+                    local=OPERATOR_API['API']['read_json'](path)
+                    if (local.get('identity') or {}).get('agent_id')==agent_id:
+                        slots.append({'client_name':entry.name})
+                except (RuntimeError,OSError,ValueError,TypeError,KeyError):
+                    continue
+        candidates=[]
+        for slot in slots:
+            try:
+                c=self.operator.client(slot['client_name'])
+                with c.operation_mutex(),c.fence():
+                    if not c.identity or c.identity['agent_id']!=agent_id:continue
+                    c.inspect_owner()
+                    session=c.runtime_dir/'session_index/self.json'
+                    if not session.exists() and not session.is_symlink():continue
+                    saved=OPERATOR_API['API']['read_json'](session)
+                    if session_id and saved.get('session_id')!=session_id:continue
+                    launch=OPERATOR_API['API']['read_json'](c.outputs['launch'])
+                    provider=launch.get('provider')
+                    if provider not in ('claude','codex'):continue
+                    home=c.runtime_dir/'provider-home'/provider
+                    OPERATOR_API['API']['safe_private_directory'](home)
+                    candidates.append(helper['instruction_status'](provider,home,c.config['wrapper_root'],saved['cwd'],saved.get('instruction_observation')))
+            except (RuntimeError,OSError,ValueError,TypeError,KeyError,helper['Refused']):
+                candidates.append({**unknown,'reason':'INSTRUCTION_OBSERVATION_UNAVAILABLE'})
+        result=candidates[0] if len(candidates)==1 else {**unknown,'reason':'AMBIGUOUS_INSTRUCTION_HOME' if candidates else unknown['reason']}
+        helper['validate'](result,'status')
+        return {'ok':True,'runtime_mode':'global','agent_id':agent_id,'session_id':session_id,'data':result}
+
     def get(self, path, params):
         def one(key,default=None):
             values=params.get(key,[])
@@ -34,6 +78,12 @@ class Backend:
             if not str(value).isascii() or not str(value).isdigit() or not 1<=int(value)<=2**63-1:
                 raise BackendError('QUERY_INVALID',400)
             return int(value)
+        if path=='/api/instruction-migration':
+            if set(params)-{'agent_id','session_id'}:raise BackendError('QUERY_INVALID',400)
+            agent_id=number('agent_id');session_id=one('session_id')
+            if agent_id is None or session_id is not None and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',session_id) is None:
+                raise BackendError('QUERY_INVALID',400)
+            return self.instruction(agent_id,session_id)
         if path=='/api/global/clients':return self.operator.lookup(one('name'))
         if path=='/api/global/spawn-status':return self.operator.status(one('client_name'))
         if path=='/api/agents':
@@ -77,11 +127,11 @@ class Backend:
         try:api['wire_contract']()['validate_schema'](payload,schema)
         except ValueError as exc:raise BackendError('QUERY_INVALID',400) from exc
         if path.endswith('/registration-abandon'):
-            return self.operator.client(payload['client_name']).abandon_registration(payload['expected_digest'])
+            return self.operator.abandon_registration(payload['client_name'],payload['expected_digest'])
         if path.endswith('/spawn'):
             cwd=validate_cwd(payload['cwd'])
             return self.operator.spawn(payload['client_name'],agent_name=payload['name'],
-                program=payload['program'],model=payload['model'],cwd=cwd)
+                program=payload['program'],model=payload['model'],cwd=cwd,expected_digest=payload.get('expected_digest'))
         result=self.operator.resume(payload['client_name'],prepare_only=payload.get('prepare_only',False))
         launch=result.get('launch_status')
         if (payload.get('open',True) and not payload.get('prepare_only',False)

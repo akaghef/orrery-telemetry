@@ -390,6 +390,16 @@ class Engine:
         distributed = {self.template_home / 'claude/CLAUDE.md', self.template_home / 'codex/AGENTS.md'}
         return sorted(paths - distributed - {self.target}, key=str)
 
+    def cleanup_argv(self, path):
+        values={'HOME':self.env['HOME'],'AGENTSTACK_HOME':str(self.install),
+            'AGENTSTACK_TEMPLATE_HOME':str(self.template_home),
+            'CLAUDE_CONFIG_DIR':str(self.home) if self.provider=='claude' else self.env.get('CLAUDE_CONFIG_DIR',''),
+            'CODEX_HOME':str(self.home) if self.provider=='codex' else self.env.get('CODEX_HOME',''),
+            'CLAUDE_HOME':'','AGENTSTACK_CLAUDE_MD_SCOPE':'global',
+            'AGENTSTACK_PROJECT_KEY':self.project,'AGENTSTACK_LEGACY_PROJECT_KEY':self.legacy_project}
+        return ['env',*(key+'='+value for key,value in values.items()),
+            str(self.install/f'bin/agentstack-{self.provider}-setup'),'--remove-legacy-block','--path',str(path)]
+
     def finding(self, path, data, receipt=None):
         try:
             block = block_bytes(data or b'')
@@ -399,7 +409,7 @@ class Engine:
             block, kind, reason = None, 'malformed', str(exc)
         return {'source_path': str(path), 'kind': kind, 'template_id': self.known(data, path, receipt) if kind == 'legacy' else None,
                 'block_sha256': sha(block) if block else None, 'reason': reason,
-                'cleanup_argv': [str(self.install / f'bin/agentstack-{self.provider}-setup'), '--remove-legacy-block', '--path', str(path)] if kind == 'legacy' and path != self.target else []}
+                'cleanup_argv': self.cleanup_argv(path) if kind == 'legacy' and path != self.target else []}
 
     def detect(self, explicit=()):
         findings = []; receipt = self.receipt()
@@ -683,6 +693,47 @@ def uninstall_recorded(install, references, *, dry_run=False, purge=False):
             if purge:raise
             print('warn: kept user instruction block: '+str(exc),file=sys.stderr)
     print('Private full-file instruction backups are retained; uninstall --purge-data removes them after all blocks are resolved.')
+
+
+def disk_state(findings):
+    """One aggregate for doctor/UI; findings remain the detailed truth."""
+    kinds={f['kind'] for f in findings}
+    if 'unknown' in kinds:return 'unknown'
+    if kinds & {'edited','malformed'}:return 'needs_review'
+    if 'duplicate' in kinds or {'current','legacy'} <= kinds:return 'legacy_present'
+    if 'legacy' in kinds:return 'update_required'
+    if 'current' in kinds:return 'clean'
+    return 'not_configured'
+
+
+def instruction_status(provider, home, wrapper, cwd, observation=None):
+    # Explicit provider HOME/cwd only. Never inherit the dashboard operator's context.
+    if not isinstance(cwd,(str,Path)) or not str(cwd) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
+        raise Refused('INSTRUCTION_CWD_UNPROVEN')
+    env={'HOME':str(Path(home).parent),'AGENTSTACK_HOME':str(wrapper),
+         'AGENTSTACK_TEMPLATE_HOME':str(wrapper),
+         'CLAUDE_CONFIG_DIR':str(home),'CODEX_HOME':str(home)}
+    engine=Engine(provider,env=env,cwd=cwd)
+    findings=engine.detect()
+    session='unknown'
+    if observation and observation.get('provider')==provider and observation.get('cwd')==str(Path(cwd).absolute()):
+        before=observation.get('candidates',[])
+        current={(f['source_path'],f['block_sha256']) for f in findings if f['block_sha256']}
+        if any((f['source_path'],f['block_sha256']) not in current for f in before if f['block_sha256']):
+            session='reload_required'
+        elif before:session='candidates_unchanged'
+    result={'provider':provider,'target_path':str(engine.target),'findings':findings,
+            'checked_at':stamp(),'disk_state':disk_state(findings),'session_state':session,
+            'evidence_kind':'candidate-observation-not-effective-load','reason':None}
+    validate(result,'status')
+    return result
+
+
+def instruction_observation(provider, home, wrapper, cwd):
+    result=instruction_status(provider,home,wrapper,cwd)
+    return {'provider':provider,'cwd':str(Path(cwd).absolute()),'observed_at':result['checked_at'],
+            'candidates':[{k:f[k] for k in ('source_path','block_sha256','template_id','kind')}
+                          for f in result['findings'] if f['block_sha256']]}
 
 
 def provider_instructions(home, provider, wrapper, project, *, configure=False):

@@ -110,3 +110,5 @@ install 前に雰囲気を見るなら[公開デモ](https://agentstack-demo.pag
 同梱 service が継承・派生した部分の attribution は [NOTICE](packages/agentstack_mail/NOTICE.md)、適用 license は [UPSTREAM_LICENSE](packages/agentstack_mail/UPSTREAM_LICENSE) に保持しています。ORRERY Telemetry 側で新たに書いた部分（file 名の AgentStack は旧名称）には [AGENTSTACK_LICENSE](packages/agentstack_mail/AGENTSTACK_LICENSE) が適用されます。境界の説明は[第三者コンポーネント](docs/third-party.md)を参照してください。
 
 dashboard の科学者の肖像（`dashboard/portraits_pixel/` と、その 64 px 縮小の `dashboard/portraits_64/`）は、作者（gyroid）が ChatGPT の画像生成で文章だけから作ったドット絵です。写真は入力していません。この repository と同じ条件で配布します。来歴は[第三者コンポーネント](docs/third-party.md#肖像画像)に記録しています。
+
+隔離 global dashboard の返信表示・指示案内は [dashboard の案内](docs/dashboard.md#global-mail-view)を参照してください。既定は旧 mode です。
