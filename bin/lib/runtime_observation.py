@@ -185,7 +185,7 @@ class Observations:
     def read(self, ids):
         try:
             roster, roots = self.roster(), self.roots()
-        except (RuntimeError, OSError, ValueError):
+        except Exception:
             return self.response([self.item(aid, 'OBSERVATION_INCOMPLETE') for aid in ids])
         snapshots = {}
         items = []
@@ -214,7 +214,7 @@ class Observations:
                     raise self.api['ClientError']('LOCAL_OBSERVATION_CHANGED')
                 self.owner(snapshot)
                 snapshots[aid] = (root, snapshot, digest)
-            except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
+            except Exception as exc:
                 reason = str(exc) if isinstance(exc, self.api['ClientError']) else 'OBSERVATION_INCOMPLETE'
                 item = self.item(aid, reason)
             items.append(item)
@@ -265,7 +265,7 @@ class Observations:
                         raise self.api['ClientError']('LOCAL_OBSERVATION_CHANGED')
                     self.owner(parent_snapshot)
                 item.update(parent_agent_id=parent['agent_id'], parent_state='known')
-            except (RuntimeError, OSError, ValueError, KeyError, TypeError):
+            except Exception:
                 item.update(parent_agent_id=None, parent_state='unknown')
         return self.response(items)
 

@@ -407,3 +407,32 @@ def test_retired_grandparent_does_not_hide_direct_parent(ui,monkeypatch):
     rows=observe(ui,f"{mid_row['agent_id']},{leaf_row['agent_id']}")
     assert rows[0]['parent_state']=='unknown'
     assert rows[1]['parent_state']=='known' and rows[1]['parent_agent_id']==mid_row['agent_id']
+
+
+@pytest.mark.parametrize('failure', [KeyError, AttributeError])
+def test_unexpected_inventory_failure_is_unknown_without_blocking_roster(ui, monkeypatch, failure):
+    observations = global_backend.OBSERVATION_API['Observations']
+
+    def unavailable(self):
+        raise failure('synthetic observation failure')
+
+    monkeypatch.setattr(observations, 'roots', unavailable)
+    assert request(ui, '/api/agents?limit=200')[0] == 200
+    rows = observe(ui, '1,2')
+    assert [row['agent_id'] for row in rows] == [1, 2]
+    assert all(row['liveness'] == 'unknown' and row['reason'] == 'OBSERVATION_INCOMPLETE' for row in rows)
+
+
+def test_observation_request_reuses_roster_and_root_inventory(ui, monkeypatch):
+    observations = global_backend.OBSERVATION_API['Observations']
+    counts = dict(roster=0, roots=0)
+    for name in counts:
+        original = getattr(observations, name)
+
+        def counted(self, name=name, original=original):
+            counts[name] += 1
+            return original(self)
+
+        monkeypatch.setattr(observations, name, counted)
+    assert len(observe(ui, '1,2')) == 2
+    assert counts == dict(roster=1, roots=1)

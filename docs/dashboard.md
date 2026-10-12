@@ -530,3 +530,5 @@ capability は内部で読み、引数・URL・結果に出しません。結果
 確認には合成の work / wait、context 0 / 42 / 100、standalone、親子、複数 session、writer 使用中、App unknown を用います。実 provider の binary は不要です。PID/start/tmux の実機証明は専用の試験 socket で行い、live の dashboard・Mail・tmux は使いません。
 
 probe の origin は CLI の既定・docs とも `127.0.0.1` を使います。`localhost` は別 Origin なので代用しません。環境の HTTP proxy は使用しません。
+
+観測だけの失敗では、その回の稼働状態をすべて `ACTIVITY UNKNOWN` に戻し、Unlock・Mail・新規登録は利用できます。認証拒否（403）は従来どおり Lock します。1回の観測 HTTP 要求では roster と client root の列挙を各1回だけ行い、対象 ID と親の照合で共有します。200 ID を超える場合は要求ごとに再列挙します。永続 cache は作らず、15秒の更新間隔は変えません。

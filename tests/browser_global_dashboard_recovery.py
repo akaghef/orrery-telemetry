@@ -76,6 +76,27 @@ with pytest.MonkeyPatch.context() as mp:
    ev(w,'document.fonts.ready');time.sleep(.3)
    data=w.call('Page.captureScreenshot',format='png')['data'];(QA/name).write_bytes(base64.b64decode(data))
   init="sessionStorage.setItem('orrery.operator-capability',"+json.dumps(token)+");window.__requests=[];window.__aborts=0;const realFetch=window.fetch.bind(window);window.fetch=async function(path,options){window.__requests.push({path:String(path),method:options?.method||'GET'});options?.signal?.addEventListener('abort',()=>window.__aborts++);const r=await realFetch(path,options);if(window.__holdRoster&&(window.__holdPath?String(path).startsWith(window.__holdPath):String(path).startsWith('/api/agents'))){window.__holdRoster=false;return {ok:r.ok,status:r.status,json:async()=>{const j=await r.json();await new Promise(resolve=>window.__releaseRoster=resolve);return j;}};}return r;};"
+  # Supplementary observation failure must not revoke the operator session.
+  failed_observation=tab("window.__observationStatus=503;const realFetch=window.fetch.bind(window);window.fetch=(path,options)=>String(path).startsWith('/api/runtime-observations')&&window.__observationStatus?Promise.resolve(new Response(JSON.stringify({ok:false,reason:'OBSERVATION_FIXTURE_UNAVAILABLE'}),{status:window.__observationStatus,headers:{'Content-Type':'application/json'}})):realFetch(path,options);",query='?view=net&view_as_agent_id=2&message_id='+str(vis))
+  wait(failed_observation,"!!document.querySelector('[name=capability]')")
+  ev(failed_observation,"document.querySelector('[name=capability]').value="+json.dumps(token)+";document.querySelector('.global-form').requestSubmit()")
+  wait(failed_observation,"!document.querySelector('[name=capability]') && document.querySelectorAll('.global-agent').length>0 && document.querySelectorAll('.reply-item').length===7")
+  ev(failed_observation,"document.querySelector('#v-net').click()")
+  wait(failed_observation,"document.querySelectorAll('#gsvg .node').length>0")
+  result['observation_503']=ev(failed_observation,"({stored:!!sessionStorage.getItem('orrery.operator-capability'),mail:document.querySelectorAll('.reply-item').length,allUnknown:[...document.querySelectorAll('#gsvg .node')].every(n=>n.classList.contains('unknown')||n.classList.contains('retired'))})")
+  assert result['observation_503']==dict(stored=True,mail=7,allUnknown=True)
+  shot(failed_observation,'observation-unavailable.png')
+  ev(failed_observation,"window.__observationStatus=0;window.OrreryGlobalDashboard.refresh()")
+  wait(failed_observation,"!!document.querySelector('#gsvg .node.act-work')")
+  ev(failed_observation,"window.__observationStatus=503;window.OrreryGlobalDashboard.refresh()")
+  result['observation_refresh_discards_previous']=ev(failed_observation,"document.querySelectorAll('#gsvg .act-work,#gsvg .act-wait').length===0 && document.querySelectorAll('.global-agent').length>0 && !document.querySelector('[name=capability]') && !!sessionStorage.getItem('orrery.operator-capability')")
+  assert result['observation_refresh_discards_previous']
+  ev(failed_observation,"document.querySelector('#newbtn').click()")
+  assert ev(failed_observation,"!!document.querySelector('.global-form [name=client_name]')")
+  ev(failed_observation,"[...document.querySelectorAll('.global-form button')].find(x=>x.textContent==='Cancel').click();window.__observationStatus=403;window.OrreryGlobalDashboard.refresh().catch(()=>{})")
+  wait(failed_observation,"!!document.querySelector('[name=capability]') && document.querySelectorAll('.global-agent,.reply-item,#gsvg .node').length===0")
+  result['observation_403_locks']=ev(failed_observation,"!sessionStorage.getItem('orrery.operator-capability')")
+  assert result['observation_403_locks']
   no_viewer=tab(init,query='?view=net')
   wait(no_viewer,"!!document.querySelector('#gsvg .node.act-work.sp-parent') && !!document.querySelector('#gsvg .node.act-wait.sp-child')")
   result['runtime_without_viewpoint']=ev(no_viewer,"({viewer:document.querySelector('select[aria-label=\"Mail viewpoint\"]').value,work:document.querySelectorAll('#gsvg .act-work').length,wait:document.querySelectorAll('#gsvg .act-wait').length,mailReads:window.__requests.filter(x=>x.path.startsWith('/api/graph')||x.path.startsWith('/api/mail/')).length})")

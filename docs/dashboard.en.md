@@ -505,3 +505,5 @@ The capability is read internally and never placed in arguments, URLs or output.
 Verification uses synthetic work / wait, context 0 / 42 / 100, standalone, parent/child, multiple sessions, a busy writer and App unknown. No real provider binary is required. Actual PID/start/tmux proof uses a dedicated test socket, never the live dashboard, Mail or tmux.
 
 Use `127.0.0.1` for the probe origin, matching the CLI default and these examples. `localhost` is a different Origin and is not interchangeable. The probe never uses environment HTTP proxies.
+
+If observation alone fails, that refresh falls back to `ACTIVITY UNKNOWN` for all agents; Unlock, Mail, and registration remain available. Authentication refusal (403) still locks the page. Each observation HTTP request enumerates the roster and client roots once and reuses them for IDs and parent checks. More than 200 IDs requires another enumeration per request. There is no persistent cache, and the 15-second refresh interval is unchanged.

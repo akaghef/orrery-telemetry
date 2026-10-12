@@ -46,7 +46,13 @@ selector.onchange=()=>{viewer=selector.value?Number(selector.value):null;clearMa
 async function loadRoster(){
  const generation=session.epoch;let before=null,all=[];
  do{const j=await api('/api/agents?limit=200'+(before?'&before_agent_id='+before:''));all.push(...j.data.items);before=j.data.next_before_agent_id;}while(before&&all.length<10000);
- const observations=[];for(let at=0;at<all.length;at+=200){const ids=all.slice(at,at+200).map(a=>a.agent_id);if(ids.length)observations.push(...(await api('/api/runtime-observations?agent_ids='+ids.join(','))).items);}
+ let observations=[];
+ try{for(let at=0;at<all.length;at+=200){const ids=all.slice(at,at+200).map(a=>a.agent_id);if(ids.length)observations.push(...(await api('/api/runtime-observations?agent_ids='+ids.join(','))).items);}}
+ catch(error){
+  // Authentication/Lock changes the shared epoch; never restore a locked UI.
+  if(generation!==session.epoch)throw error;
+  observations=[];
+ }
  if(generation!==session.epoch)return;
  roster=all;runtime=window.OrreryRuntimeNode.adapt(roster,observations);selector.replaceChildren(E('option','','Choose a viewpoint'));selector.firstChild.value='';
  for(const row of roster){const o=E('option','',row.name+' · #'+row.agent_id);o.value=row.agent_id;selector.append(o);}
