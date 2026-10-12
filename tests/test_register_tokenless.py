@@ -98,8 +98,9 @@ else:
     print(response)
 '''
 
-# agent-start copies the agent name to the clipboard (bin/agent-start:82). Left
-# unstubbed, running this suite overwrites the developer's real clipboard.
+# agent-start must not write the agent name to the clipboard. The stub records
+# any call, so a regression fails the test instead of overwriting the
+# developer's real clipboard.
 _PBCOPY_STUB = '#!/bin/bash\ncat >> "${PBCOPY_STUB_LOG:-/dev/null}"\n'
 
 
@@ -333,7 +334,7 @@ def test_agent_start_registers_and_reaches_the_launch_stage():
             stdin=subprocess.DEVNULL, timeout=120,
         )
         calls = _curl_calls(log)
-        clipboard = (root / "pbcopy.txt").read_text(encoding="utf-8") if (root / "pbcopy.txt").exists() else ""
+        copied = (root / "pbcopy.txt").exists()
     combined = r.stdout + r.stderr
     assert "unbound variable" not in combined, combined
     assert "registration failed" not in combined, (
@@ -348,7 +349,7 @@ def test_agent_start_registers_and_reaches_the_launch_stage():
         "agent-start did not reach the launch stage under the registered identity — "
         f"this is the reported silent `cc` death.\n{combined}"
     )
-    assert name in clipboard, (name, clipboard)
+    assert not copied, "agent-start wrote to the clipboard"
 
 
 def test_agent_start_actually_execs_claude_inside_tmux():

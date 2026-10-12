@@ -17,7 +17,7 @@ After the installer merges `settings.template.json` into `~/.claude/settings.jso
 
 | Event / matcher | Executable | Trigger timing | Primary behavior |
 | --- | --- | --- | --- |
-| `SessionStart` | [`set-ghostty-title.sh`](../hooks/set-ghostty-title.sh) | Immediately after startup / resume / `/clear` / compact | Apply a known identity to pane metadata, the tmux session, the terminal-title clipboard, and the managed agent list |
+| `SessionStart` | [`set-ghostty-title.sh`](../hooks/set-ghostty-title.sh) | Immediately after startup / resume / `/clear` / compact | Apply a known identity to pane metadata, the tmux session, and the managed agent list |
 | `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | Same as above, after the title helper | Check ORRERY Mail health and the existing identity, then output route-aware guidance for embedded tasks, bound proxies, and raw/direct connections into session context |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Immediately before Claude Code edits a file | Check an existing exact-path reservation inside a protected root with renew-only semantics. Retry zero results once, then block with exit 2 if the result remains zero |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | Immediately before an edit, write, or shell command | Check a session flag to confirm that the current Claude session has called `register_agent`. Block an unregistered session with exit 2 |
@@ -34,7 +34,7 @@ The installer distributes the endpoint and transport credential selector in the 
 
 - **Trigger:** `SessionStart`. It is also called in the background after `mark-agent-registered.sh` obtains the current session's own canonical name.
 - **Behavior:** Uses `AGENT_NAME` or an argument and writes identity metadata for each `TMUX_PANE` to the runtime directory. tmux rename is allowed only for `pending-*` sessions, so an established parent session is not overwritten with a child name.
-- **On collision:** Does not kill a same-name tmux session; it refuses the rename and fails closed. Supported terminals use the clipboard for title handoff. If the name cannot be resolved, it does nothing.
+- **On collision:** Does not kill a same-name tmux session; it refuses the rename and fails closed. If the name cannot be resolved, it does nothing.
 
 ### `session-start-reminder.sh`
 
