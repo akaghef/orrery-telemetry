@@ -12,8 +12,8 @@ API['operator_schemas']()
 
 
 class RuntimeOperator:
-    def __init__(self, config_path):
-        self.api=API
+    def __init__(self, config_path, *, api=None):
+        self.api=API if api is None else api
         self.path=self.api['absolute'](str(config_path))
         if self.path.name!='server-config.json':raise self.api['ClientError']('CONFIG_PATH_INVALID')
         self.raw=self.api['read_private'](self.path)

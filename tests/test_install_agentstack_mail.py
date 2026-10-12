@@ -768,6 +768,8 @@ def _copy_persistent_launcher(stack: pathlib.Path) -> pathlib.Path:
         launcher,
     )
     launcher.chmod(0o755)
+    from _installed_client_payload import copy_client_library
+    copy_client_library(stack)
     return launcher
 
 

@@ -29,7 +29,11 @@ ags_load_env() {
   [[ -f "$ctx" ]] || ags_die "missing hooks/project-context.sh next to $AGS_LIB_DIR; re-run install.sh"
   # shellcheck source=../../hooks/project-context.sh
   . "$ctx"
-  agentstack_load_installed_env "$envf"
+  if declare -F ags_client_bootstrap >/dev/null; then
+    ags_client_bootstrap "$envf" || ags_die "runtime mode bootstrap refused"
+  else
+    agentstack_load_installed_env "$envf"
+  fi
 }
 
 ags_resolve_tmux() {

@@ -51,6 +51,8 @@ PY
 # load env.sh with agentstack_load_installed_env, which keeps an explicit value
 # instead of letting env.sh overwrite it (issues #33 and #137).
 AGENTSTACK_INHERITED_SETTINGS="
+AGENTSTACK_RUNTIME_MODE
+AGENTSTACK_GLOBAL_SERVER_CONFIG
 AGENTSTACK_PROJECT_KEY
 AGENTSTACK_PROTECTED_ROOTS
 AGENTSTACK_PORT
@@ -121,7 +123,7 @@ agentstack_resolve_setting() {
 agentstack_load_installed_env() {
     local env_file="${1:-${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh}"
     local name value count=0 i=0 live_project_key="" live_protected_roots=""
-    local names=() values=()
+    local names=() values=() env_status=0
     [ -f "$env_file" ] || return 0
     for name in $AGENTSTACK_INHERITED_SETTINGS; do
         value="${!name:-}"
@@ -134,7 +136,7 @@ agentstack_load_installed_env() {
     live_project_key="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
     live_protected_roots="${AGENTSTACK_PROTECTED_ROOTS:-}"
     # shellcheck disable=SC1090
-    . "$env_file"
+    . "$env_file" || env_status=$?
     while [ "$i" -lt "$count" ]; do
         name="${names[$i]}"
         value="${!name:-}"
@@ -149,7 +151,7 @@ agentstack_load_installed_env() {
             "$live_project_key" "$live_project_key" "$env_file")"
         export AGENTSTACK_PROTECTED_ROOTS="$value"
     fi
-    return 0
+    return "$env_status"
 }
 
 # Priority: live AGENTSTACK_PROJECT_KEY, live PROJECT_KEY, installed env, cwd.

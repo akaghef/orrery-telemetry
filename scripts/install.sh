@@ -2762,6 +2762,8 @@ values = {
     "AGENTSTACK_DASHBOARD_RESTART_DELAY": "$DASHBOARD_RESTART_DELAY",
     "AGENTSTACK_VAULT": "$VAULT_SETTING",
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
+    "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
+    "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PATH": "$PATH_VALUE",
     # Which of the values above were chosen, not written-out defaults: only
     # these are inherited by the next install.
@@ -2983,7 +2985,7 @@ render_native_mail_runner() {
     "$NATIVE_MAIL_VENV/bin/agentstack-mail-service" \
     "$NATIVE_MAIL_VENV/bin/agentstack-mail" "$NATIVE_MAIL_ENV" \
     "$NATIVE_MAIL_STATE_ROOT" "$NATIVE_MAIL_SOURCE_ID" "$NATIVE_MAIL_VENV" \
-    "$MCP_URL" "$NATIVE_MAIL_ENROLL_BIN" "$NATIVE_MAIL_DEPLOYMENT" <<'PY'
+    "$MCP_URL" "$NATIVE_MAIL_ENROLL_BIN" "$NATIVE_MAIL_DEPLOYMENT" "$BIN_DIR/lib/runtime_client.py" "$PYTHON_BIN" <<'PY'
 import json
 import pathlib
 import shlex
@@ -3000,9 +3002,11 @@ import sys
     mcp_url,
     enroll_bin,
     deployment_file,
+    runtime_client,
+    python_bin,
 ) = sys.argv[1:]
 command = [
-    service, "foreground",
+    python_bin, runtime_client, "service-exec", service, "foreground",
     "--server-executable", server,
     "--env-file", env_file,
     "--state-root", state_root,
@@ -4138,6 +4142,8 @@ PATH=$PATH_VALUE
 AGENTSTACK_MAIL_HOME=$MAIL_HOME
 AGENTSTACK_SIGNALS_DIR=$SIGNALS_DIR
 AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR
+AGENTSTACK_RUNTIME_MODE=${AGENTSTACK_RUNTIME_MODE:-legacy}
+AGENTSTACK_GLOBAL_SERVER_CONFIG=${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}
 ENVLIST
 } # end mail_watcher_environment
 
@@ -4455,6 +4461,8 @@ import sys
 path = pathlib.Path(sys.argv[1])
 env = {
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
+    "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
+    "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PORT": "$PORT",
     "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
     "AGENTSTACK_MAIL_DB": "$MAIL_DB",
@@ -4987,6 +4995,16 @@ PY
 }
 
 main() {
+  # Select once before installer probes or lifecycle actions. Live/global
+  # cutover is still a later operator procedure, never a legacy install.
+  . "$REPO_ROOT/bin/lib/global-client-loader.sh"
+  ags_client_bootstrap "$ENV_FILE" || return $?
+  ags_client_select && _ags_install_rc=0 || _ags_install_rc=$?
+  if [[ "$_ags_install_rc" == 0 ]]; then
+    printf '%s\n' GLOBAL_INSTALL_REQUIRES_PR7 >&2
+    return 2
+  fi
+  [[ "$_ags_install_rc" == 125 ]] || return "$_ags_install_rc"
   say "ORRERY Telemetry core installer"
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"

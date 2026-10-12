@@ -21,5 +21,6 @@ def selected_client():
             raise RuntimeError('GLOBAL_ENTRY_UNAVAILABLE')
         return None
     api = runpy.run_path(str(library))
-    path = api['selected']([])
-    return (api, api['RuntimeClient'](path)) if path is not None else None
+    choice = api['selected']([])
+    client = api['configured'](selection=choice)
+    return (api, client) if client is not None else None

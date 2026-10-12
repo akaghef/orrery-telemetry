@@ -21,6 +21,9 @@ def ui(server,monkeypatch):
     monkeypatch.setenv('AGENTSTACK_GLOBAL_SERVER_CONFIG',str(server['config_path']))
     monkeypatch.setenv('AGENTSTACK_MCP_URL',server['url'])
     monkeypatch.setattr(dashboard,'GLOBAL_MODE',True)
+    # Process mode/config are pinned together at startup; this in-process
+    # HTTP fixture explicitly supplies both instead of changing ambient env.
+    monkeypatch.setattr(dashboard,'GLOBAL_SERVER_CONFIG',str(server['config_path']))
     monkeypatch.setattr(dashboard,'BIND_HOST','127.0.0.1')
     http=ThreadingHTTPServer(('127.0.0.1',0),dashboard.Handler)
     thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()

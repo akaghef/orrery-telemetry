@@ -45,7 +45,16 @@ from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
 API_GENERATION = 18
-GLOBAL_MODE = os.environ.get("AGENTSTACK_RUNTIME_MODE", "").strip() == "global"
+# Mode admission is shared with hooks and operator/service entry points.
+import runpy as _runtime_runpy
+_MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
+_MODE_SELECTION = _MODE_API['selected'](bootstrap=__name__ == '__main__')
+GLOBAL_MODE = _MODE_SELECTION['mode'] == 'global'
+GLOBAL_SERVER_CONFIG = str(_MODE_SELECTION['server_config'] or '')
+if __name__ == '__main__':
+    os.environ['AGENTSTACK_RUNTIME_MODE'] = _MODE_SELECTION['mode']
+    if GLOBAL_SERVER_CONFIG:
+        os.environ['AGENTSTACK_GLOBAL_SERVER_CONFIG'] = GLOBAL_SERVER_CONFIG
 
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
@@ -8571,7 +8580,7 @@ class Handler(BaseHTTPRequestHandler):
                         or any(re.fullmatch(r'[1-9][0-9]{0,18}', x) is None or int(x)>2**63-1 for x in ids)
                         or len(set(ids)) != len(ids)):
                     raise ValueError('QUERY_INVALID')
-                payload=Backend(os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG','')).observe(list(map(int,ids)),_parse_runtime)
+                payload=Backend(GLOBAL_SERVER_CONFIG).observe(list(map(int,ids)),_parse_runtime)
             elif path == '/api/quotas':
                 payload=QUOTA_SERVICE.read_all()
             elif path == '/portrait':
@@ -8588,7 +8597,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/deliverables':
                 payload={'ok':True,'runtime_mode':'global','configured':bool(os.environ.get('AGENTSTACK_DELIVERABLE_ROOTS','').strip()),'items':_deliverables_index()}
             else:
-                backend = Backend(os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG',''))
+                backend = Backend(GLOBAL_SERVER_CONFIG)
                 payload = backend.get(path,parse_qs(urlparse(self.path).query,keep_blank_values=True))
             self._send(200,json.dumps(payload,ensure_ascii=False).encode(),'application/json; charset=utf-8')
         except Exception as exc:
@@ -8915,7 +8924,7 @@ class Handler(BaseHTTPRequestHandler):
                     resolved=os.path.realpath(value)
                     if not any(_is_within_root(resolved,root) for root in _spawn_roots()):raise BackendError('SPAWN_DIRECTORY_OUTSIDE_ROOTS',400)
                     return resolved
-                result=Backend(os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG','')).post(path,payload,cwd,_open_terminal_tmux)
+                result=Backend(GLOBAL_SERVER_CONFIG).post(path,payload,cwd,_open_terminal_tmux)
                 self._send(200 if result.get('ok') else 409,json.dumps(result,ensure_ascii=False).encode(),'application/json; charset=utf-8')
             except Exception as exc:
                 self._global_failure(exc)

@@ -210,3 +210,24 @@ A registration race can still leave a pending intent. Read `registration_sha256`
 API 17 additionally accepts the status digest on explicit registration replay. Browser Lock invalidates queued handoffs and in-flight bodies; denied storage uses page memory and requires Unlock after reload.
 
 For API 18 `global_runtime_observation=1`, `operator_session=1` and the non-secret `agentstack-http-operator probe`, see [activity and capability checks](dashboard.en.md#global-runtime-proof). Cockpit implementation and PR7 activation remain separate gates.
+
+## Mode selection and services without an owner context
+
+The shared client's `selected` function is the sole mode selector. Selection does not read owner credentials, register an identity, or contact the server. A new top-level launcher or service reads the existing `env.sh` once and pins its selection in the process environment. Hooks and workers inherit that value. Editing `env.sh` does not switch a running process; an explicit service stop/start adopts the new default.
+
+| Input | Result |
+|---|---|
+| No mode, context or config | Legacy by default, preserving the existing path |
+| Valid global context | Global; the context overrides the installed default |
+| Explicit legacy with global context/config | `RUNTIME_MODE_CONTEXT_CONFLICT` |
+| Global without context | Selection succeeds; agent operations return `CONTEXT_UNAVAILABLE` |
+| Only an existing isolated server config | Global operator/service, without borrowing an owner |
+| Unknown mode, broken context or invalid config | Fixed rejection; no legacy database fallback |
+
+`agentstack-runtime-client select --json` returns an ephemeral selection. Legacy context formats return `LEGACY_CONTEXT_REQUIRES_PR7`; import belongs to a later explicit procedure. An old session without a pinned mode can continue in legacy when encountering a new global default only if its existing non-secret session_index self binding verifies. Otherwise `LEGACY_SESSION_MODE_UNRESOLVED` requires ending and explicitly restarting that old session. A project-key string alone is not proof.
+
+The ownerless watcher entry is `agentstack-runtime-client watch-service --server-config /absolute/server-config.json`. Existing RuntimeOperator admission verifies readiness and binding, then dispatches each fixed global-consumer route to the existing owner client delivery engine. Zero recipients is healthy waiting. An invalid recipient emits a reason without stopping another valid recipient. Owner and service watchers share directory events and rescue scans. Process liveness or waiting is not delivery completion; the server notification fact remains authoritative.
+
+Terminal, service and cron calls to `agentstack-mailctl` and `agentstack-enroll` use the same selection. Global enrollment uses `inspect --agent-id ID`, or `claim/recover --agent-id ID --request-id UUID --expected-generation N`, over the existing management socket. Supply the new credential on stdin, never argv. The legacy enrollment executable runs only after legacy selection. A newly deployed controller missing its common loader stops with `GLOBAL_ENTRY_UNAVAILABLE` and requires redeployment.
+
+Legacy remains the default and activation remains false. Asking the installer to switch a live installation to global returns `GLOBAL_INSTALL_REQUIRES_PR7`. Running isolated server configuration and changing the user default are separate stages. Dedicated tmux sockets and session naming are not implemented in this stage.

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import fcntl
+try:
+    import fcntl
+except ImportError:  # legacy dashboard startup is portable; global remains Unix-only
+    fcntl = None
 import hashlib
 import json
 import os
@@ -283,31 +286,129 @@ def integer(value, minimum=0):
     return type(value) is int and value >= minimum
 
 
-def selected(argv=None, *, path=None):
-    """The sole normal context selector; never parse legacy-specific flags."""
+def _legacy_session_proof():
+    """Read the existing non-secret self binding, never a token or project hint."""
+    name = os.environ.get('AGENT_NAME')
+    session = os.environ.get('AGENTSTACK_SESSION_ID')
+    if not name and not session:
+        return False
+    directory = Path(os.environ.get('AGENTSTACK_RUNTIME_DIR', str(ROOT / 'runtime'))) / 'session_index'
+    matches = []
+    try:
+        if directory.is_symlink():
+            raise ClientError('LEGACY_SESSION_MODE_UNRESOLVED')
+        for path in directory.glob('*.json'):
+            if path.is_symlink():
+                continue
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_nlink != 1 or info.st_mode & 0o022):
+                raise ClientError('LEGACY_SESSION_MODE_UNRESOLVED')
+            row = json.loads(path.read_text())
+            if not isinstance(row, dict):
+                raise ClientError('LEGACY_SESSION_MODE_UNRESOLVED')
+            if (row.get('schema_version') == 2 and row.get('binding_kind') == 'self'
+                    and integer(row.get('agent_id'), 1)
+                    and row.get('agent_name') and row.get('session_id')
+                    and row.get('registered_by') in ('', row['agent_name'])
+                    and (not name or row['agent_name'] == name)
+                    and (not session or row['session_id'] == session)):
+                matches.append(row)
+    except (OSError, ValueError, TypeError):
+        raise ClientError('LEGACY_SESSION_MODE_UNRESOLVED')
+    if len(matches) != 1:
+        raise ClientError('LEGACY_SESSION_MODE_UNRESOLVED')
+    return True
+
+
+def selected(argv=None, *, path=None, bootstrap=False):
+    """The sole mode selector. Selection is ephemeral and does no owner/network IO.
+
+    Only a new top-level process requests bootstrap; hooks inherit its mode.
+    Unknown options belong to the caller and are deliberately left untouched.
+    """
     argv = list(argv or [])
     explicit = path
+    mode = os.environ.get('AGENTSTACK_RUNTIME_MODE')
+    config = os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG')
+    source = ('installed-default' if '--installed-default' in argv else 'inherited-mode') if mode is not None else 'default'
     for index, argument in enumerate(argv):
-        if argument.startswith('--context='):
-            explicit = argument.split('=', 1)[1]
-            if not explicit:
-                raise ClientError('CONTEXT_UNAVAILABLE')
-        elif argument == '--context':
-            if index + 1 == len(argv) or argv[index + 1].startswith('--'):
-                raise ClientError('CONTEXT_UNAVAILABLE')
-            explicit = argv[index + 1]
+        for flag in ('--context', '--runtime-mode', '--server-config'):
+            if argument != flag and not argument.startswith(flag + '='):
+                continue
+            if argument == flag:
+                if index + 1 == len(argv) or argv[index + 1].startswith('--'):
+                    raise ClientError('CONTEXT_UNAVAILABLE' if flag == '--context' else 'RUNTIME_SELECTION_INVALID')
+                value = argv[index + 1]
+            else:
+                value = argument.split('=', 1)[1]
+            if not value:
+                raise ClientError('CONTEXT_UNAVAILABLE' if flag == '--context' else 'RUNTIME_SELECTION_INVALID')
+            if flag == '--context': explicit = value
+            elif flag == '--runtime-mode': mode, source = value, 'explicit-mode'
+            else: config = value
+    if bootstrap and mode is None:
+        env = Path(os.environ.get('AGENTSTACK_HOME', str(ROOT))) / 'env.sh'
+        if env.exists() or env.is_symlink():
+            if not env.is_file() or not os.access(env, os.R_OK):
+                raise ClientError('RUNTIME_DEFAULT_UNAVAILABLE')
+            # Reuse the existing shell configuration syntax, once at bootstrap.
+            reply = subprocess.run(['/bin/bash', '-c',
+                'set -e; . "$1" >&2; printf "%s\\0%s" "${AGENTSTACK_RUNTIME_MODE-legacy}" "${AGENTSTACK_GLOBAL_SERVER_CONFIG-}"',
+                'runtime-default', str(env)], capture_output=True)
+            if reply.returncode:
+                raise ClientError('RUNTIME_DEFAULT_UNAVAILABLE')
+            try: mode, default_config = reply.stdout.decode().split('\0')
+            except (UnicodeError, ValueError): raise ClientError('RUNTIME_DEFAULT_UNAVAILABLE')
+            config = config or default_config or None
+            source = 'installed-default'
+    if mode is not None and mode not in ('legacy', 'global'):
+        raise ClientError('RUNTIME_MODE_INVALID')
     explicit = explicit or os.environ.get('AGENTSTACK_CLIENT_CONFIG')
     context = absolute(str(explicit)) if explicit else ROOT / 'runtime-client.json'
-    if not context.exists() and not context.is_symlink():
+    if context.exists() or context.is_symlink():
+        document = read_json(context)
+        if document.get('kind') != KIND or document.get('mode') != 'global':
+            raise ClientError('LEGACY_CONTEXT_REQUIRES_PR7')
+        context_mode = document['mode']
+        if mode is not None and mode != context_mode and source != 'installed-default':
+            raise ClientError('RUNTIME_MODE_CONTEXT_CONFLICT')
+        mode = context_mode
+        source = 'context'
+    else:
         if explicit:
             raise ClientError('CONTEXT_UNAVAILABLE')
+        context = None
+    config_path = absolute(config) if config else None
+    if config_path is not None:
+        server = read_json(config_path)
+        if server.get('kind') != 'orrery-global-server-s2c-v1':
+            raise ClientError('ISOLATED_CONFIG_REQUIRED')
+        if mode == 'legacy' and source != 'installed-default':
+            raise ClientError('RUNTIME_MODE_CONTEXT_CONFLICT')
+        mode = 'global'
+        if context is not None:
+            pairs = [('expected_server_instance_id','mail_instance_id'),
+                     ('candidate_generation','candidate_generation'),('authority_epoch','authority_epoch'),
+                     ('runtime_root','runtime_root'),('authority','authority'),('authority_lock','authority_lock')]
+            if any(document.get(local) != server.get(remote) for local, remote in pairs):
+                raise ClientError('SERVER_BINDING_MISMATCH')
+    if context is None and mode == 'global' and _legacy_session_proof():
+        if source != 'installed-default':
+            raise ClientError('RUNTIME_MODE_CONTEXT_CONFLICT')
+        mode, source = 'legacy', 'legacy-session-proof'
+    return {'mode': mode or 'legacy', 'context': context,
+            'server_config': config_path,
+            'source': source, 'reason': None}
+
+
+def configured(path=None, *, recovery=None, selection=None):
+    choice = selection or selected(sys.argv[1:] if path is None else [], path=path)
+    if choice['mode'] == 'legacy':
         return None
-    return context
-
-
-def configured(path=None, *, recovery=None):
-    context = selected(sys.argv[1:] if path is None else [], path=path)
-    return RuntimeClient(context, recovery=recovery) if context is not None else None
+    if choice['context'] is None:
+        raise ClientError('CONTEXT_UNAVAILABLE')
+    return RuntimeClient(choice['context'], recovery=recovery)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -2080,8 +2181,8 @@ def entry_operation(entry, argv):
     parser.add_argument('--agent-id', type=int)
     parser.add_argument('--expected-digest')
     parser.add_argument('positionals', nargs='*')
-    context = selected(argv)
-    if context is None:
+    choice = selected(argv)
+    if choice['mode'] == 'legacy':
         return 125
     options = parser.parse_args(argv)
     recovery = ('finalize-create', options.agent_id) if entry == 'finalize-child' and options.operator else None
@@ -2211,11 +2312,61 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == 'select':
         try:
-            context = selected(argv[1:])
-            print('orrery-client-global-v1\n' + str(context) if context is not None else 'orrery-client-legacy-v1')
+            choice = selected(argv[1:], bootstrap='--bootstrap' in argv)
+            if '--json' in argv:
+                print(json.dumps(choice, default=str))
+            elif '--shell' in argv:
+                print('export AGENTSTACK_RUNTIME_MODE=' + shlex.quote(choice['mode']))
+                if choice['mode'] == 'global' and choice['server_config'] is not None:
+                    print('export AGENTSTACK_GLOBAL_SERVER_CONFIG=' + shlex.quote(str(choice['server_config'])))
+                elif choice['mode'] == 'legacy':
+                    print('unset AGENTSTACK_GLOBAL_SERVER_CONFIG')
+            else:
+                print('orrery-client-global-v1\n' + (str(choice['context']) if choice['context'] else '') if choice['mode'] == 'global' else 'orrery-client-legacy-v1')
             return 0
         except ClientError as exc:
             print('runtime-client: ' + str(exc), file=sys.stderr)
+            return 64  # supported selector refused; partial helpers use argparse exit 2
+    if argv and argv[0] in ('service-exec', 'service-health', 'operator-enroll'):
+        try:
+            choice = selected(argv[1:])
+            if choice['mode'] != 'global':
+                if argv[0] == 'service-exec':
+                    os.execv(argv[1], argv[1:])
+                return 125
+            if choice['server_config'] is None:
+                raise ClientError('SERVER_CONFIG_REQUIRED')
+            operator = runpy.run_path(str(Path(__file__).with_name('runtime_operator.py')))['RuntimeOperator'](choice['server_config'], api=globals())
+            if argv[0] == 'service-health':
+                operator.read({'kind':'health'}); return 0
+            if argv[0] == 'service-exec':
+                # The existing immutable runner still owns PID/signal/restart.
+                # Global never enters legacy service.foreground/runtime_config.
+                index = argv.index('--server-executable') + 1
+                executable = absolute(argv[index])
+                endpoint = urlsplit(local_endpoint(os.environ.get('AGENTSTACK_MCP_URL','')))
+                os.environ['AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE'] = 'passthrough'
+                os.execv(str(executable), [str(executable), '--global-config', str(operator.path),
+                    '--host', endpoint.hostname, '--port', str(endpoint.port), '--path', endpoint.path])
+            parser = argparse.ArgumentParser(prog='operator-enroll')
+            parser.add_argument('action', choices=['inspect','claim','recover'])
+            parser.add_argument('--agent-id', type=int, required=True)
+            parser.add_argument('--request-id')
+            parser.add_argument('--runtime-mode')
+            parser.add_argument('--server-config')
+            parser.add_argument('--expected-generation', type=int)
+            args = parser.parse_args(argv[1:])
+            request = {'version':1, **operator.binding, 'action':args.action, 'agent_id':args.agent_id}
+            if args.action != 'inspect':
+                # Existing management protocol; credential supplied on stdin,
+                # never an argv value or echoed in diagnostics.
+                request.update(request_id=args.request_id, expected_generation=args.expected_generation,
+                               new_credential=sys.stdin.read().strip())
+            reply = management_exchange(operator.config, request)
+            if reply.get('ok') is not True: raise ClientError(reply.get('reason','MANAGEMENT_REJECTED'))
+            print(json.dumps(reply)); return 0
+        except (ClientError, OSError, ValueError, KeyError, IndexError) as exc:
+            print('runtime-client: ' + (str(exc) if isinstance(exc,ClientError) else 'SERVICE_INPUT_INVALID'), file=sys.stderr)
             return 2
     if argv and argv[0] == 'entry':
         try:
@@ -2225,27 +2376,31 @@ def main(argv=None):
             return 2
     parser = argparse.ArgumentParser()
     parser.add_argument('--context')
+    parser.add_argument('--runtime-mode', choices=['legacy','global'])
+    parser.add_argument('--server-config')
     parser.add_argument('operation', choices=['mode', 'observe', 'reconnect', 'bootstrap', 'launch', 'call',
-                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure'])
+                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure', 'watch-service'])
     parser.add_argument('args', nargs='*')
     a = parser.parse_args(argv)
     try:
+        choice = selected(argv)
+        if a.operation == 'mode':
+            print(choice['mode']); return 0
+        if a.operation == 'watch-service':
+            if choice['mode'] != 'global' or choice['server_config'] is None:
+                raise ClientError('SERVER_CONFIG_REQUIRED')
+            delivery_contract()['watch_service'](choice['server_config'], globals())
+            return 0
         recovery = None
         if a.operation == 'resolve-mutation':
             recovery = ('resolve-mutation', None)
         if a.operation in {'claim', 'recover'}:
-            context_path = selected(path=a.context)
+            context_path = selected(path=a.context)['context']
             if context_path is None:
                 raise ClientError('CONTEXT_REQUIRED')
             config = read_json(context_path)
             recovery = (a.operation, (config.get('identity') or {}).get('agent_id'))
-        client = configured(a.context, recovery=recovery)
-        if a.operation == 'mode':
-            if client is not None:
-                with client.fence():
-                    pass
-            print(client.mode if client else 'legacy')
-            return 0
+        client = configured(a.context, recovery=recovery, selection=choice)
         if client is None:
             raise ClientError('CONTEXT_REQUIRED')
         if a.operation == 'instruction-configure':
