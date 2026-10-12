@@ -140,11 +140,6 @@ class Observations:
             self.budget()
             if live.get('ended'):
                 continue
-            if live.get('launch_id') is not None:
-                if (not launch or launch.get('phase') != 'running'
-                        or any(live.get(k) != launch.get(k) for k in ('launch_id','receipt_nonce'))):
-                    uncertain = True
-                    continue
             # Standalone slots have no launch receipt; PID/start/pane proof is
             # the same as launched slots. Never synthesize launch state.
             key = (tuple(sorted(self.operator.binding.items())), row['agent_id'], digest, live['session_id'])
@@ -161,6 +156,13 @@ class Observations:
                         if now - _CACHE[old][0] >= 4.5:
                             del _CACHE[old]
                     _CACHE[key] = (now, state, sample)
+            # A leftover launch slot may already be absent. Prove that before
+            # treating its stale launch binding as an uncertain live session.
+            if state != 'absent' and live.get('launch_id') is not None:
+                if (not launch or launch.get('phase') != 'running'
+                        or any(live.get(k) != launch.get(k) for k in ('launch_id','receipt_nonce'))):
+                    uncertain = True
+                    continue
             if state == 'live':
                 live_count += 1
                 parsed = sample
@@ -243,11 +245,16 @@ class Observations:
                 while ps.get('child') is not None:
                     seen.add(pid)
                     pp = ps['child']['parent']; pid = pp['agent_id']
-                    if (pid in seen or len(roots.get(pid, [])) != 1
+                    if pid in seen:
+                        raise self.api['ClientError']('PARENT_UNAVAILABLE')
+                    # Only the direct parent is a condition of this edge.
+                    # Stop cycle traversal at an unavailable/retired ancestor;
+                    # that ancestor's own edge is independently unknown.
+                    if (len(roots.get(pid, [])) != 1
                             or pid not in roster or roster[pid].get('retired_at')):
-                        raise self.api['ClientError']('PARENT_UNAVAILABLE')
+                        break
                     if roots[pid][0].name != pp['client_name'] or pp['server_instance_id'] != self.operator.binding['expected_server_instance_id']:
-                        raise self.api['ClientError']('PARENT_UNAVAILABLE')
+                        break
                     ps, parent_digest = self.snapshot(roots[pid][0], pid)
                     ancestry.append((roots[pid][0],pid,ps,parent_digest))
                     self.owner(ps)

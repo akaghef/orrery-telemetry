@@ -123,7 +123,7 @@ class Admission:
 def probe(home, *, service, telemetry_url, cockpit_port, config_path):
     """Read admitted service proof; never print capability or owner credentials."""
     import runpy
-    from urllib.request import Request, build_opener, HTTPRedirectHandler
+    from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
     root = Path(__file__).resolve().parents[1]
     operator = runpy.run_path(str(root/'bin/lib/runtime_operator.py'))['RuntimeOperator'](config_path)
     token = read_capability(home)
@@ -135,7 +135,7 @@ def probe(home, *, service, telemetry_url, cockpit_port, config_path):
         Admission(home, origin)
         request = Request(origin+path, headers={'Authorization':'Bearer '+token,'Origin':origin})
         try:
-            with build_opener(NoRedirect()).open(request, timeout=5) as response:
+            with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=5) as response:
                 return json.loads(response.read(1048577))
         except Exception as exc:
             raise AdmissionError('HTTP_OPERATOR_PROBE_FAILED',503) from exc

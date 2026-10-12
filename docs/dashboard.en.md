@@ -486,6 +486,8 @@ Codex App snapshots and Desktop session metadata do not prove that the provider 
 
 Shared browser controllers own capability, Lock, Mail display and registration recovery. Lock invalidates outstanding requests and image object URLs. Extensions granted access to the page can read sessionStorage: use a trusted browser profile. Lock clears the page session, rather than revoking the server capability.
 
+Network and Deck show the same activity without a Mail viewpoint. Confirmed absence is NOT RUNNING; unavailable evidence is ACTIVITY UNKNOWN. Parent/child colours describe direct relationships, so a retired ancestor does not hide a grandchild’s direct parent.
+
 <a id="global-runtime-proof"></a>
 ### Checking supported capabilities
 
@@ -501,3 +503,5 @@ agentstack-http-operator probe --service telemetry
 The capability is read internally and never placed in arguments, URLs or output. Inspect `binding`, `telemetry_api` and `capabilities`. With 6r alone, `cockpit_ready=false` and `cutover_ready=false` are expected. After cockpit integration, use `--service cockpit` with its existing `PORT` environment variable. No persisted cockpit port file or configuration key is added. PR7 activation is a separate gate; a successful probe does not activate global mode.
 
 Verification uses synthetic work / wait, context 0 / 42 / 100, standalone, parent/child, multiple sessions, a busy writer and App unknown. No real provider binary is required. Actual PID/start/tmux proof uses a dedicated test socket, never the live dashboard, Mail or tmux.
+
+Use `127.0.0.1` for the probe origin, matching the CLI default and these examples. `localhost` is a different Origin and is not interchangeable. The probe never uses environment HTTP proxies.

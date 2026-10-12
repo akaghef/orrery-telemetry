@@ -511,6 +511,8 @@ Codex App の snapshot と Desktop session meta は現在の provider の生存�
 
 共有 browser controller は capability・Lock・Mail の表示・登録回復を1か所で扱います。Lock は進行中の要求と画像 URL を失効させます。sessionStorage はそのページに権限を持つ拡張機能から読めるため、信頼できる browser profile を使ってください。Lock はその page session の解除であり、server の capability の撤去ではありません。
 
+Mail の視点を選ばなくても network と deck に同じ稼働状態を表示します。不在を確認できたものは NOT RUNNING、確認できないものは ACTIVITY UNKNOWN です。親子は直接の関係を表示し、退役した祖先だけを理由に孫の関係を消しません。
+
 <a id="global-runtime-proof"></a>
 ### 対応能力の確認
 
@@ -526,3 +528,5 @@ agentstack-http-operator probe --service telemetry
 capability は内部で読み、引数・URL・結果に出しません。結果の `binding`・`telemetry_api`・`capabilities` を確認します。6r だけでは `cockpit_ready=false`、`cutover_ready=false` が正常です。cockpit の実装後は同じ command に `--service cockpit` と既存の `PORT` 環境変数を使います。cockpit の port の永続 file / 設定 key は追加しません。PR7 の切替は別の関門です。この probe の成功だけでは切り替えません。
 
 確認には合成の work / wait、context 0 / 42 / 100、standalone、親子、複数 session、writer 使用中、App unknown を用います。実 provider の binary は不要です。PID/start/tmux の実機証明は専用の試験 socket で行い、live の dashboard・Mail・tmux は使いません。
+
+probe の origin は CLI の既定・docs とも `127.0.0.1` を使います。`localhost` は別 Origin なので代用しません。環境の HTTP proxy は使用しません。

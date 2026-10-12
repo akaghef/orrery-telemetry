@@ -239,16 +239,18 @@ def test_network_adapter_preserves_literal_states_and_does_not_default_unknown_t
     if node is None:pytest.skip('node unavailable')
     script='global.window={};'+(ROOT/'dashboard/runtime_node.js').read_text()+r'''
 const assert=require('node:assert/strict'),adapt=window.OrreryRuntimeNode.adapt;
-const roster=[1,2,3,4].map(agent_id=>({agent_id,name:'Fixture'+agent_id}));
+const roster=[1,2,3,4,5].map(agent_id=>({agent_id,name:'Fixture'+agent_id}));
 const rows=[{agent_id:1,liveness:'live',session_count:1,act_state:'work',ctx_used:42,parent_state:'none'},
 {agent_id:2,liveness:'live',session_count:1,act_state:'wait',ctx_used:0,parent_state:'known',parent_agent_id:1},
 {agent_id:3,liveness:'unknown',session_count:0,act_state:null,ctx_used:null,parent_state:'unknown'},
-{agent_id:4,liveness:'live',session_count:2,act_state:null,ctx_used:null,reason:'MULTIPLE_LIVE_SESSIONS'}];
+{agent_id:4,liveness:'live',session_count:2,act_state:null,ctx_used:null,reason:'MULTIPLE_LIVE_SESSIONS'},
+{agent_id:5,liveness:'absent',session_count:0,act_state:null,ctx_used:null,parent_state:'none'}];
 const result=adapt(roster,rows);
 assert.deepEqual([result.get(1).state,result.get(1).actState,result.get(1).ctxUsed,result.get(1).role],['run','work',42,'parent']);
 assert.deepEqual([result.get(2).state,result.get(2).actState,result.get(2).ctxUsed,result.get(2).role],['run','wait',0,'child']);
 for(const id of [3,4])assert.deepEqual([result.get(id).state,result.get(id).actState,result.get(id).ctxUsed],['unknown',null,null]);
 assert.equal(result.get(4).annot.role,'MULTIPLE SESSIONS');
+assert.deepEqual([result.get(5).state,result.get(5).running,result.get(5).annot.role],['gone',false,'NOT RUNNING']);
 '''
     result=subprocess.run([node,'-e',script],capture_output=True,text=True,timeout=10)
     assert result.returncode==0,result.stderr
@@ -341,3 +343,67 @@ def test_retirement_after_roster_read_is_unknown(ui,monkeypatch):
     row=observe(ui)[0]
     assert row['liveness']=='unknown' and row['act_state'] is None
     assert row['reason']=='AGENT_UNAVAILABLE'
+
+
+@pytest.mark.parametrize('available',[True,False])
+def test_probe_never_sends_capability_through_environment_proxy(ui,monkeypatch,available):
+    from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+    import threading
+    from dashboard.http_operator import probe,AdmissionError
+    state,http,token=ui
+    requests=[]
+    class Proxy(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            value={'api':18,'runtime_mode':'global','capabilities':{'global_runtime_observation':1,'operator_session':1}} if self.path.endswith('/api/version') else {'binding':global_backend.Backend(state['config_path']).operator.binding,'data':{'server_ready':True}}
+            self.send_response(200);self.end_headers();self.wfile.write(json.dumps(value).encode())
+        def log_message(self,*args):pass
+    proxy=ThreadingHTTPServer(('127.0.0.1',0),Proxy)
+    worker=threading.Thread(target=proxy.serve_forever,daemon=True);worker.start()
+    try:
+        for key in ('http_proxy','HTTP_PROXY'):
+            monkeypatch.setenv(key,f'http://127.0.0.1:{proxy.server_port}')
+        for key in ('no_proxy','NO_PROXY'):monkeypatch.setenv(key,'')
+        kwargs=dict(service='telemetry',telemetry_url=f'http://127.0.0.1:{http.server_port if available else 1}',cockpit_port=1,config_path=state['config_path'])
+        if available:assert probe(state['root']/'agentstack',**kwargs)['ok']
+        else:
+            with pytest.raises(AdmissionError,match='HTTP_OPERATOR_PROBE_FAILED'):
+                probe(state['root']/'agentstack',**kwargs)
+        assert requests==[], 'loopback capability must never reach a proxy'
+    finally:
+        proxy.shutdown();proxy.server_close();worker.join(5)
+
+
+def test_old_launch_absent_slot_does_not_hide_current_activity(ui,monkeypatch):
+    client=context(ui[0],window=False)
+    put_live(client,'old',launch_id='00000000-0000-4000-8000-000000000000',receipt_nonce='x'*43)
+    put_live(client,'current')
+    calls=[]
+    def evidence(live,**kwargs):
+        calls.append(live['session_id'])
+        return ('absent',None,None) if live['session_id']=='old' else ('live','%10','ctx: 42% used\n✻ Working…')
+    monkeypatch.setitem(OBS,'pane_evidence',evidence)
+    row=observe(ui)[0]
+    assert row['liveness']=='live' and row['act_state']=='work' and row['ctx_used']==42
+    assert sorted(calls)==['current','old']
+
+
+def test_retired_grandparent_does_not_hide_direct_parent(ui,monkeypatch):
+    top=context(ui[0],window=False)
+    mid_row=top.prepare_child(dict(child_client_name='mid',name='FixtureMid',program='codex',model='fixture',prepare_only=True))
+    mid=type(top)(top.clients_parent/'mid/runtime-client.json')
+    leaf_row=mid.prepare_child(dict(child_client_name='leaf',name='FixtureLeaf',program='codex',model='fixture',prepare_only=True))
+    leaf=type(top)(top.clients_parent/'leaf/runtime-client.json')
+    for client in (top,mid,leaf):put_live(client)
+    monkeypatch.setitem(OBS,'pane_evidence',lambda *a,**kw:('live','%10','ctx: 42% used\n✻ Working…'))
+    original=OBS['operator_exchange']
+    def retired(config,binding,query,**kwargs):
+        result=original(config,binding,query,**kwargs)
+        if query.get('kind')=='roster':
+            for row in result['data']['items']:
+                if row['agent_id']==top.identity['agent_id']:row['retired_at']='2026-10-12T00:00:00Z'
+        return result
+    monkeypatch.setitem(OBS,'operator_exchange',retired)
+    rows=observe(ui,f"{mid_row['agent_id']},{leaf_row['agent_id']}")
+    assert rows[0]['parent_state']=='unknown'
+    assert rows[1]['parent_state']=='known' and rows[1]['parent_agent_id']==mid_row['agent_id']
