@@ -43,6 +43,16 @@ with pytest.MonkeyPatch.context() as mp:
    except RuntimeError as e:assert str(e)=='TRANSPORT_FAILED'
   finally:C.rpc=original
   pending=c.outputs['registration'];pending_before=pending.read_bytes()
+  # Existing fixed client records only; no real provider or process is launched.
+  from test_global_runtime_client_s2a import context
+  observed_client=context(s,name='observed',window=False)
+  child_row=observed_client.prepare_child(dict(child_client_name='observed-child',name='ObservedChild',program='codex',model='fixture',prepare_only=True))
+  observed_child=type(observed_client)(observed_client.clients_parent/'observed-child/runtime-client.json')
+  for c,pid in ((observed_client,101),(observed_child,102)):
+   directory=c.runtime_dir/'live-sessions';directory.mkdir(mode=0o700)
+   op.api['atomic_json'](directory/'fixture.json',dict(kind='orrery-global-live-session-v1',**c.binding,agent_id=c.identity['agent_id'],session_id='fixture',pid=pid,process_start='fixture',pane_id='%10'))
+   with c.operation_mutex():pass
+  mp.setitem(__import__('dashboard.global_backend',fromlist=['OPERATOR_API']).OPERATOR_API['API'],'pane_evidence',lambda live,**kw:('live','%10','ctx: 42% used\n✻ Working…' if live['pid']==101 else 'ctx: 0% used\nReady'))
   http=ThreadingHTTPServer(('127.0.0.1',0),dashboard.Handler)
   thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
   op.create('trust-needed',agent_name='TrustNeedsApproval',program='codex',model='fixture')
@@ -61,7 +71,7 @@ with pytest.MonkeyPatch.context() as mp:
    while time.monotonic()<deadline:
     if ev(w,expression):return
     time.sleep(.1)
-   raise RuntimeError('browser wait timed out: '+expression)
+   raise RuntimeError('browser wait timed out: '+expression+' '+str(ev(w,"({errors:window.__errors,status:document.querySelector('.global-status')?.textContent,nodes:[...document.querySelectorAll('#gsvg .node')].map(n=>[n.getAttribute('class'),n.getAttribute('aria-label')]),text:document.body.innerText.slice(-600)})")))
   def shot(w,name):
    ev(w,'document.fonts.ready');time.sleep(.3)
    data=w.call('Page.captureScreenshot',format='png')['data'];(QA/name).write_bytes(base64.b64decode(data))
@@ -71,6 +81,11 @@ with pytest.MonkeyPatch.context() as mp:
   result['visible_mail']=ev(w,"({cards:document.querySelectorAll('.reply-item').length,hiddenInDOM:document.documentElement.outerHTML.includes('HIDDEN_SENTINEL'),hiddenInURL:location.href.includes('HIDDEN_SENTINEL'),injected:!!window.injected,header:[...document.querySelectorAll('#edrawer .ed-a,#edrawer .ed-b')].map(x=>x.textContent),errors:window.__errors})")
   assert not result['visible_mail']['hiddenInDOM'] and not result['visible_mail']['injected'] and not result['visible_mail']['errors']
   assert ev(w,"getComputedStyle(document.body).backgroundColor!=='rgba(0, 0, 0, 0)' && getComputedStyle(document.querySelector('header')).display==='flex'")
+  ev(w,"document.querySelector('#v-net').click()")
+  wait(w,"!!document.querySelector('#gsvg .node.act-work.sp-parent') && !!document.querySelector('#gsvg .node.act-wait.sp-child')")
+  result['runtime_projection']=ev(w,"({work:document.querySelectorAll('#gsvg .act-work').length,wait:document.querySelectorAll('#gsvg .act-wait').length,unknown:document.querySelectorAll('#gsvg .unknown').length,ctx42:!!document.querySelector('#gsvg .act-work .ctx-arc[data-remaining=\"58\"]'),ctx0:!!document.querySelector('#gsvg .act-wait .ctx-arc[data-remaining=\"100\"]')})")
+  assert result['runtime_projection']['work']==1 and result['runtime_projection']['wait']==1 and result['runtime_projection']['ctx42'] and result['runtime_projection']['ctx0']
+  shot(w,'runtime-network-dark.png');ev(w,"window.AgentStackColorTheme.setPreference('light')");shot(w,'runtime-network-light.png');ev(w,"window.AgentStackColorTheme.setPreference('dark');document.querySelector('#v-deck').click()")
   shot(w,'global-mail-dark.png');ev(w,"window.AgentStackColorTheme.setPreference('light')");shot(w,'global-mail-light.png')
   w.call('Emulation.setDeviceMetricsOverride',width=316,height=900,deviceScaleFactor=1,mobile=False);shot(w,'global-mail-narrow.png')
   result['narrow']=ev(w,"({width:innerWidth,body:document.body.scrollWidth,drawer:document.querySelector('#edrawer').getBoundingClientRect().width})")
@@ -151,6 +166,9 @@ with pytest.MonkeyPatch.context() as mp:
   ev(w,"window.OrreryGlobalDashboard.lock()")
   wait(peer,"!!document.querySelector('[name=capability]') && document.querySelectorAll('.global-agent').length===0")
   result['peer_lock']=True
+  # The shared session is also the sole authenticated binary fetch path.
+  result['binary_session']=ev(w,"(async()=>{let revoked=[];const oldRevoke=URL.revokeObjectURL;URL.revokeObjectURL=u=>{revoked.push(u);oldRevoke.call(URL,u)};const s=window.OrreryOperatorSession.create();await s.accept("+json.dumps(token)+");let pathRejected=false;try{await s.api('/\\\\attacker.example/secret')}catch(e){pathRejected=e.message==='HTTP_OPERATOR_PATH_INVALID'}const url=await s.apiBlob('/portrait?name=Fixture');const text=await (await fetch(url)).text();s.lock();URL.revokeObjectURL=oldRevoke;return {pathRejected,svg:text.includes('<svg'),revoked:revoked.includes(url),unlocked:s.unlocked};})()")
+  assert result['binary_session']==dict(pathRejected=True,svg=True,revoked=True,unlocked=False)
   result['head']=__import__('subprocess').check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
 
  finally:

@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":17}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":18}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -660,3 +660,11 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 - [Troubleshooting](troubleshooting.en.md)
 
 Explicit same-intent replay from registration status sends `registration_sha256` as optional `expected_digest` to `POST /api/global/spawn` (API 17). The existing operation mutex protects comparison and replay. A mismatch returns `REGISTRATION_PENDING_CONFLICT`; an absent pending returns `TARGET_UNAVAILABLE`. Existing credential/name/program/model checks remain in force.
+
+### Global runtime reads (API 18)
+
+`GET /api/runtime-observations?agent_ids=1,2` requires the existing HTTP operator admission. IDs are unique positive 63-bit integers, with 1–200 per request. Invalid input returns `QUERY_INVALID`. No public Mail tools are added. `global-runtime-observation.json` contains the single response schema.
+
+Each item returns `liveness`, nullable `act_state` / `ctx_used`, `session_count`, `parent_agent_id` / `parent_state`, and `activity_freshness` / `reason`. Tokens, pane captures and private paths are excluded. Unknown is never replaced with waiting or context zero. See [observation and capability checks](dashboard.en.md#global-runtime-observation).
+
+Capabilities include `global_runtime_observation=1` and `operator_session=1`. Global `/api/quotas` and `/portrait` use the same admission and existing read helpers. Images use shared-session `apiBlob` object URLs, revoked on Lock.

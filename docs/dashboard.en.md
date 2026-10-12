@@ -474,3 +474,30 @@ Registration recovery buttons follow status `next_operations`: replay/finalize/c
 Instruction checks select local contexts by identity, then verify only matching slots. The slot's `wrapper_root` is the sole installation provenance. Agents without a proven Claude/Codex provider slot show `PROVIDER_HOME_UNPROVEN` in Settings only, without repeated conversation notices. Copied cleanup commands explicitly carry the same HOME, provider HOME and installation environment used for detection; never remove a block by dropping those assignments.
 
 Lock also resets drawer participants, count and accessibility state. The configure-provider button is available only for instruction block setup. Codex trust approval and daemon execution configuration link to the English/Japanese CLI steps; an absent profile is reported as `PERSISTENT_EXECUTION_REQUIRED`.
+
+<a id="global-runtime-observation"></a>
+### Activity in the global network
+
+API 18 advertises `global_runtime_observation=1`. The network reads working / waiting, context use and parent/child colours from existing private client roots and owner verification through the management socket. Legacy rendering and default installation remain unchanged. Observation never registers agents, creates files or opens Mail SQLite directly.
+
+Readers take the existing operation mutex with a shared nonblocking lock. A busy writer, mismatched owner/generation/binding or uncertain PID/start/pane proof makes only that agent `ACTIVITY UNKNOWN`. The entire request has a five-second deadline. The volatile pane cache lasts at most 4.5 seconds and is invalidated by owner, binding or live-slot changes. Concurrent live sessions show `MULTIPLE SESSIONS`, without merging activity or context. Ended history does not hide a current session.
+
+Codex App snapshots and Desktop session metadata do not prove that the provider is currently alive. App activity and context remain **unknown / null**. Bridge, wake and snapshot writers are unchanged. Parent relationships use existing typed child-state and verified owners, never names or Mail traffic.
+
+Shared browser controllers own capability, Lock, Mail display and registration recovery. Lock invalidates outstanding requests and image object URLs. Extensions granted access to the page can read sessionStorage: use a trusted browser profile. Lock clears the page session, rather than revoking the server capability.
+
+<a id="global-runtime-proof"></a>
+### Checking supported capabilities
+
+Prepare an isolated server/dashboard in a temporary HOME, then explicitly configure the existing [operator capability](global-delivery-client.en.md#operator-ui-access):
+
+```sh
+AGENTSTACK_HOME="$TEST_HOME/agentstack" \
+AGENTSTACK_GLOBAL_SERVER_CONFIG="$TEST_CONFIG" \
+ORRERY_DASHBOARD_URL="http://127.0.0.1:$TEST_PORT" \
+agentstack-http-operator probe --service telemetry
+```
+
+The capability is read internally and never placed in arguments, URLs or output. Inspect `binding`, `telemetry_api` and `capabilities`. With 6r alone, `cockpit_ready=false` and `cutover_ready=false` are expected. After cockpit integration, use `--service cockpit` with its existing `PORT` environment variable. No persisted cockpit port file or configuration key is added. PR7 activation is a separate gate; a successful probe does not activate global mode.
+
+Verification uses synthetic work / wait, context 0 / 42 / 100, standalone, parent/child, multiple sessions, a busy writer and App unknown. No real provider binary is required. Actual PID/start/tmux proof uses a dedicated test socket, never the live dashboard, Mail or tmux.

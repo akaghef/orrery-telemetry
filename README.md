@@ -65,6 +65,7 @@ Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME 
 ![Telemetry 単体で7Dの退出した agent を再開し、LIVEでONLINEへの復帰を確認する](docs/img/resume-retired-agent.gif)
 
 [Dashboard の再開手順](docs/dashboard.md#検索)と[Launcher の Claude resume](docs/launchers.md#dashboard-からの-claude-resume)に、検証が必要な場合と復帰できない場合の扱いがあります。
+global network の稼働状態・本人照合と unknown の境界は [観測の案内](docs/dashboard.md#global-runtime-observation)を参照してください。
 
 ## 困ったとき・更新する
 

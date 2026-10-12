@@ -33,12 +33,13 @@ class RuntimeOperator:
         if any(not isinstance(v,str) or not v for v in self.binding.values()):
             raise self.api['ClientError']('BINDING_INVALID')
 
-    def read(self, query):
+    def read(self, query, *, deadline=None):
         # No local DB verification: the admitted server owns preparation proof,
         # tracker, authority fence and the single SQLite read transaction.
         if self.api['read_private'](self.path)!=self.raw:
             raise self.api['ClientError']('CONTEXT_CHANGED')
-        reply=self.api['operator_exchange'](self.config,self.binding,query)
+        reply=(self.api['operator_exchange'](self.config,self.binding,query) if deadline is None
+               else self.api['operator_exchange'](self.config,self.binding,query,deadline=deadline))
         if self.api['read_private'](self.path)!=self.raw:
             raise self.api['ClientError']('CONTEXT_CHANGED')
         return reply

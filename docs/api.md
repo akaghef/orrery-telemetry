@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":17}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":18}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -660,3 +660,11 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 - [トラブルシューティング](troubleshooting.md)
 
 登録 pending の画面からの同 intent 再送は `POST /api/global/spawn` に status の `registration_sha256` を `expected_digest` として添えます（API 17）。同じ operation mutex の下で照合し、不一致は `REGISTRATION_PENDING_CONFLICT`、pending が既に無ければ `TARGET_UNAVAILABLE`。登録の認証・名前・program/model の既存照合は維持します。
+
+### global runtime 読取（API 18）
+
+`GET /api/runtime-observations?agent_ids=1,2` は既存の HTTP operator admission に通った要求だけを受け付けます。ID は正の63bit整数、重複なし、1〜200件。入力が不正なら `QUERY_INVALID` です。公開 Mail tool の追加はありません。応答 schema は `global-runtime-observation.json` の1定義です。
+
+`items` は各 ID の `liveness`、nullable な `act_state` / `ctx_used`、`session_count`、`parent_agent_id` / `parent_state`、`activity_freshness` / `reason` を返します。token・pane capture・私有 path は返しません。未知を waiting や context 0 に置き換えません。[観測と能力の確認](dashboard.md#global-runtime-observation)を参照してください。
+
+`global_runtime_observation=1` と `operator_session=1` を広告します。global の `/api/quotas` と `/portrait` も同じ admission を通り、既存の読取処理を使用します。画像は共有 session の `apiBlob` で取得して object URL とし、Lock で revoke します。

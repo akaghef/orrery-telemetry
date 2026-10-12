@@ -4,12 +4,14 @@ import os
 from pathlib import Path
 import runpy
 import re
+import time
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 # Python's module import lock initializes this one operator/client API before
 # concurrent HTTP requests. No per-request temporary module aliases.
 OPERATOR_API=runpy.run_path(str(ROOT/'bin/lib/runtime_operator.py'))
+OBSERVATION_API=runpy.run_path(str(ROOT/'bin/lib/runtime_observation.py'))
 
 
 class BackendError(RuntimeError):
@@ -20,6 +22,7 @@ class BackendError(RuntimeError):
 
 class Backend:
     def __init__(self, config_path):
+        self.observation_deadline=time.monotonic()+5
         self.operator=OPERATOR_API['RuntimeOperator'](config_path)
 
     def read(self, query):
@@ -66,6 +69,9 @@ class Backend:
         result=candidates[0] if len(candidates)==1 else {**unknown,'reason':'AMBIGUOUS_INSTRUCTION_HOME' if candidates else unknown['reason']}
         helper['validate'](result,'status')
         return {'ok':True,'runtime_mode':'global','agent_id':agent_id,'session_id':session_id,'data':result}
+
+    def observe(self, ids, parser):
+        return OBSERVATION_API['Observations'](self.operator, parser, deadline=self.observation_deadline).read(ids)
 
     def get(self, path, params):
         def one(key,default=None):

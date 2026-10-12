@@ -499,3 +499,30 @@ global network の稼働状態は `ACTIVITY UNKNOWN` と表示します。実際
 指示の確認は local context の identity で slot を選び、一致した slot だけを server と照合します。配置元は slot の `wrapper_root` が唯一の正本です。Claude/Codex の provider slot を証明できない agent の `PROVIDER_HOME_UNPROVEN` は Settings だけで表示し、会話に毎回案内を重ねません。コピーする cleanup command は検出に使った HOME・provider HOME・install の env を明示します。この指定を外して旧 block を消さないでください。
 
 Lock は drawer の見出し・件数と accessibility 状態も初期化します。configure-provider ボタンは指示 block の配置が必要な場合だけです。Codex trust の承認と daemon の実行設定は日英の CLI 手順へ案内し、profile 不在は `PERSISTENT_EXECUTION_REQUIRED` と表示します。
+
+<a id="global-runtime-observation"></a>
+### global network の稼働状態
+
+API 18 の `global_runtime_observation=1` は、既存の私有 client root と管理 socket の本人照合から、network の working / waiting・context 使用率・親子の色を読み取ります。旧 mode の表示と既定の導入は変わりません。観測のための登録・ファイル作成・Mail DB の直接読取は行いません。
+
+各 root の既存 operation mutex を共有・非待機で取得します。writer が使用中、本人・世代・binding が不一致、PID/start/pane の証明が不明なら、その agent だけ `ACTIVITY UNKNOWN` です。応答全体の期限は5秒。pane の揮発 cache は最大4.5秒で、本人・binding・live slot の変更で失効します。複数 session が同時に生きている場合は `MULTIPLE SESSIONS` とし、activity と context を合成しません。終了済みの履歴は現在の session を隠しません。
+
+Codex App の snapshot と Desktop session meta は現在の provider の生存証明ではありません。App の activity / context は **unknown / null** のままです。bridge・wake・snapshot の記録方式は変えません。親子は既存の typed child-state を本人照合し、名前や Mail の往復から推測しません。
+
+共有 browser controller は capability・Lock・Mail の表示・登録回復を1か所で扱います。Lock は進行中の要求と画像 URL を失効させます。sessionStorage はそのページに権限を持つ拡張機能から読めるため、信頼できる browser profile を使ってください。Lock はその page session の解除であり、server の capability の撤去ではありません。
+
+<a id="global-runtime-proof"></a>
+### 対応能力の確認
+
+一時 HOME の隔離 server/dashboard を準備し、既存の [operator capability](global-delivery-client.md#operator-ui-access) を明示的に設定した後で実行します。
+
+```sh
+AGENTSTACK_HOME="$TEST_HOME/agentstack" \
+AGENTSTACK_GLOBAL_SERVER_CONFIG="$TEST_CONFIG" \
+ORRERY_DASHBOARD_URL="http://127.0.0.1:$TEST_PORT" \
+agentstack-http-operator probe --service telemetry
+```
+
+capability は内部で読み、引数・URL・結果に出しません。結果の `binding`・`telemetry_api`・`capabilities` を確認します。6r だけでは `cockpit_ready=false`、`cutover_ready=false` が正常です。cockpit の実装後は同じ command に `--service cockpit` と既存の `PORT` 環境変数を使います。cockpit の port の永続 file / 設定 key は追加しません。PR7 の切替は別の関門です。この probe の成功だけでは切り替えません。
+
+確認には合成の work / wait、context 0 / 42 / 100、standalone、親子、複数 session、writer 使用中、App unknown を用います。実 provider の binary は不要です。PID/start/tmux の実機証明は専用の試験 socket で行い、live の dashboard・Mail・tmux は使いません。
