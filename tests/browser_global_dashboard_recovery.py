@@ -45,6 +45,7 @@ with pytest.MonkeyPatch.context() as mp:
   pending=c.outputs['registration'];pending_before=pending.read_bytes()
   http=ThreadingHTTPServer(('127.0.0.1',0),dashboard.Handler)
   thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+  op.create('trust-needed',agent_name='TrustNeedsApproval',program='codex',model='fixture')
   origin=f'http://127.0.0.1:{http.server_port}'
   def tab(pre='',query='?view_as_agent_id=2'):
    t=cdp['http']('/json/new?about:blank',method='PUT');tabs.append(t['id']);w=cdp['WS'](t['webSocketDebuggerUrl']);w.sock.settimeout(20)
@@ -90,6 +91,21 @@ with pytest.MonkeyPatch.context() as mp:
   assert recovered.local_owner()==json.loads(pending_before)['registration_token']
   assert result['pending_recovery']['replayed'] and not pending.exists()
   shot(w,'pending-recovery.png')
+  result['persistent_guidance']=ev(w,"({reason:document.querySelector('.global-form').textContent.includes('PERSISTENT_EXECUTION_REQUIRED'),noConfigure:![...document.querySelectorAll('.global-form button')].some(x=>x.textContent==='configure-provider'),cli:document.querySelector('.global-form').textContent.includes('agentstack-persistent configure --operator'),links:[...document.querySelectorAll('.global-form a')].map(x=>x.getAttribute('href'))})")
+  assert all(result['persistent_guidance'][k] for k in ('reason','noConfigure','cli')),result['persistent_guidance']
+  assert len(result['persistent_guidance']['links'])==2 and all(x.endswith('#persistent-execution') for x in result['persistent_guidance']['links'])
+  ev(w,"[...document.querySelectorAll('.global-form button')].find(x=>x.textContent==='Cancel').click();document.querySelector('#newbtn').click();for(const [n,v] of Object.entries({client_name:'trust-needed',name:'TrustNeedsApproval',program:'codex',model:'fixture',cwd:"+json.dumps(str(s['root']/'home'))+"})){document.querySelector('.global-form').elements[n].value=v;}document.querySelector('.global-form').requestSubmit();")
+  wait(w,"document.querySelector('.global-form').textContent.includes('INSTRUCTION_PROVIDER_CONFIG_REQUIRED')")
+  assert ev(w,"[...document.querySelectorAll('.global-form button')].some(x=>x.textContent==='configure-provider')")
+  ev(w,"[...document.querySelectorAll('.global-form button')].find(x=>x.textContent==='configure-provider').click()")
+  wait(w,"document.querySelector('.global-form').textContent.includes('CODEX_HOOK_CONFIGURE_REQUIRED')")
+  result['trust_guidance']=ev(w,"({noConfigure:![...document.querySelectorAll('.global-form button')].some(x=>x.textContent==='configure-provider'),cli:document.querySelector('.global-form').textContent.includes('codex-plan')&&document.querySelector('.global-form').textContent.includes('codex-apply'),links:[...document.querySelectorAll('.global-form a')].map(x=>x.getAttribute('href'))})")
+  assert result['trust_guidance']['noConfigure'] and result['trust_guidance']['cli'],result['trust_guidance']
+  assert len(result['trust_guidance']['links'])==2 and all(x.endswith('#codex-hook-trust') for x in result['trust_guidance']['links'])
+  trust_client=op.client('trust-needed')
+  assert not (trust_client.runtime_dir/'provider-home/codex/hook-plan.json').exists()
+  assert not trust_client.outputs['launch'].exists()
+  shot(w,'operator-configuration-guidance.png')
   ev(w,"[...document.querySelectorAll('.global-form button')].find(x=>x.textContent==='Cancel').click();window.__holdRoster=true;window.__refresh=window.OrreryGlobalDashboard.refresh().catch(e=>String(e));void 0;")
   wait(w,"typeof window.__releaseRoster==='function'")
   ev(w,"window.OrreryGlobalDashboard.lock();window.__releaseRoster();")
@@ -97,6 +113,8 @@ with pytest.MonkeyPatch.context() as mp:
   result['lock_during_body']=ev(w,"({stored:!!sessionStorage.getItem('orrery.operator-capability'),cards:document.querySelectorAll('.global-agent').length,selectors:document.querySelector('select[aria-label=\"Mail viewpoint\"]').options.length,lockedDialog:!!document.querySelector('[name=capability]'),netinfo:document.querySelector('#netinfo').textContent})")
   assert result['lock_during_body']['cards']==0 and result['lock_during_body']['selectors']==0
   assert ev(w,'window.__aborts>0')
+  result['locked_drawer_metadata']=ev(w,"({a:document.querySelector('#edrawer .ed-a').textContent,b:document.querySelector('#edrawer .ed-b').textContent,count:document.querySelector('#edrawer .ed-cnt').textContent,aria:document.querySelector('#edrawer').getAttribute('aria-hidden'),open:document.querySelector('#edrawer').classList.contains('on')})")
+  assert result['locked_drawer_metadata']=={'a':'—','b':'—','count':'0','aria':'true','open':False},result['locked_drawer_metadata']
   shot(w,'locked-after-delayed-body.png')
   result['delayed_reads']={}
   for name,path,query in [('health','/api/mail-watcher-health',''),('detail','/api/mail/message','?view_as_agent_id=2&message_id='+str(vis)),('validation','/api/version','')]:

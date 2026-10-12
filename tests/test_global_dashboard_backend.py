@@ -265,3 +265,29 @@ def test_registration_replay_uses_status_digest_and_single_intent(ui,monkeypatch
     code,raw=request(ui,'/api/global/spawn',method='POST',body=body)
     assert code==404 and json.loads(raw)['reason']=='TARGET_UNAVAILABLE',raw
     assert op.client('replay').identity['agent_id']==aid
+
+
+def test_missing_persistent_profile_status_is_actionable_and_readonly(ui):
+    from dashboard.global_backend import OPERATOR_API
+    op=OPERATOR_API['RuntimeOperator'](ui[0]['config_path'])
+    created=op.create('missing-profile',agent_name='MissingProfile',program='daemon',model='deterministic')
+    client=op.client('missing-profile');assert not client.profile_path.exists()
+    code,raw=request(ui,'/api/global/spawn-status?client_name=missing-profile')
+    status=json.loads(raw)
+    assert code==200 and status['stage']=='registered_unconfigured'
+    assert status['reason']=='PERSISTENT_EXECUTION_REQUIRED',status
+    assert status['agent_id']==created['agent_id']
+    assert not client.profile_path.exists()
+    # Follow the documented operator CLI path from this absent profile.
+    import os,subprocess,sys
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    env={**os.environ,'AGENTSTACK_CLIENT_CONFIG':str(client.path)}
+    saved=subprocess.run([sys.executable,str(root/'bin/lib/runtime_client.py'),'save-profile'],env=env,capture_output=True,text=True,timeout=20)
+    assert saved.returncode==0,saved.stdout+saved.stderr
+    execution={'argv':[sys.executable],'interaction':'interactive','cwd':str(client.isolation)}
+    configured=subprocess.run([sys.executable,str(root/'bin/agentstack-persistent'),'configure','--profile',str(client.profile_path),'--operator'],env=env,input=json.dumps(execution),capture_output=True,text=True,timeout=20)
+    assert configured.returncode==0,configured.stdout+configured.stderr
+    code,raw=request(ui,'/api/global/spawn-status?client_name=missing-profile')
+    assert code==200 and json.loads(raw)['stage']=='configured',raw
+    assert json.loads(raw)['agent_id']==created['agent_id']

@@ -497,3 +497,5 @@ global network の稼働状態は `ACTIVITY UNKNOWN` と表示します。実際
 登録の回復ボタンは status の `next_operations` に従い、再送・finalize・configure を同じ slot と intent で続けます。Resume は既存 launch の操作です。登録再送と abandon は表示した pending の digest を照合します。Lock は進行中の fetch を中止し、遅い body と tab の capability 引継ぎを失効させます。新 tab は自分の request と一致する500ms以内の返信だけを採用し、Lock 後は明示 Unlock が必要です。storage 拒否時は `BROWSER_SESSION_STORAGE_UNAVAILABLE` を表示して page memory だけで動作し、reload 後は再入力します。
 
 指示の確認は local context の identity で slot を選び、一致した slot だけを server と照合します。配置元は slot の `wrapper_root` が唯一の正本です。Claude/Codex の provider slot を証明できない agent の `PROVIDER_HOME_UNPROVEN` は Settings だけで表示し、会話に毎回案内を重ねません。コピーする cleanup command は検出に使った HOME・provider HOME・install の env を明示します。この指定を外して旧 block を消さないでください。
+
+Lock は drawer の見出し・件数と accessibility 状態も初期化します。configure-provider ボタンは指示 block の配置が必要な場合だけです。Codex trust の承認と daemon の実行設定は日英の CLI 手順へ案内し、profile 不在は `PERSISTENT_EXECUTION_REQUIRED` と表示します。

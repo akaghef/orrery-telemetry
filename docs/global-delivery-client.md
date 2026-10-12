@@ -97,11 +97,16 @@ agentstack-runtime-client codex-apply operator < hook-plan.review.json
 
 Gemini は固定 provider HOME の `.gemini/config/mcp_config.json` と既存の stream renderer を使います。headless の子は実行した provider の `init/conversation_id` だけを session receipt にします。init が無ければ `GEMINI_SESSION_RECEIPT_UNAVAILABLE`、対話型 root は `GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED` で止まり、ready になりません。Gemini は合成 stream provider による fixture 試験のみで、実 agy では未確認です。
 
+<a id="persistent-execution"></a>
+
 ## persistent の operator configure
 
 固定の profile.json に実行設定 `execution` を1つだけ保存します。owner/binding は追加しません。通常 run は設定を読むだけです。旧 persistent profile は `LEGACY_FILE_REQUIRES_IMPORT` のまま、PR7 の明示 import で移します。
 
 ```sh
+client_root="$(dirname "$AGENTSTACK_CLIENT_CONFIG")"
+# 固定 profile がまだ無い場合だけ:
+agentstack-runtime-client save-profile
 agentstack-persistent configure --profile "$client_root/profile.json" --operator <<EOF_JSON
 {"argv":["/absolute/python","/absolute/bot.py"],"interaction":"headless","cwd":"/absolute/private-workdir"}
 EOF_JSON

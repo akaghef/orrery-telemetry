@@ -15,7 +15,7 @@ function stored(scope,method,key,value){
 }
 let capability=stored('sessionStorage','getItem',storageKey)||'',epoch=0,viewer=null,roster=[],edge=null,page=null,selected=null,notice=null,seq=0,view='deck',dialog=null,focusReturn=null;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('orrery.operator-session'):null;
-function clearMail(){seq++;edge=null;page=null;selected=null;notice=null;conversationQuery=null;$('#ed-list').replaceChildren();$('#edrawer').classList.remove('on');}
+function clearMail(){seq++;edge=null;page=null;selected=null;notice=null;conversationQuery=null;$('#ed-list').replaceChildren();$('#edrawer').classList.remove('on');$('#edrawer').setAttribute('aria-hidden','true');$('#edrawer .ed-a').textContent='—';$('#edrawer .ed-b').textContent='—';$('#edrawer .ed-cnt').textContent='0';}
 function lock(broadcast=true){epoch++;shareRequest=null;shareAllowed=false;const input=dialog?.querySelector('[name=capability]');if(input)input.value='';for(const request of requests)request.abort();requests.clear();capability='';stored('sessionStorage','removeItem',storageKey);clearMail();roster=[];$('#wrap').replaceChildren();$('#gsvg').replaceChildren();selector.replaceChildren();viewer=null;$('#netinfo').textContent='Locked';$('#mail-health').title='Locked';$('#mail-health').removeAttribute('data-status');$('#mail-health .mh-label').textContent='MAIL · LOCKED';$('#global-instruction-settings')?.replaceChildren();say('');if(broadcast)channel?.postMessage({type:'lock'});unlock();}
 async function api(path,body){
  const generation=epoch,token=capability;
@@ -164,7 +164,13 @@ function showOperation(root,row,intent=null,append=false){
   showOperation(root,r,intent);await loadRoster();
  }catch(error){root.append(E('p','global-error',error.message));}};
  for(const op of row.next_operations||[]){
-  if(['replay-registration','finalize-registration','configure-provider','launch'].includes(op)&&intent)root.append(B(op,()=>execute(op)));
+  if((['replay-registration','finalize-registration','launch'].includes(op)||(op==='configure-provider'&&row.reason==='INSTRUCTION_PROVIDER_CONFIG_REQUIRED'))&&intent)root.append(B(op,()=>execute(op)));
+  else if(op==='configure-provider'&&['CODEX_HOOK_CONFIGURE_REQUIRED','PERSISTENT_EXECUTION_REQUIRED'].includes(row.reason)){
+   const codex=row.reason==='CODEX_HOOK_CONFIGURE_REQUIRED';
+   root.append(E('p','',codex?"Set AGENTSTACK_CLIENT_CONFIG to this slot’s runtime-client.json. Run codex-plan, review and explicitly approve the plan, then run codex-apply. Launch never approves trust.":"Set AGENTSTACK_CLIENT_CONFIG to this slot’s runtime-client.json. If its fixed profile.json is absent, run agentstack-runtime-client save-profile first. Then run agentstack-persistent configure --operator before launch."));
+   const details=E('p','','Details: ');
+   for(const [label,file,anchor] of [['English','global-delivery-client.en.md',codex?'codex-hook-trust':'persistent-execution'],['日本語','global-delivery-client.md',codex?'codex-hook-trust':'persistent-execution']]){const a=E('a','',label);a.href='https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/'+file+'#'+anchor;a.target='_blank';a.rel='noopener';details.append(a,' ');}root.append(details);
+  }
   else if(op==='launch-status')root.append(B('Resume '+row.client_name,()=>execute('resume')));
   else if(op==='registration-abandon'&&row.registration_sha256)root.append(B('Abandon registration attempt',async()=>{if(!confirm('Abandon this local attempt? The server identity will remain.'))return;try{await api('/api/global/registration-abandon',{client_name:row.client_name,expected_digest:row.registration_sha256});root.replaceChildren(E('p','','Local pending attempt abandoned.'));}catch(error){root.append(E('p','global-error',error.message));}}));
   else root.append(E('p','',op));

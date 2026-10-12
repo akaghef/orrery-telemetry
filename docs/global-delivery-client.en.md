@@ -95,11 +95,16 @@ This reuses existing plan / apply_trust code. Launch, update and resume never gr
 
 Gemini uses the fixed provider HOME's `.gemini/config/mcp_config.json` and existing stream renderer. Headless children accept session evidence only from provider `init/conversation_id`. Missing init fails with `GEMINI_SESSION_RECEIPT_UNAVAILABLE`; interactive roots fail with `GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED`. Neither becomes ready. Gemini is tested with a synthetic stream-provider fixture only; real agy remains unverified.
 
+<a id="persistent-execution"></a>
+
 ## Operator configuration for persistent execution
 
 The fixed profile.json stores one typed execution object. It adds no owner/binding copies. Regular run only reads it. Released persistent profiles remain LEGACY_FILE_REQUIRES_IMPORT; explicit import belongs to PR7.
 
 ```sh
+client_root="$(dirname "$AGENTSTACK_CLIENT_CONFIG")"
+# Only if this fixed profile is absent:
+agentstack-runtime-client save-profile
 agentstack-persistent configure --profile "$client_root/profile.json" --operator <<EOF_JSON
 {"argv":["/absolute/python","/absolute/bot.py"],"interaction":"headless","cwd":"/absolute/private-workdir"}
 EOF_JSON
