@@ -171,7 +171,6 @@ finalize_agent_name() {
   fi
   if [[ "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
     ags_record_managed_agent "$MANAGED_FILE" "${AGENT_NAME:-}"
-    command -v pbcopy >/dev/null 2>&1 && printf '%s' "${AGENT_NAME:-}" | pbcopy 2>/dev/null || true
   fi
   export AGENT_NAME="${AGENT_NAME:-}"
   [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]] && export CHILD_REGISTRATION_TOKEN

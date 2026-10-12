@@ -94,7 +94,6 @@ ags_require_launch_identity || exit 2
 if [[ -n "${AGENT_NAME:-}" ]]; then
   SESSION="$AGENT_NAME"
   ags_record_managed_agent "$MANAGED_FILE" "$AGENT_NAME"
-  command -v pbcopy >/dev/null 2>&1 && printf '%s' "$AGENT_NAME" | pbcopy 2>/dev/null || true
 fi
 
 # Already inside a real tmux pane: register + run in place.

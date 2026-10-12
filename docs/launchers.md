@@ -87,7 +87,7 @@ launcher は CLI を起動する前に ORRERY Mail へ identity を登録しま�
 4. project key、program、model、task metadata で登録
 5. 要求名と返された canonical name を比較。不一致なら top-level は明示して tmux session を返却名へ rename、reserved identity は停止
 6. Codex CLI では数値 agent ID を含む今回の launch expectation を記録
-7. managed agent list と clipboard を更新
+7. managed agent list を更新
 
 `AGENTSTACK_PROJECT_KEY` が未設定、または ORRERY Mail が到達不能でも CLI 自体は preselected name で起動します。ただし mail、reservation、project-scoped dashboard 機能は使えません。
 

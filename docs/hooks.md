@@ -17,7 +17,7 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 
 | Event / matcher | 実行ファイル | 発火タイミング | 主な動作 |
 | --- | --- | --- | --- |
-| `SessionStart` | [`set-ghostty-title.sh`](../hooks/set-ghostty-title.sh) | startup / resume / `/clear` / compact の直後 | 既知の identity を pane metadata、tmux session、terminal title 用 clipboard、managed agent list へ反映 |
+| `SessionStart` | [`set-ghostty-title.sh`](../hooks/set-ghostty-title.sh) | startup / resume / `/clear` / compact の直後 | 既知の identity を pane metadata、tmux session、managed agent list へ反映 |
 | `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | 同上。title helper の後 | ORRERY Mail health と既存 identity を確認し、embedded task・bound proxy・raw/direct の優先順位に沿う案内を session context へ出力 |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Claude Code が file edit を実行する直前 | protected root 内の既存 exact path reservation を renew-only で確認。0件は1回だけ再確認し、なお0件なら exit 2 で block |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | edit、write、shell command の直前 | 現在の Claude session が `register_agent` 済みか session flag で検査。未登録なら exit 2 で block |
@@ -39,7 +39,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 
 - **発火:** `SessionStart`。さらに `mark-agent-registered.sh` が現在 session 自身の canonical name を取得した後にも background で呼びます。
 - **動作:** `AGENT_NAME` または引数を使い、`TMUX_PANE` ごとの identity metadata を runtime directory へ書きます。tmux rename は `pending-*` session にだけ許し、確立済みの親 session を child 名で上書きしません。
-- **衝突時:** 同名 tmux session を kill せず、rename を拒否して fail-closed にします。対応 terminal では clipboard を title handoff に使います。名前が未解決なら何もしません。
+- **衝突時:** 同名 tmux session を kill せず、rename を拒否して fail-closed にします。名前が未解決なら何もしません。
 
 ### `session-start-reminder.sh`
 

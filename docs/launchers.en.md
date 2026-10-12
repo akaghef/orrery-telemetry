@@ -87,7 +87,7 @@ The launcher registers an identity with ORRERY Mail before starting the CLI.
 4. Register with project key, program, model, and task metadata
 5. Compare the requested name with the returned canonical name. On a mismatch, a top-level launch reports it and renames the tmux session to the returned name; a reserved identity stops
 6. For Codex CLI, record this launch expectation with the numeric agent ID
-7. Update the managed agent list and clipboard
+7. Update the managed agent list
 
 If `AGENTSTACK_PROJECT_KEY` is unset or ORRERY Mail is unreachable, the CLI itself still starts with the preselected name. Mail, reservations, and project-scoped dashboard features are unavailable, however.
 

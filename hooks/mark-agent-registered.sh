@@ -229,7 +229,7 @@ if [ -n "$AGENT_NAME_VAL" ] && [ -n "$SESSION_ID" ]; then
     fi
 fi
 
-# Auto-rename tmux session and copy agent name to clipboard for Ghostty title.
+# Auto-rename the tmux session to the agent name.
 # set-ghostty-title.sh internally guards against renaming sessions that are not
 # pending-*, so re-runs on idempotent re-registration are safe no-ops.
 #
