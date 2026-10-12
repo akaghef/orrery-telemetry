@@ -3,17 +3,31 @@
 'use strict';
 const F=window.OrreryMailFlow,E=F.element,B=F.button,$=s=>document.querySelector(s);
 const nativeFetch=window.fetch.bind(window), storageKey='orrery.operator-capability';
-let capability=sessionStorage.getItem(storageKey)||'',epoch=0,viewer=null,roster=[],edge=null,page=null,selected=null,notice=null,seq=0,view='deck',dialog=null,focusReturn=null;
+const memoryStorage=new Map(),requests=new Set();let memoryOnly=false,shareRequest=null,shareAllowed=true;
+function stored(scope,method,key,value){
+ const k=scope+':'+key;
+ if(!(scope==='sessionStorage'&&memoryOnly)){
+  try{const store=window[scope];if(method==='getItem')return store.getItem(key);store[method](key,value);}
+  catch(_){if(scope==='sessionStorage')memoryOnly=true;}
+ }
+ if(method==='getItem')return memoryStorage.get(k)||null;
+ if(method==='setItem')memoryStorage.set(k,value);else memoryStorage.delete(k);
+}
+let capability=stored('sessionStorage','getItem',storageKey)||'',epoch=0,viewer=null,roster=[],edge=null,page=null,selected=null,notice=null,seq=0,view='deck',dialog=null,focusReturn=null;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('orrery.operator-session'):null;
 function clearMail(){seq++;edge=null;page=null;selected=null;notice=null;conversationQuery=null;$('#ed-list').replaceChildren();$('#edrawer').classList.remove('on');}
-function lock(broadcast=true){epoch++;capability='';sessionStorage.removeItem(storageKey);clearMail();roster=[];$('#wrap').replaceChildren();$('#gsvg').replaceChildren();selector.replaceChildren();viewer=null;$('#netinfo').textContent='Locked';$('#mail-health').title='Locked';$('#mail-health').removeAttribute('data-status');$('#mail-health .mh-label').textContent='MAIL · LOCKED';$('#global-instruction-settings')?.replaceChildren();say('');if(broadcast)channel?.postMessage({type:'lock'});unlock();}
+function lock(broadcast=true){epoch++;shareRequest=null;shareAllowed=false;const input=dialog?.querySelector('[name=capability]');if(input)input.value='';for(const request of requests)request.abort();requests.clear();capability='';stored('sessionStorage','removeItem',storageKey);clearMail();roster=[];$('#wrap').replaceChildren();$('#gsvg').replaceChildren();selector.replaceChildren();viewer=null;$('#netinfo').textContent='Locked';$('#mail-health').title='Locked';$('#mail-health').removeAttribute('data-status');$('#mail-health .mh-label').textContent='MAIL · LOCKED';$('#global-instruction-settings')?.replaceChildren();say('');if(broadcast)channel?.postMessage({type:'lock'});unlock();}
 async function api(path,body){
  const generation=epoch,token=capability;
  if(!token)throw Error('HTTP_OPERATOR_REQUIRED');
- const r=await nativeFetch(path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,cache:'no-store'});
- if(generation!==epoch)throw Error('PAGE_LOCKED');
- const j=await r.json();
- if(!r.ok||j.ok===false){if(r.status===403)lock();throw Error(j.reason||'REQUEST_FAILED');}return j;
+ const controller=new AbortController();requests.add(controller);
+ try{
+  const r=await nativeFetch(path,{signal:controller.signal,method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,cache:'no-store'});
+  if(generation!==epoch)throw Error('PAGE_LOCKED');
+  const j=await r.json();
+  if(generation!==epoch)throw Error('PAGE_LOCKED');
+  if(!r.ok||j.ok===false){if(r.status===403)lock();throw Error(j.reason||'REQUEST_FAILED');}return j;
+ }finally{requests.delete(controller);}
 }
 function showDialog(title){
  if(dialog)dialog.remove();focusReturn=document.activeElement;
@@ -26,13 +40,20 @@ function unlock(){
  if(dialog?.querySelector('[name=capability]'))return;
  const form=showDialog('Unlock ORRERY');form.append(E('p','','Run agentstack-http-operator show with this dashboard’s AGENTSTACK_HOME. Paste its capability here. It stays in this page session, never in a URL.'));
  const label=E('label','','Operator capability'),input=E('input');input.type='password';input.name='capability';input.autocomplete='off';input.required=true;label.append(input);form.append(label,B('Unlock',()=>form.requestSubmit()));
- form.onsubmit=async e=>{e.preventDefault();capability=input.value.trim();try{await start();sessionStorage.setItem(storageKey,capability);closeDialog();}catch(error){capability='';errorAt(form,error);}};const help=E('p');help.append('Details: ');for(const [label,file] of [['English','global-delivery-client.en.md'],['日本語','global-delivery-client.md']]){const a=E('a','',label);a.href='https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/'+file+'#operator-ui-access';a.target='_blank';a.rel='noopener';help.append(a,' ');}form.append(help);input.focus();
+ form.onsubmit=async e=>{e.preventDefault();shareRequest=null;const generation=++epoch;try{await acceptCapability(input.value.trim(),generation);}catch(error){if(generation===epoch){capability='';errorAt(form,error);}}};if(memoryOnly)form.append(E('p','','BROWSER_SESSION_STORAGE_UNAVAILABLE · Memory only; enter the capability again after reload.'));const help=E('p');help.append('Details: ');for(const [label,file] of [['English','global-delivery-client.en.md'],['日本語','global-delivery-client.md']]){const a=E('a','',label);a.href='https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/'+file+'#operator-ui-access';a.target='_blank';a.rel='noopener';help.append(a,' ');}form.append(help);input.focus();
+}
+async function acceptCapability(token,generation){
+ if(generation!==epoch)throw Error('PAGE_LOCKED');capability=token;
+ await start();if(generation!==epoch)throw Error('PAGE_LOCKED');
+ stored('sessionStorage','setItem',storageKey,capability);shareAllowed=true;closeDialog();
+ if(memoryOnly)say('BROWSER_SESSION_STORAGE_UNAVAILABLE · Memory only; reload requires Unlock.');
 }
 channel?.addEventListener('message',async e=>{
  const m=e.data;if(m?.type==='lock'){lock(false);return;}
- if(m?.type==='request'&&capability)channel.postMessage({type:'share',capability});
- if(m?.type==='share'&&!capability&&typeof m.capability==='string'){
-  capability=m.capability;try{await start();sessionStorage.setItem(storageKey,capability);closeDialog();}catch(_){capability='';}
+ if(m?.type==='request'&&capability&&shareAllowed&&typeof m.request_id==='string')channel.postMessage({type:'share',request_id:m.request_id,capability});
+ if(m?.type==='share'&&!capability&&shareRequest&&m.request_id===shareRequest.id&&shareRequest.generation===epoch&&performance.now()<=shareRequest.deadline&&typeof m.capability==='string'){
+  const generation=epoch;shareRequest=null;
+  try{await acceptCapability(m.capability,generation);}catch(_){if(generation===epoch)capability='';}
  }
 });
 const tools=E('div','global-tools');
@@ -119,8 +140,8 @@ async function conversation(id,cursor=null,label=null){
  draw();
 }
 async function loadMore(){if(edge)return openEdge(edge.a,edge.b,page.next_cursor);if(conversationQuery)return conversation(conversationQuery.id,page.next_cursor,conversationQuery.label);}
-function recentDirs(){try{const a=JSON.parse(localStorage.getItem('agentdash.spawn.recent-dirs')||'[]');return Array.isArray(a)?a.filter(x=>typeof x==='string').slice(0,10):[];}catch(_){return [];}}
-const oldDir=localStorage.getItem('agentdash.spawn.dir');if(oldDir){const a=recentDirs();if(!a.includes(oldDir))a.unshift(oldDir);localStorage.setItem('agentdash.spawn.recent-dirs',JSON.stringify(a.slice(0,10)));localStorage.removeItem('agentdash.spawn.dir');}
+function recentDirs(){try{const a=JSON.parse(stored('localStorage','getItem','agentdash.spawn.recent-dirs')||'[]');return Array.isArray(a)?a.filter(x=>typeof x==='string').slice(0,10):[];}catch(_){return [];}}
+const oldDir=stored('localStorage','getItem','agentdash.spawn.dir');if(oldDir){const a=recentDirs();if(!a.includes(oldDir))a.unshift(oldDir);stored('localStorage','setItem','agentdash.spawn.recent-dirs',JSON.stringify(a.slice(0,10)));stored('localStorage','removeItem','agentdash.spawn.dir');}
 $('#newbtn').onclick=()=>{
  const form=showDialog('Launch an agent');
  const fields={client_name:'Client slot (new identity needs a new slot)',name:'Agent name',model:'Model',cwd:'Work folder'};
@@ -131,16 +152,25 @@ $('#newbtn').onclick=()=>{
  const result=E('div');form.append(B('Cancel',closeDialog),B('Spawn',()=>form.requestSubmit()),result);
  form.onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(form));try{
   const lookup=await api('/api/global/clients?name='+encodeURIComponent(data.name));result.replaceChildren();
-  if(lookup.matches.length){for(const m of lookup.matches)result.append(B('Resume '+m.client_name,async()=>{try{const r=await api('/api/global/resume',{client_name:m.client_name,open:true});showOperation(result,r);}catch(error){errorAt(form,error);}}));return;}
-  const r=await api('/api/global/spawn',data);const paths=recentDirs().filter(x=>x!==data.cwd);paths.unshift(data.cwd);localStorage.setItem('agentdash.spawn.recent-dirs',JSON.stringify(paths.slice(0,10)));showOperation(result,r);await loadRoster();
- }catch(error){errorAt(form,error);if(capability){try{const current=await api('/api/global/spawn-status?client_name='+encodeURIComponent(data.client_name));showOperation(result,current);}catch(_){/* Original refusal remains visible. */}}}};form.querySelector('input').focus();
+  if(lookup.matches.length){for(const m of lookup.matches){const current=await api('/api/global/spawn-status?client_name='+encodeURIComponent(m.client_name));showOperation(result,current,{...data,client_name:m.client_name},lookup.matches.length>1);}return;}
+  const r=await api('/api/global/spawn',data);const paths=recentDirs().filter(x=>x!==data.cwd);paths.unshift(data.cwd);stored('localStorage','setItem','agentdash.spawn.recent-dirs',JSON.stringify(paths.slice(0,10)));showOperation(result,r,data);await loadRoster();
+ }catch(error){errorAt(form,error);if(capability){try{const current=await api('/api/global/spawn-status?client_name='+encodeURIComponent(data.client_name));showOperation(result,current,data);}catch(_){/* Original refusal remains visible. */}}}};form.querySelector('input').focus();
  (async()=>{const input=form.elements.cwd,initial=input.value;let chosen=null;for(const path of recentDirs()){const row=await api('/api/fs/dirs?path='+encodeURIComponent(path));if(row.path){chosen=row.path;break;}}if(!chosen)chosen=(await api('/api/fs/dirs')).path;if(dialog?.contains(input)&&input.value===initial)input.value=chosen||'';})().catch(error=>errorAt(form,error));
 };
-function showOperation(root,row){
- root.replaceChildren(E('p','',row.stage+' · '+(row.reason||row.next_operations.join(', '))));
- for(const op of row.next_operations||[])root.append(E('p','',op));
- if(row.registration_sha256)root.append(B('Abandon registration attempt',async()=>{if(!confirm('Abandon this local attempt? The server identity will remain.'))return;try{await api('/api/global/registration-abandon',{client_name:row.client_name,expected_digest:row.registration_sha256});root.replaceChildren(E('p','','Local pending attempt abandoned.'));}catch(error){root.append(E('p','global-error',error.message));}}));
+function showOperation(root,row,intent=null,append=false){
+ if(!append)root.replaceChildren();root.append(E('p','',row.client_name+' · '+row.stage+' · '+(row.reason||'')));
+ const execute=async(op)=>{try{
+  const r=op==='resume'?await api('/api/global/resume',{client_name:row.client_name,open:true}):await api('/api/global/spawn',{...intent,...(row.registration_sha256?{expected_digest:row.registration_sha256}:{})});
+  showOperation(root,r,intent);await loadRoster();
+ }catch(error){root.append(E('p','global-error',error.message));}};
+ for(const op of row.next_operations||[]){
+  if(['replay-registration','finalize-registration','configure-provider','launch'].includes(op)&&intent)root.append(B(op,()=>execute(op)));
+  else if(op==='launch-status')root.append(B('Resume '+row.client_name,()=>execute('resume')));
+  else if(op==='registration-abandon'&&row.registration_sha256)root.append(B('Abandon registration attempt',async()=>{if(!confirm('Abandon this local attempt? The server identity will remain.'))return;try{await api('/api/global/registration-abandon',{client_name:row.client_name,expected_digest:row.registration_sha256});root.replaceChildren(E('p','','Local pending attempt abandoned.'));}catch(error){root.append(E('p','global-error',error.message));}}));
+  else root.append(E('p','',op));
+ }
 }
+
 async function settingsNotice(){
  let root=$('#global-instruction-settings');if(!root){root=E('section');root.id='global-instruction-settings';$('#settings').append(root);}
  if(!viewer){root.replaceChildren(E('p','','Choose a Mail viewpoint to check instructions.'));return;}
@@ -166,7 +196,7 @@ async function start(){
  if((mid||old)&&!viewer){say('Choose a Mail viewpoint, then reopen this saved link.');return;}
  if(mid||old){if(old)say('This is an old Mail link. Copy the current URL after opening it.');if(mid||/^[1-9]\d*$/.test(old)){const id=Number(mid||old);await conversation(id);const u=new URL(location.href);u.searchParams.delete('thread_id');u.searchParams.set('message_id',id);history.replaceState(null,'',u);}else await conversation(null,null,old);}
 }
-if(capability){try{await start();}catch(error){lock();say(error.message);}}else{unlock();channel?.postMessage({type:'request'});}
+if(capability){try{await acceptCapability(capability,epoch);}catch(error){lock();say(error.message);}}else{unlock();if(channel){shareRequest={id:crypto.randomUUID(),generation:epoch,deadline:performance.now()+500};channel.postMessage({type:'request',request_id:shareRequest.id});setTimeout(()=>{shareRequest=null;},500);}}
 setInterval(()=>{if(capability&&!dialog){loadRoster().then(()=>health()).then(()=>view==='net'?refreshGraph():null).catch(error=>say(error.message));}},15000);
 setInterval(()=>{if(capability&&viewer&&page){const mine=viewer;instruction(mine).then(row=>{if(mine===viewer){notice=row;draw();}});}},60000);
 window.OrreryGlobalDashboard=Object.freeze({lock,refresh:()=>start()});

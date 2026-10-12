@@ -117,7 +117,7 @@ class RuntimeOperator:
             home=client.runtime_dir/'provider-home'/provider
             helpers=self.api['delivery_contract']()['instruction_api']()
             try:
-                helpers['provider_instructions'](home,provider,str(ROOT),'')
+                helpers['provider_instructions'](home,provider,client.config['wrapper_root'],'')
             except helpers['Refused'] as exc:
                 raise self.api['ClientError']('INSTRUCTION_PROVIDER_CONFIG_REQUIRED') from exc
             if provider=='codex':delivery.codex_trust()
@@ -213,7 +213,16 @@ class RuntimeOperator:
             client.create(agent_name,program,model)
         return self.status(name)
 
-    def spawn(self, name, *, agent_name, program, model, cwd):
+    def spawn(self, name, *, agent_name, program, model, cwd, expected_digest=None):
+        if expected_digest is not None:
+            client=self.client(name)
+            with client.operation_mutex():
+                with client.fence():
+                    pending=client.outputs['registration']
+                    if not pending.exists() and not pending.is_symlink():raise self.api['ClientError']('TARGET_UNAVAILABLE')
+                    if hashlib.sha256(self.api['read_private'](pending)).hexdigest()!=expected_digest:
+                        raise self.api['ClientError']('REGISTRATION_PENDING_CONFLICT')
+                return self.spawn(name,agent_name=agent_name,program=program,model=model,cwd=cwd)
         result=self.create(name,agent_name=agent_name,program=program,model=model)
         if not result['ok'] or result['stage']=='launch_present':return result
         client=self.client(name)

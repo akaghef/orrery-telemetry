@@ -6,6 +6,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+from service_teardown import TEST_LABEL_PREFIX
 from dashboard import server as dashboard
 from dashboard.http_operator import configure, read_capability
 from test_global_child_client import server
@@ -16,6 +17,7 @@ def ui(server,monkeypatch):
     home=server['root']/'agentstack'
     configure(home)
     monkeypatch.setenv('AGENTSTACK_HOME',str(home))
+    monkeypatch.setenv('AGENTSTACK_LABEL_PREFIX',TEST_LABEL_PREFIX)
     monkeypatch.setenv('AGENTSTACK_GLOBAL_SERVER_CONFIG',str(server['config_path']))
     monkeypatch.setenv('AGENTSTACK_MCP_URL',server['url'])
     monkeypatch.setattr(dashboard,'GLOBAL_MODE',True)
@@ -228,3 +230,38 @@ def test_abandon_without_registration_pending_is_not_found(ui,prepared):
     assert after==before
     assert path.parent.exists()==prepared
     assert operator.read({'kind':'health'})==health
+
+
+
+def test_registration_replay_uses_status_digest_and_single_intent(ui,monkeypatch):
+    import os
+    from dashboard.global_backend import OPERATOR_API
+    op=OPERATOR_API['RuntimeOperator'](ui[0]['config_path']);op.prepare('replay')
+    c=op.client('replay');cls=type(c);rpc=cls.rpc
+    def unsent(self,method,params):
+        if params.get('name')=='register_agent':raise op.api['ClientError']('TRANSPORT_FAILED')
+        return rpc(self,method,params)
+    with monkeypatch.context() as m:
+        m.setattr(cls,'rpc',unsent)
+        with pytest.raises(RuntimeError,match='TRANSPORT_FAILED'):c.create('ReplayOwner','daemon','deterministic')
+    pending=c.outputs['registration'];before=pending.read_bytes()
+    status=json.loads(request(ui,'/api/global/spawn-status?client_name=replay')[1])
+    body={'client_name':'replay','name':'ReplayOwner','program':'daemon','model':'deterministic',
+          'cwd':os.environ['HOME'],'expected_digest':status['registration_sha256']}
+    assert request(ui,'/api/global/spawn',method='POST',auth=False,body=body)[0]==403
+    code,raw=request(ui,'/api/global/spawn',method='POST',body={**body,'expected_digest':'0'*64})
+    assert code==409 and json.loads(raw)['reason']=='REGISTRATION_PENDING_CONFLICT',raw
+    assert pending.read_bytes()==before
+    code,raw=request(ui,'/api/global/spawn',method='POST',body={**body,'name':'DifferentIntent'})
+    assert code==409 and json.loads(raw)['reason']=='REGISTRATION_PENDING_CONFLICT',raw
+    assert pending.read_bytes()==before
+    token=json.loads(before)['registration_token']
+    code,raw=request(ui,'/api/global/spawn',method='POST',body=body)
+    assert code==200 and json.loads(raw)['stage']=='registered_unconfigured',raw
+    current=op.client('replay');assert current.local_owner()==token
+    aid=current.identity['agent_id']
+    assert op.read({'kind':'resolve_name','name':'ReplayOwner'})['data']['agent_id']==aid
+    assert not pending.exists()
+    code,raw=request(ui,'/api/global/spawn',method='POST',body=body)
+    assert code==404 and json.loads(raw)['reason']=='TARGET_UNAVAILABLE',raw
+    assert op.client('replay').identity['agent_id']==aid

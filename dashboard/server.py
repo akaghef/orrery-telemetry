@@ -43,7 +43,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 16
+API_GENERATION = 17
 GLOBAL_MODE = os.environ.get("AGENTSTACK_RUNTIME_MODE", "").strip() == "global"
 
 # `server.py` is both an executable script and an importable dashboard module

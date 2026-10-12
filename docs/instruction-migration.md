@@ -97,3 +97,5 @@ purge は current と history の全 receipt に記録した source を照合し
 purge は current/history を同じ receipt reader で schema・kind・canonical plan hash まで検証します。不一致は `INSTRUCTION_PLAN_CHANGED` で削除前に停止し、ledger と backup を保持します。検証済みの receipt を復元してから再試行してください。hash を手で書き換えて回避しないでください。
 
 隔離 global dashboard の案内は、同じ検出 engine と finding を使います。固定 provider HOME と session record の cwd が確認できない場合は unknown と表示し、dashboard の利用者 HOME から推測しません。起動時に記録するのは候補の path・block hash・版だけです。現在の disk が片付いていても、以前の候補が変わった session には再起動を案内します。実際の指示の読込みを証明する表示ではありません。[画面での確認と Dismiss](dashboard.md#global-mail-view)を参照してください。
+
+検出結果の cleanup command は `env HOME=... CLAUDE_CONFIG_DIR=... CODEX_HOME=... AGENTSTACK_HOME=...` などを含み、検出と同じ利用者 target と ledger を使います。隔離 provider の案内を通常の terminal へ貼るときも、この env を省かないでください。対象の現行 block が未設置なら、別 HOME の block で代用せず `INSTRUCTION_TARGET_REQUIRES_SETUP` で拒否します。

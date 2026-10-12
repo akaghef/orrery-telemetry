@@ -468,3 +468,7 @@ NEW AGENT uses fixed client slots. Existing names offer resume of the same ident
 Legacy screens and routes are retained. Cockpit’s global bridge and right-pane integration follow separately. A new dashboard with an old cockpit keeps the cockpit’s legacy display and does not infer global screen capabilities.
 
 Global network activity is shown as `ACTIVITY UNKNOWN`. A read projection for actual working/waiting, context, and parent/child state is required before PR7 switches the default.
+
+Registration recovery buttons follow status `next_operations`: replay/finalize/configure continue the same slot and intent; Resume is for an existing launch. Registration replay and abandon compare the displayed pending digest. Lock aborts in-flight fetches and invalidates delayed bodies and tab capability handoffs. A fresh tab accepts only its matching request within 500ms; after Lock it requires explicit Unlock. If browser storage is denied, `BROWSER_SESSION_STORAGE_UNAVAILABLE` indicates memory-only access and reload requires input again.
+
+Instruction checks select local contexts by identity, then verify only matching slots. The slot's `wrapper_root` is the sole installation provenance. Agents without a proven Claude/Codex provider slot show `PROVIDER_HOME_UNPROVEN` in Settings only, without repeated conversation notices. Copied cleanup commands explicitly carry the same HOME, provider HOME and installation environment used for detection; never remove a block by dropping those assignments.

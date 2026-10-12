@@ -390,6 +390,16 @@ class Engine:
         distributed = {self.template_home / 'claude/CLAUDE.md', self.template_home / 'codex/AGENTS.md'}
         return sorted(paths - distributed - {self.target}, key=str)
 
+    def cleanup_argv(self, path):
+        values={'HOME':self.env['HOME'],'AGENTSTACK_HOME':str(self.install),
+            'AGENTSTACK_TEMPLATE_HOME':str(self.template_home),
+            'CLAUDE_CONFIG_DIR':str(self.home) if self.provider=='claude' else self.env.get('CLAUDE_CONFIG_DIR',''),
+            'CODEX_HOME':str(self.home) if self.provider=='codex' else self.env.get('CODEX_HOME',''),
+            'CLAUDE_HOME':'','AGENTSTACK_CLAUDE_MD_SCOPE':'global',
+            'AGENTSTACK_PROJECT_KEY':self.project,'AGENTSTACK_LEGACY_PROJECT_KEY':self.legacy_project}
+        return ['env',*(key+'='+value for key,value in values.items()),
+            str(self.install/f'bin/agentstack-{self.provider}-setup'),'--remove-legacy-block','--path',str(path)]
+
     def finding(self, path, data, receipt=None):
         try:
             block = block_bytes(data or b'')
@@ -399,7 +409,7 @@ class Engine:
             block, kind, reason = None, 'malformed', str(exc)
         return {'source_path': str(path), 'kind': kind, 'template_id': self.known(data, path, receipt) if kind == 'legacy' else None,
                 'block_sha256': sha(block) if block else None, 'reason': reason,
-                'cleanup_argv': [str(self.install / f'bin/agentstack-{self.provider}-setup'), '--remove-legacy-block', '--path', str(path)] if kind == 'legacy' and path != self.target else []}
+                'cleanup_argv': self.cleanup_argv(path) if kind == 'legacy' and path != self.target else []}
 
     def detect(self, explicit=()):
         findings = []; receipt = self.receipt()

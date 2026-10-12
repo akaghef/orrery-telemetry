@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":16}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":17}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -69,11 +69,11 @@ See [Installation](install.en.md#version) for version resolution order.
 - `version`: when the release was made (a date; see the [CHANGELOG](../CHANGELOG.md)). It is not a compatibility promise
 - `api`: the **compatibility generation** for the programs that use this API ([ORRERY cockpit](https://github.com/gyroid-eth/orrery) and others). It goes up by one only when an endpoint or field those programs rely on is **added or changes meaning**, and a [changelog fragment](../changelog.d/) records it (collected into the CHANGELOG at release; see [Contributing](../CONTRIBUTING.md#changelog-fragments-and-releases)); it does not go up with every release. A program should decide whether a feature it needs is there from `api`, not from the date in `version` (the cockpit warns at startup when `api` is lower than it needs). This scheme starts at `api` 2; every earlier release reports 1, whatever it can do
 
-### Isolated global backend (API 16)
+### Isolated global backend (API 17)
 
 Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read`, `global_spawn`, `instruction_migration` and `global_dashboard_ui` are 1. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads and admission remain unchanged.
 
-API 16 adds the global dashboard reply view and these admitted, read-only routes. Legacy mode remains the default; activation is false.
+API 17 adds the global dashboard reply view and these admitted, read-only routes. Legacy mode remains the default; activation is false.
 
 | Route | Projection |
 | --- | --- |
@@ -658,3 +658,5 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 - [Dashboard](dashboard.en.md)
 - [Configuration](configuration.en.md)
 - [Troubleshooting](troubleshooting.en.md)
+
+Explicit same-intent replay from registration status sends `registration_sha256` as optional `expected_digest` to `POST /api/global/spawn` (API 17). The existing operation mutex protects comparison and replay. A mismatch returns `REGISTRATION_PENDING_CONFLICT`; an absent pending returns `TARGET_UNAVAILABLE`. Existing credential/name/program/model checks remain in force.

@@ -1798,7 +1798,7 @@ class RuntimeClient:
                             and os.path.isabs(value['cwd']) and Path(value['cwd']).is_dir()):
                         helper=runpy.run_path(str(ROOT/'bin/lib/instruction_blocks.py'))
                         home=self.runtime_dir/'provider-home'/provider
-                        try:value['instruction_observation']=helper['instruction_observation'](provider,home,ROOT,value['cwd'])
+                        try:value['instruction_observation']=helper['instruction_observation'](provider,home,self.config['wrapper_root'],value['cwd'])
                         except helper['Refused']:pass
                 except (OSError,ValueError,ClientError):
                     pass

@@ -25,7 +25,7 @@ function notice(row,{force=false}={}){
  if(!force)box.append(button('Dismiss for this page session',()=>{try{sessionStorage.setItem('orrery.instruction-dismiss',fingerprint(row));}catch(_){}box.remove();},'reply-link'));
  return box;
 }
-function needsNotice(row){return row.session_state==='reload_required'||!['clean','not_configured'].includes(row.disk_state);}
+function needsNotice(row){if(row.reason==='PROVIDER_HOME_UNPROVEN')return false;return row.session_state==='reload_required'||!['clean','not_configured'].includes(row.disk_state);}
 function participants(messages,edge=null){
  const names=new Map();for(const m of messages)for(const a of [m.sender,...(m.to||[]),...(m.cc||[]),...(m.bcc||[])])if(a&&typeof a.name==='string'&&a.name)names.set(a.agent_id,a.name);
  const ids=edge?[edge.a,edge.b]:[...names.keys()];

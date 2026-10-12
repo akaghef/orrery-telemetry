@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import pytest
+from service_teardown import TEST_LABEL_PREFIX
 from dashboard import global_page, server as dashboard
 from test_global_dashboard_backend import ui, request
 from test_global_runtime_delivery import launch, server
@@ -18,6 +19,8 @@ def test_global_shell_never_starts_legacy_driver_and_serves_legacy_template_verb
     assert code==200 and b'global_ui.js' in body and b'mail_flow.js' in body
     assert b'const mailQueue' not in body and b'onclick=' not in body
     assert b'theme_controller.js' in body and b'application/json' in body
+    assert b'<style id="agentstack-dashboard-styles">' in body
+    assert body.index(b'</style>')<body.index(b'href="theme_light.css"')
     monkeypatch.setattr(dashboard,'GLOBAL_MODE',False)
     code,legacy=request(ui,'/',auth=False)
     assert code==200 and legacy==dashboard._render_dashboard_index(raw)
@@ -70,7 +73,7 @@ def test_explicit_provider_home_observation_is_readonly_and_cwd_is_not_reload(tm
     home=tmp_path/'provider';home.mkdir();cwd=tmp_path/'work';cwd.mkdir()
     # This fixture is an old block in the working folder, not a real user file.
     target=cwd/('CLAUDE.md' if provider=='claude' else 'AGENTS.md')
-    env={'HOME':str(tmp_path),'AGENTSTACK_HOME':str(ROOT),'AGENTSTACK_TEMPLATE_HOME':str(ROOT),
+    env={'HOME':str(tmp_path),'AGENTSTACK_HOME':str(ROOT),'AGENTSTACK_LABEL_PREFIX':TEST_LABEL_PREFIX,'AGENTSTACK_TEMPLATE_HOME':str(ROOT),
          'CLAUDE_CONFIG_DIR':str(home),'CODEX_HOME':str(home)}
     e=engine.Engine(provider,env=env,cwd=cwd)
     old=next(x for x in e.catalog if x['provider']==provider)
@@ -138,6 +141,8 @@ assert(F.dismissed(finding));F.render(root,{messages:rows,instruction:finding});
 assert(!all().some(x=>x.className==='instruction-hint'));
 const changed={...finding,findings:[{...finding.findings[0],block_sha256:'changed'}]};
 assert(!F.dismissed(changed));assert(F.needsNotice({...finding,disk_state:'clean',session_state:'reload_required'}));
+assert(!F.needsNotice({...finding,disk_state:'unknown',reason:'PROVIDER_HOME_UNPROVEN'}));
+assert(F.notice({...finding,disk_state:'unknown',reason:'PROVIDER_HOME_UNPROVEN'},{force:true}));
 assert.equal(F.notice({...finding,disk_state:'unknown'}).children[0].textContent,'Instruction status could not be verified.');
 console.log('reply renderer: 7 messages, literal body, bounded replies, unavailable history, bilingual links, dismissal and changed hash OK');
 """
@@ -162,3 +167,95 @@ def test_instruction_http_uses_existing_session_and_fixed_provider_home(launch,u
     assert target.read_bytes()==b'Personal text\n' and old!=target.read_bytes()
     code,raw=request(ui,'/api/instruction-migration?agent_id=2&session_id=other-session')
     assert json.loads(raw)['data']['disk_state']=='unknown'
+
+
+@pytest.mark.parametrize('provider', ['claude', 'codex'])
+def test_cleanup_command_preserves_detection_home_and_install(tmp_path, provider):
+    import subprocess, os
+    home=tmp_path/'provider home';home.mkdir();work=tmp_path/'work';work.mkdir()
+    e=engine.Engine(provider,env={'HOME':str(tmp_path/'isolated home'),
+        'AGENTSTACK_HOME':str(ROOT),'AGENTSTACK_LABEL_PREFIX':TEST_LABEL_PREFIX,'AGENTSTACK_TEMPLATE_HOME':str(ROOT),
+        'CLAUDE_CONFIG_DIR':str(home),'CODEX_HOME':str(home)},cwd=work)
+    old=next(x for x in e.catalog if x['provider']==provider)
+    source=work/('CLAUDE.md' if provider=='claude' else 'AGENTS.md')
+    source.write_bytes(engine.render(provider,old['template'].encode(),str(ROOT),str(work),'legacy-sed-v1'))
+    argv=next(f['cleanup_argv'] for f in e.detect() if f['cleanup_argv'])
+    assert argv[0]=='env'
+    assignments=dict(x.split('=',1) for x in argv[1:] if '=' in x and not x.startswith('--'))
+    assert assignments['HOME']==e.env['HOME']
+    assert assignments['AGENTSTACK_HOME']==str(ROOT)
+    assert assignments['CLAUDE_CONFIG_DIR']==str(home)
+    assert assignments['CODEX_HOME']==str(home)
+    # Execute the emitted command from an unrelated, synthetic operator HOME.
+    # No isolated user block exists, so deletion must be refused there too.
+    operator=tmp_path/'operator';operator.mkdir()
+    own=engine.Engine(provider,env={'HOME':str(operator),'AGENTSTACK_HOME':str(ROOT),'AGENTSTACK_LABEL_PREFIX':TEST_LABEL_PREFIX,'AGENTSTACK_TEMPLATE_HOME':str(ROOT)},cwd=operator)
+    own.target.parent.mkdir();own.target.write_bytes(own.block)
+    env={**os.environ,'HOME':str(operator),'AGENTSTACK_HOME':str(ROOT),'AGENTSTACK_LABEL_PREFIX':TEST_LABEL_PREFIX,'AGENTSTACK_TEMPLATE_HOME':str(ROOT)}
+    before=source.read_bytes()
+    result=subprocess.run([*argv,'--assume-yes'],env=env,cwd=operator,capture_output=True,text=True)
+    assert result.returncode!=0
+    assert 'INSTRUCTION_TARGET_REQUIRES_SETUP' in result.stdout+result.stderr
+    assert source.read_bytes()==before
+    assert not (operator/'.agentstack').exists()
+
+
+def test_global_shell_allows_only_declared_markup_and_assets():
+    from html.parser import HTMLParser
+    raw=(ROOT/'dashboard/index.html').read_text()
+    raw=raw.replace('</header>', '<form id="future-legacy" onsubmit="oldSubmit()"><img onerror="oldError()"></form></header>')
+    raw=raw.replace('</body>', '<script type="application/json" id="unapproved">{}</script><script src="new-legacy.js"></script></body>')
+    class Inspect(HTMLParser):
+        def __init__(self):super().__init__();self.handlers=[];self.scripts=[];self.ids=[]
+        def handle_starttag(self,tag,attrs):
+            attrs=dict(attrs);self.handlers += [k for k in attrs if k.startswith('on')]
+            if tag=='script':self.scripts.append(attrs)
+            if 'id' in attrs:self.ids.append(attrs['id'])
+    p=Inspect();p.feed(global_page.render(raw.encode()).decode())
+    assert not p.handlers
+    assert 'future-legacy' not in p.ids and 'spawnmd' not in p.ids and 'term' not in p.ids
+    assert not any(x.get('id')=='unapproved' or x.get('src')=='new-legacy.js' for x in p.scripts)
+
+
+def test_instruction_matches_local_identity_without_full_lookup(launch,ui,monkeypatch):
+    from dashboard import global_backend
+    c,delivery,row=launch
+    c.record_session({'session_id':'only-match','cwd':str(c.isolation),
+        'tool_response':{**c.call('whois'),**{k:c.identity[k] for k in ('window_row_id','window_uuid')}}})
+    op=global_backend.OPERATOR_API['RuntimeOperator'](ui[0]['config_path'])
+    op.prepare('unrelated');op.create('unrelated',agent_name='UnrelatedRoot',program='daemon',model='fixture')
+    def no_lookup(*a,**kw):raise AssertionError('all-slot lookup called')
+    monkeypatch.setattr(type(op),'lookup',no_lookup)
+    seen=[];original=type(op).client
+    def only_matching(self,name):seen.append(name);return original(self,name)
+    monkeypatch.setattr(type(op),'client',only_matching)
+    # Checkout/module location is not instruction provenance.
+    monkeypatch.setattr(global_backend,'ROOT',c.isolation/'wrong-wrapper')
+    code,raw=request(ui,'/api/instruction-migration?agent_id=2&session_id=only-match')
+    assert code==200 and json.loads(raw)['data']['disk_state']=='clean',raw
+    assert seen==[c.path.parent.name]
+
+
+def test_instruction_configured_uses_slot_wrapper(launch,monkeypatch):
+    from dashboard.global_backend import OPERATOR_API
+    c,delivery,row=launch
+    op=OPERATOR_API['RuntimeOperator'](c.runtime/'server-config.json')
+    c.save_metadata('claude-code','fixture')
+    monkeypatch.setitem(op.configured.__globals__,'ROOT',c.isolation/'wrong-wrapper')
+    assert op.configured(c)=='claude'
+
+
+def test_session_observation_uses_slot_wrapper(launch,monkeypatch):
+    c,delivery,row=launch
+    helper=engine.__dict__.copy();calls=[]
+    def observe(provider,home,wrapper,cwd):
+        calls.append(str(wrapper));return engine.instruction_observation(provider,home,wrapper,cwd)
+    helper['instruction_observation']=observe
+    namespace=c.record_session.__globals__;loader=namespace['runpy'];original=loader.run_path
+    def load(path,*a,**kw):
+        return helper if str(path).endswith('/bin/lib/instruction_blocks.py') else original(path,*a,**kw)
+    monkeypatch.setattr(loader,'run_path',load)
+    monkeypatch.setitem(namespace,'ROOT',c.isolation/'other-checkout')
+    c.record_session({'session_id':'slot-provenance','cwd':str(c.isolation),
+        'tool_response':{**c.call('whois'),**{k:c.identity[k] for k in ('window_row_id','window_uuid')}}})
+    assert calls==[c.config['wrapper_root']]
