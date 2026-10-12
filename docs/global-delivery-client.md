@@ -210,3 +210,5 @@ MAX・keyset・limit・返却 revision は1つの read transaction に置き、f
 登録直前の競合で pending が残った場合は、`GET /api/global/spawn-status?client_name=SLUG` の `registration_sha256` を確認し、同じ HTTP admission の下で `POST /api/global/registration-abandon` に `{"client_name":"SLUG","expected_digest":"DIGEST"}` を渡せます。digest 不一致では記録を変えません。既存 CLI と同じく別 owner と確認できた intent だけを terminal にし、別の identity には新 root を使います。root または登録 pending が無い場合は404 `TARGET_UNAVAILABLE` です。不正な既存 file の拒否と digest の照合は維持します。token は status に返しません。不正 JSON は400 `QUERY_INVALID`、登録の競合は409、transport などの障害は503です。
 
 API 17 では登録の明示再送で status の digest を照合できます。browser の Lock は queue 済みの引継ぎと進行中の body を失効させ、storage 拒否時は page memory だけで動き reload 後に再 Unlock が必要です。
+
+API 18 の `global_runtime_observation=1`・`operator_session=1` と非秘密の `agentstack-http-operator probe` は [稼働状態と能力の確認](dashboard.md#global-runtime-proof)を参照してください。cockpit の実装と PR7 の切替は別の関門です。

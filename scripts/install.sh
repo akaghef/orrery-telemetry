@@ -2265,6 +2265,8 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
   "$REPO_ROOT/bin/lib/runtime_delivery.py"
   "$REPO_ROOT/bin/lib/runtime_operator.py"
+  "$REPO_ROOT/bin/lib/runtime_observation.py"
+  "$REPO_ROOT/packages/agentstack_mail/fixtures/global-runtime-observation.json"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-client-4c.json"
   "$REPO_ROOT/bin/lib/global-client-loader.sh"
   "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py"

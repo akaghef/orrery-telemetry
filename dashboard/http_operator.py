@@ -118,3 +118,47 @@ class Admission:
         if not value.startswith('Bearer '):
             raise AdmissionError('HTTP_OPERATOR_REQUIRED')
         self.authenticate(value[7:])
+
+
+def probe(home, *, service, telemetry_url, cockpit_port, config_path):
+    """Read admitted service proof; never print capability or owner credentials."""
+    import runpy
+    from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
+    root = Path(__file__).resolve().parents[1]
+    operator = runpy.run_path(str(root/'bin/lib/runtime_operator.py'))['RuntimeOperator'](config_path)
+    token = read_capability(home)
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            raise AdmissionError('HTTP_OPERATOR_PROBE_FAILED',503)
+    def get(origin, path):
+        # Reuse the exact existing loopback origin validation.
+        Admission(home, origin)
+        request = Request(origin+path, headers={'Authorization':'Bearer '+token,'Origin':origin})
+        try:
+            with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=5) as response:
+                return json.loads(response.read(1048577))
+        except Exception as exc:
+            raise AdmissionError('HTTP_OPERATOR_PROBE_FAILED',503) from exc
+    version = get(telemetry_url, '/api/version')
+    required = {'global_runtime_observation':1, 'operator_session':1}
+    caps = version.get('capabilities',{})
+    if version.get('runtime_mode') != 'global' or any(caps.get(k)!=v for k,v in required.items()):
+        raise AdmissionError('COCKPIT_GLOBAL_CAPABILITY_REQUIRED',503)
+    health = get(telemetry_url, '/api/mail-watcher-health')
+    if health.get('binding') != operator.binding or health.get('data',{}).get('server_ready') is not True:
+        raise AdmissionError('MANAGEMENT_BINDING_MISMATCH',503)
+    cockpit_ready = False
+    if service == 'cockpit':
+        origin = 'http://127.0.0.1:'+str(int(cockpit_port))
+        cockpit = get(origin, '/telemetry/health')
+        upstream = cockpit.get('upstream',{})
+        if (cockpit.get('runtime_mode') != 'global' or upstream.get('binding') != operator.binding
+                or any(cockpit.get('capabilities',{}).get(k)!=1 for k in (
+                    'operator_http_admission','global_mail_bridge','instruction_migration',
+                    'websocket_first_frame_auth','global_runtime_observation'))
+                or any(upstream.get('capabilities',{}).get(k)!=v for k,v in required.items())):
+            raise AdmissionError('COCKPIT_GLOBAL_CAPABILITY_REQUIRED',503)
+        cockpit_ready = True
+    return {'ok':True,'runtime_mode':'global','telemetry_api':version['api'],
+            'capabilities':caps,'binding':operator.binding,'cockpit_ready':cockpit_ready,
+            'cutover_ready':False}

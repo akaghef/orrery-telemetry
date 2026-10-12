@@ -65,6 +65,7 @@ Standalone Telemetry example: filter by name, find the `RETIRED` / `RESUME READY
 ![Resume a retired agent from 7D in standalone Telemetry and confirm it returns ONLINE in LIVE](docs/img/resume-retired-agent.gif)
 
 [Dashboard search and resume](docs/dashboard.en.md#search) and [Launcher Claude resume](docs/launchers.en.md#dashboard-claude-resume) cover cases that need verification and cases that cannot resume.
+For global network activity, owner verification and unknown boundaries, see the [observation guide](docs/dashboard.en.md#global-runtime-observation).
 
 ## Troubleshoot and update
 

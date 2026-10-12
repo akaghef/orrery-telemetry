@@ -164,18 +164,19 @@ def operator_schemas():
     return _UI_CONTRACT
 
 
-def management_exchange(config, request):
+def management_exchange(config, request, *, deadline=None):
     """One private socket transport; callers validate their response contract."""
     path = absolute(config['management_socket'])
     info = path.lstat()
     if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ClientError('MANAGEMENT_SOCKET_UNSAFE')
     with socket.socket(socket.AF_UNIX) as stream:
-        stream.settimeout(5)
+        stream.settimeout(remaining(deadline, 5))
         stream.connect(str(path))
         stream.sendall(json.dumps(request).encode() + b'\n')
         raw = b''
         while not raw.endswith(b'\n'):
+            stream.settimeout(remaining(deadline, 5))
             block = stream.recv(16384)
             if not block or len(raw) + len(block) > 1048576:
                 raise ClientError('MANAGEMENT_RESPONSE_INVALID')
@@ -184,7 +185,7 @@ def management_exchange(config, request):
     return reply
 
 
-def operator_exchange(config, binding, query):
+def operator_exchange(config, binding, query, *, deadline=None):
     """One schema and binding check for client and operator UI reads."""
     schemas = operator_schemas()
     validate = wire_contract()['validate_schema']
@@ -193,7 +194,8 @@ def operator_exchange(config, binding, query):
         validate(request, schemas['REQUEST'])
     except ValueError as exc:
         raise ClientError('QUERY_INVALID') from exc
-    reply = management_exchange(config, request)
+    reply = (management_exchange(config, request) if deadline is None
+             else management_exchange(config, request, deadline=deadline))
     if not isinstance(reply, dict) or reply.get('ok') is not True:
         raise ClientError(reply.get('reason', 'MANAGEMENT_REJECTED') if isinstance(reply, dict) else 'MANAGEMENT_REJECTED')
     try:
@@ -354,6 +356,62 @@ def local_endpoint(value):
     return value
 
 
+def remaining(deadline, limit=5):
+    if deadline is None:
+        return limit
+    budget = deadline - time.monotonic()
+    if budget <= 0:
+        raise ClientError('OBSERVATION_INCOMPLETE')
+    return min(limit, budget)
+
+
+def validate_owner_receipt(inspected, identity, token, binding):
+    if not isinstance(inspected, dict) or inspected.get('ok') is not True:
+        raise ClientError('MANAGEMENT_REJECTED')
+    if any(inspected.get(k) != binding[v] for k,v in (
+            ('server_instance_id','expected_server_instance_id'),
+            ('candidate_generation','candidate_generation'),('authority_epoch','authority_epoch'))):
+        raise ClientError('MANAGEMENT_BINDING_MISMATCH')
+    if (inspected.get('agent_id') != identity['agent_id']
+            or inspected.get('credential_generation') != identity['credential_generation']
+            or not isinstance(token,str)
+            or inspected.get('credential_fingerprint') != hashlib.sha256(token.encode()).hexdigest()[:16]):
+        raise ClientError('CREDENTIAL_BINDING_MISMATCH')
+    return inspected
+
+
+def check_operation_inode(path):
+    if read_json(path) != {'kind': 'orrery-client-operation-mutex-v1'}:
+        raise ClientError('OUTPUT_SCHEMA_INVALID')
+
+
+@contextmanager
+def observation_inode(path):
+    """Share the existing writer inode; never create it or wait for a writer."""
+    check_operation_inode(path)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        raise ClientError('OBSERVATION_MUTEX_UNAVAILABLE') from exc
+    try:
+        info = os.fstat(fd)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ClientError('OBSERVATION_BUSY') from exc
+        current = path.lstat()
+        if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            raise ClientError('PRIVATE_FILE_UNSAFE')
+        check_operation_inode(path)
+        yield
+        current = path.lstat()
+        if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            raise ClientError('PRIVATE_FILE_UNSAFE')
+        check_operation_inode(path)
+    finally:
+        os.close(fd)
+
+
 @contextmanager
 def operation_inode(path):
     """The fixed operation mutex, also used before a root has a context."""
@@ -364,10 +422,7 @@ def operation_inode(path):
                 json.dump({'kind':'orrery-client-operation-mutex-v1'},out)
                 out.flush();os.fsync(out.fileno())
         except FileExistsError:pass
-    def check():
-        if read_json(path)!={'kind':'orrery-client-operation-mutex-v1'}:
-            raise ClientError('OUTPUT_SCHEMA_INVALID')
-    check()
+    check_operation_inode(path)
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     try:
         info=os.fstat(fd)
@@ -375,7 +430,7 @@ def operation_inode(path):
         current=path.lstat()
         if (info.st_dev,info.st_ino)!=(current.st_dev,current.st_ino):
             raise ClientError('PRIVATE_FILE_UNSAFE')
-        check()
+        check_operation_inode(path)
         yield
     finally:os.close(fd)
 
@@ -1154,10 +1209,7 @@ class RuntimeClient:
         # proves the same local credential without changing retirement.
         token = self.local_owner()
         inspected = self.management('inspect', agent_id=self.identity['agent_id'])
-        if (inspected.get('credential_generation') != self.identity['credential_generation']
-                or inspected.get('credential_fingerprint') != hashlib.sha256(token.encode()).hexdigest()[:16]):
-            raise ClientError('CREDENTIAL_BINDING_MISMATCH')
-        return inspected
+        return validate_owner_receipt(inspected,self.identity,token,self.binding)
 
     def activate_credential(self, token, row, metadata=None):
         identity = {k: row[k] for k in ('agent_id', 'credential_generation', 'name')}
@@ -1406,9 +1458,18 @@ class RuntimeClient:
                     raise ClientError('SESSION_OWNER_CONFLICT')
                 # App lifecycle belongs to this same canonical live slot;
                 # refreshing process evidence must not erase its route state.
+                same = all(previous.get(key) == evidence.get(key) for key in
+                           (*self.binding, 'session_id', 'pid', 'process_start'))
                 for key in ('app_state', 'app_subagent'):
                     if key in previous:
                         evidence[key] = previous[key]
+                if same:
+                    launch_path = self.outputs['launch']
+                    if launch_path.exists() or launch_path.is_symlink():
+                        launch = read_json(launch_path)
+                        if all(previous.get(key) == launch.get(key) for key in ('launch_id','receipt_nonce')):
+                            for key in ('launch_id','receipt_nonce'):
+                                evidence[key] = previous[key]
             with self.fence():
                 atomic_json(slot, evidence)
         return evidence
@@ -1855,16 +1916,47 @@ def provider_ancestor():
     return None
 
 
-def process_start(pid):
+def process_start(pid, *, deadline=None):
     if not integer(pid,1):
         return None
     try:
-        result = subprocess.run(['ps','-p',str(pid),'-o','lstart='], capture_output=True, text=True, timeout=3)
+        result = subprocess.run(['ps','-p',str(pid),'-o','lstart='], capture_output=True, text=True, timeout=remaining(deadline, 3))
         if result.returncode == 1 and not result.stderr:
             return 'absent'
         return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def pane_evidence(live, *, deadline=None, lines=20):
+    """Read the same PID/start/pane proof for notification and observation."""
+    if live.get('ended'):
+        return 'absent', None, None
+    start = (process_start(live.get('pid')) if deadline is None
+             else process_start(live.get('pid'), deadline=deadline))
+    if start == 'absent':
+        return 'absent', None, None
+    if not start or not live.get('process_start') or start != live['process_start']:
+        return 'unknown', None, None
+    pane = live.get('pane_id')
+    if not isinstance(pane, str) or re.fullmatch(r'%[0-9]+', pane) is None:
+        return 'unknown', None, None
+    try:
+        def tmux(*args):
+            return subprocess.run(['tmux', *args], capture_output=True, text=True,
+                                  timeout=remaining(deadline, 5))
+        pid = tmux('display-message', '-p', '-t', pane, '#{pane_pid}')
+        if pid.returncode or pid.stdout.strip() != str(live.get('pid')):
+            return 'unknown', None, None
+        command = tmux('display-message', '-p', '-t', pane, '#{pane_current_command}')
+        if command.returncode or command.stdout.strip() in ('bash','zsh','sh','fish','dash','ksh',''):
+            return 'unknown', None, None
+        capture = tmux('capture-pane', '-p', '-t', pane, '-S', '-' + str(lines))
+        if capture.returncode:
+            return 'unknown', None, None
+        return 'live', pane, capture.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 'unknown', None, None
 
 
 def hook_path(payload):

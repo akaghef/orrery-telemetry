@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+from pathlib import Path
 import pathlib
 import re
 import secrets
@@ -43,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 17
+API_GENERATION = 18
 GLOBAL_MODE = os.environ.get("AGENTSTACK_RUNTIME_MODE", "").strip() == "global"
 
 # `server.py` is both an executable script and an importable dashboard module
@@ -174,7 +175,7 @@ BIND_HOST = _env_text("AGENTSTACK_BIND_HOST", "127.0.0.1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 THEME_ASSETS = {
-    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","network_node.js")},
+    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
     **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google")},
     "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
     "/theme_controller.js": (
@@ -8529,6 +8530,28 @@ class Handler(BaseHTTPRequestHandler):
                 'CLIENT_SELECTION_REQUIRED','CLIENT_ROOT_IS_CHILD','REGISTRATION_OWNERSHIP_VERIFIED_RETRY_REQUIRED'),409)}.get(reason,503))
         self._send(status,json.dumps({'ok':False,'reason':reason}).encode(),'application/json; charset=utf-8')
 
+    def _serve_portrait(self, nm, hi):
+        fp = _portrait_file(nm, hi)
+        if not fp:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z ._-]{0,23}", nm or ""):
+                self._send(404, b"no portrait", "text/plain")
+                return
+            img = _portrait_fallback(nm, hi)
+            self._send(200, img, "image/svg+xml")
+            return
+        try:
+            with open(fp, "rb") as f:
+                img = f.read()
+        except OSError:
+            self._send(404, b"missing", "text/plain")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(img)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(img)
+
     def _global_get(self, path):
         try:
             try:
@@ -8538,7 +8561,25 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/version':
                 payload = {'name':'orrery-telemetry','version':_resolve_version(),'api':API_GENERATION,
                     'runtime_mode':'global','capabilities':{'operator_http_admission':1,'ui_read':1,
-                    'global_spawn':1,'instruction_migration':1,'global_dashboard_ui':1}}
+                    'global_spawn':1,'instruction_migration':1,'global_dashboard_ui':1,
+                    'global_runtime_observation':1,'operator_session':1}}
+            elif path == '/api/runtime-observations':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                ids=(query.get('agent_ids') or [''])[0].split(',')
+                if (set(query) != {'agent_ids'} or len(query['agent_ids']) != 1
+                        or not 1 <= len(ids) <= 200
+                        or any(re.fullmatch(r'[1-9][0-9]{0,18}', x) is None or int(x)>2**63-1 for x in ids)
+                        or len(set(ids)) != len(ids)):
+                    raise ValueError('QUERY_INVALID')
+                payload=Backend(os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG','')).observe(list(map(int,ids)),_parse_runtime)
+            elif path == '/api/quotas':
+                payload=QUOTA_SERVICE.read_all()
+            elif path == '/portrait':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)-{'name','hi'} or any(len(x)!=1 for x in query.values()):
+                    raise ValueError('QUERY_INVALID')
+                name=(query.get('name') or [''])[0]
+                self._serve_portrait(name,(query.get('hi') or [''])[0] in ('1','true'));return
             elif path == '/api/fs/dirs':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if set(query)-{'path'} or len(query.get('path',[]))>1:
@@ -8820,26 +8861,7 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             nm = (q.get("name") or [""])[0]
             hi = (q.get("hi") or ["0"])[0] in ("1", "true")
-            fp = _portrait_file(nm, hi)
-            if not fp:
-                if not re.fullmatch(r"[A-Za-z][A-Za-z ._-]{0,23}", nm or ""):
-                    self._send(404, b"no portrait", "text/plain")
-                    return
-                img = _portrait_fallback(nm, hi)
-                self._send(200, img, "image/svg+xml")
-                return
-            try:
-                with open(fp, "rb") as f:
-                    img = f.read()
-            except OSError:
-                self._send(404, b"missing", "text/plain")
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "image/png")
-            self.send_header("Content-Length", str(len(img)))
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.end_headers()
-            self.wfile.write(img)
+            self._serve_portrait(nm, hi)
         elif path == "/api/ptty":
             q = parse_qs(urlparse(self.path).query)
             sess = (q.get("session") or [""])[0]

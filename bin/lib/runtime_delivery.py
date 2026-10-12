@@ -1131,20 +1131,8 @@ class RuntimeDelivery:
         for _,live in reversed(self.live_rows(row['launch_id'])):
             pane=live.get('pane_id')
             if not pane or live.get('ended'):continue
-            # A pane may have been recycled after its provider exited. The
-            # canonical live-session receipt owns PID/start evidence; unknown
-            # evidence is ineligible and never consumes a handoff attempt.
-            start=self.api['process_start'](live.get('pid'))
-            if not start or start=='absent' or start!=live.get('process_start'):continue
-            try:
-                process=subprocess.run(['tmux','display-message','-p','-t',pane,'#{pane_pid}'],capture_output=True,text=True,timeout=5)
-                if process.returncode or process.stdout.strip()!=str(live.get('pid')):continue
-                result=subprocess.run(['tmux','display-message','-p','-t',pane,'#{pane_current_command}'],capture_output=True,text=True,timeout=5)
-                if result.returncode or result.stdout.strip() in ('bash','zsh','sh','fish','dash','ksh',''):continue
-                capture=subprocess.run(['tmux','capture-pane','-p','-t',pane,'-S','-20'],capture_output=True,text=True,timeout=5)
-                if capture.returncode:continue
-                return pane
-            except (OSError,subprocess.TimeoutExpired):continue
+            state, target, _ = self.api['pane_evidence'](live)
+            if state == 'live':return target
         return None
 
     def deliver_persistent(self, mid):
