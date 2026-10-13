@@ -640,6 +640,60 @@ def test_fsync_failure_after_the_content_keeps_the_mutex_another_caller_holds(tm
     assert inodes['third'] == held == os.stat(path).st_ino
 
 
+def test_interrupt_after_the_whole_write_keeps_the_mutex_another_caller_holds(tmp_path, monkeypatch):
+    """The file's bytes decide, not how far the creator's own code got.
+
+    All bytes are written, a second caller enters and holds the lock, and the
+    creator is interrupted before it records anything about that write.
+    """
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    holding, release = threading.Event(), threading.Event()
+    real_write = os.write
+
+    def second():
+        with api['operation_inode'](path):
+            holding.set()
+            assert release.wait(5)
+
+    def interrupted_after_write(fd, data):
+        written = real_write(fd, data)
+        if threading.current_thread().name == 'creator':
+            threading.Thread(target=second, name='second').start()
+            assert holding.wait(5)
+            raise KeyboardInterrupt
+        return written
+
+    monkeypatch.setattr(os, 'write', interrupted_after_write)
+    failure = {}
+
+    def creator():
+        try:
+            api['create_mutex_inode'](path, 'orrery-client-operation-mutex-v1')
+        except KeyboardInterrupt:
+            failure['creator'] = 'interrupted'
+
+    first = threading.Thread(target=creator, name='creator')
+    first.start()
+    first.join(5)
+    assert failure == {'creator': 'interrupted'}
+    assert holding.is_set()
+    result, inodes, entered = {}, {}, threading.Event()
+    third = threading.Thread(target=_run_operation, name='third',
+                             args=(path, 'third', result, inodes, entered))
+    third.start()
+    try:
+        assert not entered.wait(0.3), {'third_entered_beside_second': inodes}
+        held = os.stat(path).st_ino
+        assert path.read_bytes() == OPERATION_MUTEX
+    finally:
+        release.set()
+    third.join(5)
+    assert result == {'third': 'accepted'}
+    assert inodes['third'] == held == os.stat(path).st_ino
+
+
 def _offline_context(tmp_path):
     """A real client context that the constructor accepts without any network."""
     tmp_path.chmod(0o700)
