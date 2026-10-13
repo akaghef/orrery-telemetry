@@ -71,5 +71,6 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [呼び手・中断・受け入れの表](global-child-client-contract.md) — global client の fixture から生成した契約の一覧。
 
 - [global client の配送・起動](global-delivery-client.md) — 固定 layout、通知の再試行、明示的な復旧と provider の準備。
+- [tmux consumer の共有境界](runtime-tmux.md) — transport の固定、対象 admission と修復診断。
 
 - [指示 block の移行](instruction-migration.md) — 利用者単位への移行と復旧。

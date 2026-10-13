@@ -2317,6 +2317,7 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     tmux_commands = {'tmux-capabilities': 'capabilities',
                      'tmux-legacy-transport': 'legacy-transport',
+                     'tmux-diagnostics': 'diagnostics',
                      'tmux-legacy-target': 'legacy-target'}
     if argv and argv[0] in tmux_commands:
         # A legacy consumer's safety admission must not construct an owner or

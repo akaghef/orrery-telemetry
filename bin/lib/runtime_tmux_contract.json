@@ -2,7 +2,8 @@
   "contract": "orrery-tmux-target-v1",
   "capabilities": [
     "legacy-transport",
-    "legacy-target-admission"
+    "legacy-target-admission",
+    "legacy-target-diagnostics"
   ],
   "operations": [
     "capture",
@@ -10,7 +11,8 @@
     "input",
     "split",
     "close",
-    "kill-session"
+    "kill-session",
+    "signal"
   ],
   "result_properties": {
     "contract": {
@@ -23,15 +25,33 @@
       "type": "boolean"
     },
     "reason": {
-      "type": "string",
-      "pattern": "^[A-Z][A-Z_]{2,80}$"
+      "enum": [
+        "TMUX_DIRECTORY_UNSAFE",
+        "TMUX_SOCKET_UNSAFE",
+        "TMUX_SOCKET_CHANGED",
+        "TMUX_UNAVAILABLE",
+        "TMUX_TARGET_UNAVAILABLE",
+        "TMUX_TARGET_INPUT_INVALID",
+        "TMUX_TARGET_CHANGED",
+        "TMUX_OPERATION_INVALID",
+        "LEGACY_TMUX_TRANSPORT_UNAVAILABLE",
+        "GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED",
+        "LEGACY_TARGET_IS_GLOBAL",
+        "GLOBAL_TARGET_OWNERSHIP_UNKNOWN",
+        "TMUX_CLIENT_HOME_INVALID",
+        "TMUX_INSTANCE_REQUIRED",
+        "TMUX_SOCKET_PATH_TOO_LONG",
+        "TMUX_HELPER_FAILED",
+        "GLOBAL_ROOT_UNAVAILABLE",
+        "GLOBAL_PLACEMENT_UNAVAILABLE"
+      ]
     },
     "transport": {
       "const": "legacy-default"
     },
     "socket_path": {
       "type": "string",
-      "pattern": "^/"
+      "pattern": "^/.*"
     },
     "argv": {
       "type": "array",
@@ -64,7 +84,8 @@
         "input",
         "split",
         "close",
-        "kill-session"
+        "kill-session",
+        "signal"
       ]
     },
     "panes": {
@@ -109,8 +130,68 @@
     "capabilities": {
       "const": [
         "legacy-transport",
-        "legacy-target-admission"
+        "legacy-target-admission",
+        "legacy-target-diagnostics"
       ]
+    },
+    "failure_kind": {
+      "enum": [
+        "target",
+        "transport",
+        "helper"
+      ]
+    },
+    "global_complete": {
+      "type": "boolean"
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "client_name",
+          "mail_instance_id",
+          "check",
+          "reason"
+        ],
+        "properties": {
+          "client_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mail_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "check": {
+            "enum": [
+              "placement",
+              "context",
+              "snapshot"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "GLOBAL_ROOT_UNAVAILABLE",
+              "GLOBAL_PLACEMENT_UNAVAILABLE"
+            ]
+          }
+        }
+      }
     }
   },
   "result_fields": {
@@ -144,7 +225,34 @@
       "contract",
       "ok",
       "allowed",
-      "reason"
+      "reason",
+      "failure_kind"
+    ],
+    "diagnostics": [
+      "contract",
+      "ok",
+      "global_complete",
+      "diagnostics"
     ]
+  },
+  "reasons": {
+    "TMUX_DIRECTORY_UNSAFE": "transport",
+    "TMUX_SOCKET_UNSAFE": "transport",
+    "TMUX_SOCKET_CHANGED": "transport",
+    "TMUX_UNAVAILABLE": "transport",
+    "TMUX_TARGET_UNAVAILABLE": "target",
+    "TMUX_TARGET_INPUT_INVALID": "target",
+    "TMUX_TARGET_CHANGED": "target",
+    "TMUX_OPERATION_INVALID": "target",
+    "LEGACY_TMUX_TRANSPORT_UNAVAILABLE": "transport",
+    "GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED": "transport",
+    "LEGACY_TARGET_IS_GLOBAL": "target",
+    "GLOBAL_TARGET_OWNERSHIP_UNKNOWN": "target",
+    "TMUX_CLIENT_HOME_INVALID": "target",
+    "TMUX_INSTANCE_REQUIRED": "target",
+    "TMUX_SOCKET_PATH_TOO_LONG": "transport",
+    "TMUX_HELPER_FAILED": "helper",
+    "GLOBAL_ROOT_UNAVAILABLE": "target",
+    "GLOBAL_PLACEMENT_UNAVAILABLE": "target"
   }
 }

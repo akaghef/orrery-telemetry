@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import socket
 import subprocess
 import sys
@@ -37,7 +38,7 @@ def fake_transport(path, rows, *, changed=None):
     return API['Transport'](path, binary='/fixture/tmux', run=run), calls
 
 
-@pytest.mark.parametrize('operation', ['input', 'split', 'close', 'kill-session', 'capture', 'attach'])
+@pytest.mark.parametrize('operation', ['input', 'split', 'close', 'kill-session', 'capture', 'attach', 'signal'])
 def test_legacy_action_rejects_global_standalone_without_name_prefix(endpoint, operation):
     transport, calls = fake_transport(endpoint, '$1\tAlpha\t%4\t400\n')
     proof = {'live': {'pane_id': '%4', 'pid': 400, 'process_start': 'start', 'ended': False}}
@@ -159,7 +160,7 @@ def test_capability_cli_does_not_select_an_owner_or_echo_secrets(monkeypatch, ca
     assert client['main'](['tmux-capabilities']) == 0
     value = json.loads(capsys.readouterr().out)
     assert value == {'contract': 'orrery-tmux-target-v1',
-                     'capabilities': ['legacy-transport', 'legacy-target-admission']}
+                     'capabilities': ['legacy-transport', 'legacy-target-admission', 'legacy-target-diagnostics']}
     assert 'not-public' not in json.dumps(value)
 
 
@@ -178,3 +179,161 @@ def test_actual_isolated_label_resolves_to_explicit_socket():
             assert transport.argv[1] == '-S'
         finally:
             subprocess.run([*command, 'kill-server'], env=env, capture_output=True, check=False)
+
+
+@pytest.fixture
+def cli_fixture():
+    binary=shutil.which('tmux')
+    if binary is None: pytest.skip('tmux unavailable')
+    with tempfile.TemporaryDirectory(prefix='r257c-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as value:
+        base=Path(value);home=base/'home';home.mkdir(mode=0o700)
+        env={k:v for k,v in os.environ.items() if not k.startswith(('AGENTSTACK_','MCP_AGENT_'))
+             and k not in ('TMUX','TMUX_PANE','AGENT_NAME','PARENT_AGENT','CHILD_REGISTRATION_TOKEN','PROJECT_KEY')}
+        env.update(HOME=str(home),TMUX_TMPDIR=str(base),AGENTSTACK_HOME=str(home/'.agentstack'),
+                   AGENTSTACK_LABEL_PREFIX='org.agentstack.test.r257contract')
+        command=[binary,'-L','contract','-f','/dev/null']
+        fixture={'base':base,'home':home,'env':env,'binary':binary,'command':command,'started':False}
+        try:
+            yield fixture
+        finally:
+            if fixture['started']:
+                subprocess.run([*command,'kill-server'],env=env,capture_output=True,check=False)
+
+
+def start_cli_server(fixture):
+    env=fixture['env'];command=fixture['command']
+    created=subprocess.run([*command,'new-session','-d','-s','Control','sleep 60'],env=env,capture_output=True,text=True)
+    assert created.returncode==0,created.stderr
+    fixture['started']=True
+    raw=subprocess.check_output([*command,'display-message','-p',
+        '#{socket_path}\t#{pid}\t#{session_id}\t#{pane_id}\t#{pane_pid}'],env=env,text=True).strip().split('\t')
+    fixture.update(socket=raw[0],server_pid=int(raw[1]),session_id=raw[2],pane_id=raw[3],pid=int(raw[4]))
+    env['TMUX']=raw[0]+','+raw[1]+',0'
+    # Exercise the actual CLI/schema/tmux boundary independently of sandbox ps
+    # restrictions. Actual OS PID/start coverage stays a separate outer node.
+    commands=fixture['base']/'commands';commands.mkdir(mode=0o700)
+    ps=commands/'ps'
+    ps.write_text('#!/bin/sh\n[ "$*" = "-p '+raw[4]+' -o lstart=" ] || exit 2\nprintf "%s\\n" "fixture-start"\n')
+    ps.chmod(0o700)
+    env['PATH']=str(commands)+os.pathsep+env.get('PATH','')
+
+
+def run_cli(fixture,*arguments):
+    return subprocess.run([sys.executable,str(fixture.get('client_entry',ROOT/'bin/lib/runtime_client.py')),*arguments],
+        env=fixture['env'],text=True,capture_output=True,timeout=15)
+
+
+def expected_transport(fixture,*,present):
+    path=fixture['socket'] if present else str(fixture['base']/('tmux-'+str(os.getuid()))/'default')
+    return {'contract':'orrery-tmux-target-v1','ok':True,'transport':'legacy-default',
+            'socket_path':path,'argv':[fixture['binary'],'-S',path],
+            'environment_unset':['TMUX','TMUX_PANE'],'server_pid':fixture['server_pid'] if present else None}
+
+
+@pytest.mark.parametrize('present',[False,True])
+def test_actual_transport_cli_returns_literal_success_after_schema_validation(cli_fixture,present):
+    if present:start_cli_server(cli_fixture)
+    result=run_cli(cli_fixture,'tmux-legacy-transport')
+    assert result.returncode==0,result.stderr+result.stdout
+    assert json.loads(result.stdout)==expected_transport(cli_fixture,present=present)
+
+
+@pytest.mark.parametrize('operation',['input','signal'])
+def test_actual_target_cli_returns_literal_allowed_after_schema_validation(cli_fixture,operation):
+    start_cli_server(cli_fixture)
+    result=run_cli(cli_fixture,'tmux-legacy-target','--session','Control','--operation',operation)
+    assert result.returncode==0,result.stderr+result.stdout
+    value=json.loads(result.stdout)
+    assert {k:value[k] for k in expected_transport(cli_fixture,present=True)}==expected_transport(cli_fixture,present=True)
+    assert value['allowed'] is True and value['operation']==operation
+    assert value['panes']==[{'session_id':cli_fixture['session_id'],'session':'Control',
+        'pane_id':cli_fixture['pane_id'],'pid':cli_fixture['pid'],'process_start':'fixture-start'}]
+    assert __import__('re').fullmatch('[a-f0-9]{64}',value['state_sha256'])
+
+
+def test_installer_payload_actual_cli_keeps_transport_and_target_success(cli_fixture):
+    from _installed_client_payload import copy_client_library
+    installed=cli_fixture['base']/'installed'
+    copy_client_library(installed)
+    cli_fixture['client_entry']=installed/'bin/lib/runtime_client.py'
+    start_cli_server(cli_fixture)
+    result=run_cli(cli_fixture,'tmux-legacy-transport')
+    assert result.returncode==0,result.stdout+result.stderr
+    assert json.loads(result.stdout)==expected_transport(cli_fixture,present=True)
+    result=run_cli(cli_fixture,'tmux-legacy-target','--session','Control','--operation','input')
+    assert result.returncode==0,result.stdout+result.stderr
+    assert json.loads(result.stdout)['allowed'] is True
+
+
+@pytest.mark.parametrize('error',[KeyError('private'),TypeError('private'),ValueError('private'),RuntimeError('private'),AttributeError('private')])
+def test_helper_internal_fault_is_distinct_from_domain_refusal(monkeypatch,capsys,error):
+    def fail(**kwargs):raise error
+    monkeypatch.setitem(API['main'].__globals__,'legacy_transport',fail)
+    assert API['main'](['legacy-transport'])==70
+    assert json.loads(capsys.readouterr().out)=={'contract':'orrery-tmux-target-v1','ok':False,
+        'allowed':False,'reason':'TMUX_HELPER_FAILED','failure_kind':'helper'}
+
+
+@pytest.mark.parametrize('reason,kind',[('LEGACY_TARGET_IS_GLOBAL','target'),('TMUX_SOCKET_UNSAFE','transport')])
+def test_domain_refusal_retains_fixed_reason_and_classification(monkeypatch,capsys,reason,kind):
+    def refuse(**kwargs):raise ERROR(reason)
+    monkeypatch.setitem(API['main'].__globals__,'legacy_transport',refuse)
+    assert API['main'](['legacy-transport'])==2
+    assert json.loads(capsys.readouterr().out)=={'contract':'orrery-tmux-target-v1','ok':False,
+        'allowed':False,'reason':reason,'failure_kind':kind}
+
+
+def test_output_schema_fault_is_a_helper_failure_not_a_target_refusal(monkeypatch,capsys):
+    class BrokenTransport:
+        def public(self):
+            return {'transport':'legacy-default','socket_path':'/fixture/socket',
+                    'argv':['tmux','-S','/fixture/socket'],'server_pid':100,
+                    'environment_unset':['TMUX','TMUX_PANE']}
+    monkeypatch.setitem(API['main'].__globals__,'legacy_transport',lambda:BrokenTransport())
+    monkeypatch.setitem(API['SPEC']['result_properties'],'socket_path',{'type':'string','pattern':'^/'})
+    assert API['main'](['legacy-transport'])==70
+    assert json.loads(capsys.readouterr().out)=={'contract':'orrery-tmux-target-v1','ok':False,
+        'allowed':False,'reason':'TMUX_HELPER_FAILED','failure_kind':'helper'}
+
+
+def test_actual_cli_target_uses_os_process_start(cli_fixture):
+    start_cli_server(cli_fixture)
+    cli_fixture['env']['PATH']=cli_fixture['env']['PATH'].split(os.pathsep,1)[1]
+    process=subprocess.run(['ps','-p',str(cli_fixture['pid']),'-o','lstart='],
+        env=cli_fixture['env'],text=True,capture_output=True)
+    assert process.returncode==0,('OS ps proof unavailable: '+process.stderr)
+    result=run_cli(cli_fixture,'tmux-legacy-target','--session','Control','--operation','input')
+    assert result.returncode==0,result.stdout+result.stderr
+    assert json.loads(result.stdout)['panes'][0]['process_start']==process.stdout.strip()
+
+
+def test_unknown_operation_is_an_unavailable_helper_answer(cli_fixture):
+    result=run_cli(cli_fixture,'tmux-legacy-target','--session','Control','--operation','not-an-operation')
+    assert result.returncode==2 and result.stdout=='' and 'invalid choice' in result.stderr
+
+
+def test_initial_null_pin_accepts_one_verified_server_then_refuses_change():
+    initial={'transport':'legacy-default','socket_path':'/fixture/socket',
+             'argv':['tmux','-S','/fixture/socket'],'server_pid':None}
+    first={**initial,'server_pid':100}
+    pin=API['check_pinned_transport'](initial,first)
+    assert pin==first and initial['server_pid'] is None
+    assert API['check_pinned_transport'](pin,first)==first
+    with pytest.raises(ERROR,match='^TMUX_SOCKET_CHANGED$'):
+        API['check_pinned_transport'](pin,{**first,'server_pid':101})
+    with pytest.raises(ERROR,match='^TMUX_SOCKET_CHANGED$'):
+        API['check_pinned_transport'](pin,{**first,'socket_path':'/fixture/other'})
+
+
+def test_cli_partial_root_diagnostics_identifies_repair_without_returning_credentials(cli_fixture):
+    home=Path(cli_fixture['env']['AGENTSTACK_HOME']);home.mkdir(mode=0o700)
+    clients=home/'clients';clients.mkdir(mode=0o700)
+    (clients/'partial').mkdir(mode=0o700)
+    result=run_cli(cli_fixture,'tmux-diagnostics')
+    assert result.returncode==0,result.stdout+result.stderr
+    assert json.loads(result.stdout)=={'contract':'orrery-tmux-target-v1','ok':True,'global_complete':False,
+        'diagnostics':[{'client_name':'partial','mail_instance_id':None,'check':'context','reason':'GLOBAL_ROOT_UNAVAILABLE'}]}
+    start_cli_server(cli_fixture)
+    result=run_cli(cli_fixture,'tmux-legacy-target','--session','Control','--operation','input')
+    assert result.returncode==2 and json.loads(result.stdout)=={'contract':'orrery-tmux-target-v1',
+        'ok':False,'allowed':False,'reason':'GLOBAL_TARGET_OWNERSHIP_UNKNOWN','failure_kind':'target'}

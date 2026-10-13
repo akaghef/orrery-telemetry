@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import shlex
 import stat
 import subprocess
 import time
@@ -19,6 +20,7 @@ SPEC = json.loads(Path(__file__).with_name('runtime_tmux_contract.json').read_te
 CONTRACT = SPEC['contract']
 CAPABILITIES = SPEC['capabilities']
 OPERATIONS = tuple(SPEC['operations'])
+REASONS = SPEC['reasons']
 
 
 class TargetError(RuntimeError):
@@ -27,8 +29,19 @@ class TargetError(RuntimeError):
 
 def result_schema(name):
     fields = SPEC['result_fields'][name]
-    return {'type': 'object', 'additionalProperties': False, 'required': fields,
-            'properties': {key: SPEC['result_properties'][key] for key in fields}}
+    properties = {key: SPEC['result_properties'][key] for key in fields}
+    if 'ok' in properties:
+        properties['ok'] = {'const': name != 'error'}
+    if 'allowed' in properties:
+        properties['allowed'] = {'const': name != 'error'}
+    if name == 'legacy-target':
+        properties['server_pid'] = {'type':'integer','minimum':1}
+    result = {'type':'object','additionalProperties':False,'required':fields,'properties':properties}
+    if name == 'error':
+        return {'anyOf':[{**result,'properties':{**properties,
+            'reason':{'enum':[r for r,k in REASONS.items() if k==kind]},
+            'failure_kind':{'const':kind}}} for kind in ('target','transport','helper')]}
+    return result
 
 
 def print_result(value, name):
@@ -38,6 +51,15 @@ def print_result(value, name):
         root / 'packages/agentstack_mail/src/agentstack_mail/schema_contract.py'))
     validator['validate_schema'](value, result_schema(name))
     print(json.dumps(value, ensure_ascii=False))
+
+
+def check_pinned_transport(pinned, reply):
+    """Compare validated replies; the returned pin lives only in consumer memory."""
+    if any(pinned[key] != reply[key] for key in ('transport','socket_path','argv')):
+        raise TargetError('TMUX_SOCKET_CHANGED')
+    if pinned['server_pid'] is not None and pinned['server_pid'] != reply['server_pid']:
+        raise TargetError('TMUX_SOCKET_CHANGED')
+    return {**pinned,'server_pid':reply['server_pid']}
 
 
 def private_directory(path, *, create=False):
@@ -80,8 +102,11 @@ def validate_socket(path):
     path = Path(path)
     if not path.is_absolute() or path.resolve() != path:
         raise TargetError('TMUX_SOCKET_UNSAFE')
-    private_directory(path.parent)
-    info = path.lstat()
+    try:
+        private_directory(path.parent)
+        info = path.lstat()
+    except OSError as exc:
+        raise TargetError('TMUX_SOCKET_UNSAFE') from exc
     # tmux itself creates 0660 sockets. The UID-owned 0700 parent prevents
     # group traversal; never chmod somebody's existing server socket.
     if (not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid()
@@ -204,64 +229,133 @@ def panes(transport, *, session=None, pane=None, deadline=None):
     return rows
 
 
-def global_proofs(client_home, *, api=None, deadline=None):
-    """Read fixed client truth through the existing noncreating snapshot entry.
+def installed_hints(home, deadline):
+    """Use the existing literal settings reader, without sourcing env.sh."""
+    env_file = home / 'env.sh'
+    if not env_file.exists() and not env_file.is_symlink():
+        return {}
+    reader = Path(__file__).resolve().parents[2] / 'hooks/project-context.sh'
+    for path in (reader, env_file):
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o022 or path.resolve() != path):
+            raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+    result = subprocess.run(['/bin/bash', '-c',
+        '. "$1"; for key in AGENTSTACK_RUNTIME_MODE AGENTSTACK_GLOBAL_SERVER_CONFIG AGENTSTACK_CLIENT_CONFIG; do '
+        'agentstack_installed_env_value "$key" "$2" --shell || exit 2; printf "\\n"; done',
+        'runtime-target-settings', str(reader), str(env_file)],
+        capture_output=True, text=True, timeout=max(.001, min(5, deadline-time.monotonic())))
+    if result.returncode:
+        raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+    values = {}
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        tokens = shlex.split(line)
+        if len(tokens) != 2 or tokens[0] != 'export' or '=' not in tokens[1]:
+            raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+        name, value = tokens[1].split('=', 1)
+        values[name] = value
+    return values
 
-    A partial/unknown root is not proof of absence. No calls authenticate as a
-    child, no database is opened, and no new operation mutex is created.
-    """
+
+def global_inventory(client_home, *, api=None, deadline=None):
+    """One root reader for admission and repair diagnostics; no new state."""
     if api is None:
         api = runpy.run_path(str(Path(__file__).with_name('runtime_client.py')))
+    deadline = time.monotonic()+5 if deadline is None else deadline
     home = Path(client_home)
-    parent = home / 'clients'
-    # Even without clients, an installed explicit context/config is a global
-    # hint. Its absence alone cannot prove that the clients directory is empty.
-    hints = [home / 'runtime-client.json']
-    for key in ('AGENTSTACK_CLIENT_CONFIG', 'AGENTSTACK_GLOBAL_SERVER_CONFIG'):
-        if os.environ.get(key):
-            hints.append(Path(os.environ[key]))
-    if not home.exists() and not home.is_symlink():
-        if any(p.exists() or p.is_symlink() for p in hints):
-            raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-        return []
-    # Released pure-legacy installs may have a 0755 stack home. Reading the
-    # absence of fixed global roles must not require changing their mode.
-    info = home.lstat()
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-            or info.st_mode & 0o022 or home.resolve() != home):
-        raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-    if not parent.exists() and not parent.is_symlink():
-        if any(p.exists() or p.is_symlink() for p in hints):
-            raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-        return []
-    api['safe_private_directory'](parent)
     operator_api = runpy.run_path(str(Path(__file__).with_name('runtime_operator.py')))
     observation_api = runpy.run_path(str(Path(__file__).with_name('runtime_observation.py')))
-    proofs = []
-    for root in sorted(parent.iterdir()):
-        api['remaining'](deadline)
-        api['validate_client_name'](root.name)
-        api['safe_private_directory'](root)
-        context = api['read_json'](root / api['CLIENT_LAYOUT']['context'])
-        identity = context.get('identity')
-        if not isinstance(identity, dict) or not api['integer'](identity.get('agent_id'), 1):
-            raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-        runtime = api['absolute'](context.get('runtime_root'))
-        operator = operator_api['RuntimeOperator'](runtime / 'server-config.json', api=api)
-        if operator.clients_parent != parent:
-            raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-        snapshots = observation_api['Observations'](operator, lambda _: None, deadline=deadline)
-        value, digest = snapshots.snapshot(root, identity['agent_id'])
-        launch = value['launch']
-        for live in value['lives']:
-            if live.get('launch_id') is not None and (not launch or any(
-                    launch.get(k) != live.get(k) for k in ('launch_id', 'receipt_nonce'))):
+    proofs, diagnostics = [], []
+    homes = {home: None}
+    def issue(name=None, instance=None, check='placement'):
+        diagnostics.append({'client_name': name, 'mail_instance_id': instance,
+            'check': check, 'reason': 'GLOBAL_PLACEMENT_UNAVAILABLE' if check=='placement' else 'GLOBAL_ROOT_UNAVAILABLE'})
+    try:
+        installed = installed_hints(home, deadline)
+        configs, contexts = set(), set()
+        implicit = home/'runtime-client.json'
+        if implicit.exists() or implicit.is_symlink():
+            contexts.add(implicit)
+        for values in (installed, os.environ):
+            if values.get('AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+                configs.add(api['absolute'](values['AGENTSTACK_GLOBAL_SERVER_CONFIG']))
+            if values.get('AGENTSTACK_CLIENT_CONFIG'):
+                contexts.add(api['absolute'](values['AGENTSTACK_CLIENT_CONFIG']))
+        for path in contexts:
+            context = api['read_json'](path)
+            if context.get('kind') != api['KIND'] or context.get('mode') != 'global':
                 raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-            proofs.append({'live': live, 'digest': digest, 'agent_id': identity['agent_id']})
-    if not proofs and any(p.exists() or p.is_symlink() for p in hints):
-        # Config plus no usable roots is still a partial global placement.
+            runtime = api['absolute'](context.get('runtime_root'))
+            configs.add(runtime/'server-config.json')
+        for path in configs:
+            operator = operator_api['RuntimeOperator'](path, api=api)
+            homes[operator.clients_parent.parent] = operator.binding['expected_server_instance_id']
+        if any(values.get('AGENTSTACK_RUNTIME_MODE','legacy') not in ('','legacy')
+               for values in (installed,os.environ)) and not configs and not contexts:
+            issue()
+        for path in contexts:
+            context = api['read_json'](path)
+            parent = api['absolute'](context.get('agentstack_home'))/'clients'
+            if (parent.parent not in homes or path != parent/context.get('client_name','')/api['CLIENT_LAYOUT']['context']):
+                raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.SubprocessError):
+        issue()
+    for current, instance in sorted(homes.items()):
+        parent = current/'clients'
+        try:
+            api['remaining'](deadline)
+            if not current.exists() and not current.is_symlink():
+                if instance is not None: issue(instance=instance)
+                continue
+            info = current.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o022 or current.resolve() != current):
+                raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+            if not parent.exists() and not parent.is_symlink():
+                if instance is not None: issue(instance=instance)
+                continue
+            api['safe_private_directory'](parent)
+            roots = sorted(parent.iterdir())
+            if not roots and instance is not None: issue(instance=instance)
+        except (OSError, ValueError, RuntimeError):
+            issue(instance=instance)
+            continue
+        for root in roots:
+            name = root.name if re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', root.name) else None
+            check = 'context'
+            try:
+                api['remaining'](deadline)
+                api['validate_client_name'](root.name)
+                api['safe_private_directory'](root)
+                context = api['read_json'](root/api['CLIENT_LAYOUT']['context'])
+                identity = context.get('identity')
+                if not isinstance(identity,dict) or not api['integer'](identity.get('agent_id'),1):
+                    raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+                runtime = api['absolute'](context.get('runtime_root'))
+                operator = operator_api['RuntimeOperator'](runtime/'server-config.json',api=api)
+                if operator.clients_parent != parent:
+                    raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+                check = 'snapshot'
+                snapshot = observation_api['Observations'](operator,lambda _:None,deadline=deadline)
+                value,digest = snapshot.snapshot(root,identity['agent_id'])
+                launch = value['launch']
+                for live in value['lives']:
+                    if live.get('launch_id') is not None and (not launch or any(
+                            launch.get(k)!=live.get(k) for k in ('launch_id','receipt_nonce'))):
+                        raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+                    proofs.append({'live':live,'digest':digest,'agent_id':identity['agent_id']})
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                issue(name,instance,check)
+    return {'proofs':proofs,'diagnostics':diagnostics,'global_complete':not diagnostics}
+
+
+def global_proofs(client_home, *, api=None, deadline=None):
+    result = global_inventory(client_home,api=api,deadline=deadline)
+    if not result['global_complete']:
         raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-    return proofs
+    return result['proofs']
 
 
 def legacy_admission(transport, client_home, *, session=None, pane=None,
@@ -307,6 +401,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('capabilities')
     sub.add_parser('legacy-transport')
+    sub.add_parser('diagnostics')
     admit = sub.add_parser('legacy-target')
     selection = admit.add_mutually_exclusive_group(required=True)
     selection.add_argument('--session')
@@ -316,6 +411,11 @@ def main(argv=None):
     try:
         if options.command == 'capabilities':
             value = {'contract': CONTRACT, 'capabilities': CAPABILITIES}
+        elif options.command == 'diagnostics':
+            home = Path(os.environ.get('AGENTSTACK_HOME', str(Path.home()/'.agentstack')))
+            inventory = global_inventory(home)
+            value = {'contract':CONTRACT,'ok':True,
+                     **{k:inventory[k] for k in ('global_complete','diagnostics')}}
         else:
             transport = legacy_transport()
             if options.command == 'legacy-transport':
@@ -326,10 +426,11 @@ def main(argv=None):
                                          pane=options.pane, operation=options.operation)
         print_result(value, options.command)
         return 0
-    except (TargetError, OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
-        reason = str(exc) if isinstance(exc, (TargetError, RuntimeError)) and re.fullmatch(r'[A-Z][A-Z_]{2,80}', str(exc)) else 'GLOBAL_TARGET_OWNERSHIP_UNKNOWN'
-        print_result({'contract': CONTRACT, 'ok': False, 'allowed': False, 'reason': reason}, 'error')
-        return 2
+    except Exception as exc:
+        reason = str(exc) if isinstance(exc,TargetError) and str(exc) in REASONS else 'TMUX_HELPER_FAILED'
+        print_result({'contract':CONTRACT,'ok':False,'allowed':False,'reason':reason,
+                      'failure_kind':REASONS[reason]},'error')
+        return 70 if reason=='TMUX_HELPER_FAILED' else 2
 
 
 if __name__ == '__main__':

@@ -80,7 +80,8 @@ def test_parallel_root_prepare_does_not_overwrite_identity(operator):
     assert operator.status('same')['agent_id']==result['agent_id']
 
 
-def test_tmux_global_protection_reads_existing_snapshot_without_new_state(operator):
+@pytest.mark.parametrize('placement',['client-home','installed-config','installed-helper'])
+def test_tmux_global_protection_reads_existing_snapshot_without_new_state(operator,placement):
     operator.create('protected',agent_name='ProtectedStandalone',program='daemon',model='deterministic')
     client=operator.client('protected')
     with client.operation_mutex():
@@ -94,12 +95,26 @@ def test_tmux_global_protection_reads_existing_snapshot_without_new_state(operat
     before={p.relative_to(client.client_root):p.read_bytes() for p in client.client_root.rglob('*') if p.is_file()}
     revision=operator.read({'kind':'health'})['as_of_revision']
     helper=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux.py'))
-    proofs=helper['global_proofs'](operator.clients_parent.parent,api=operator.api)
+    home=operator.clients_parent.parent
+    if placement in ('installed-config','installed-helper'):
+        import shlex
+        home=operator.isolation/'legacy-wrapper';home.mkdir(mode=0o755);home.chmod(0o755)
+        (home/'env.sh').write_text('export AGENTSTACK_RUNTIME_MODE=global\nexport AGENTSTACK_GLOBAL_SERVER_CONFIG='
+            +shlex.quote(str(operator.path))+'\nexport UNRELATED=$(touch '+shlex.quote(str(home/'must-not-execute'))+')\n')
+    if placement=='installed-helper':
+        from _installed_client_payload import copy_client_library
+        installed=operator.isolation/'installed-tmux-helper'
+        copy_client_library(installed)
+        helper=runpy.run_path(str(installed/'bin/lib/runtime_tmux.py'))
+        proofs=helper['global_proofs'](home)
+    else:
+        proofs=helper['global_proofs'](home,api=operator.api)
     assert len(proofs)==1 and proofs[0]['live']==live
     assert 'registration_token' not in json.dumps(proofs)
     assert operator.read({'kind':'health'})['as_of_revision']==revision
     assert {p.relative_to(client.client_root):p.read_bytes() for p in client.client_root.rglob('*') if p.is_file()}==before
     assert not client.outputs['launch'].exists()
+    assert not (home/'must-not-execute').exists()
 
 
 def test_foreign_name_pending_requires_explicit_digest_abandon(operator):
