@@ -101,7 +101,11 @@ def test_installed_approval_refusal_report_preserves_personal_metadata(env, prov
     installed = e.target.read_text()
     assert installed.startswith('Personal instructions\n')
     assert installed.count('## MCP tool approval refusals') == 1
-    assert '`MCP tool <tool-name> was refused by the approval policy; agentstack-resume <your-name> --tools <spec> is required.`' in installed
+    assert '`MCP tool <tool-name> is blocked: <exact message>.`' in installed
     assert 'If you have no parent (standalone), tell the user the same line and stop.' in installed
+    assert 'a Claude tool missing from `--allowed-tools`' in installed
+    assert 'denied or is waiting for a person to press Allow.' in installed
+    assert 'the parent chooses the documented recovery.' in installed
+    assert 'agentstack-resume <your-name>' not in installed
     assert e.target.stat().st_mode & 0o777 == 0o640
     assert m.attrs(e.target) == before

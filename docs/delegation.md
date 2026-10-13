@@ -181,13 +181,9 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 ### MCP tool が承認の方針で拒否されたとき
 
-`approval policy is never` など、承認の方針によって MCP tool が拒否された子は、拒否された作業を止めます。回避のために `~/.codex/config.toml`、`~/.claude/settings.json` などの設定ファイルを変更してはいけません。配布される Codex・Claude の managed 指示は、ORRERY Mail の `send_message` で親に次の1行を報告するよう求めます。
+子は拒否された作業を止め、正確な tool 名と拒否・許可待ちのメッセージ原文を `MCP tool <tool-name> is blocked: <exact message>.` の1行で ORRERY Mail の `send_message` から報告します。Codex の `approval policy is never`、Claude の `--allowed-tools` に無い tool の拒否、ブラウザや OS の許可が拒否された場合・人が Allow を押すのを待っている場合が対象です。子は回避のために `~/.codex/config.toml`、`~/.claude/settings.json` などの設定ファイルを変更せず、利用者に代わって許可しません。親が無い standalone や Mail を使えない場合は、利用者に同じ1行を伝えて止まります。
 
-`MCP tool <tool-name> was refused by the approval policy; agentstack-resume <your-name> --tools <spec> is required.`
-
-子は `<tool-name>` を拒否された正確な tool 名、`<your-name>` を自分の既存の名前に置き換えます。親が `<spec>` を選び、EXIT を完了して子の停止を確認し、[道具を変更して再開する手順](#停止した子の道具を変更して-resume-する)に従います。新しい子には `/delegate --tools <spec>` で起動時に道具を選びます。利用者の設定変更を修復手順にしません。下記の再開の制限は引き続き適用され、この報告は道具の変更が成功する保証ではありません。
-
-親が無い standalone では、利用者に同じ1行を伝えて止まります。standalone の道具の変更は下記のとおり現在拒否されるため、利用者が対応する起動経路を判断します。`send_message` 自体が拒否された・使えない場合も、利用者にその1行を示して止まり、別の連絡経路を作りません。
+親または利用者は既存の手順から修復を選びます。分類表の対象には[承認と分類の制限](#承認)、[新しい子の道具の選択](#子に渡す道具を選ぶ--base----tools)または[Claude の子の再開](#停止した子の道具を変更して-resume-する)、それ以外の server には[Codex overlay のトラブルシューティング](troubleshooting.md#mcp-tool-call-requires-approval-but-approval-policy-is-never)、Codex の未解決の道具変更の制限には[途中で必要な MCP が増えたとき](#途中で必要な-mcp-が増えたとき)、許可画面には[人が行う接続・操作の許可](#人がやること事前の設定と接続操作時の許可)を参照してください。
 
 ### 分類表と、読むだけ・操作も
 

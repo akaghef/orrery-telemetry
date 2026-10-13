@@ -181,13 +181,9 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 
 ### When an MCP tool is refused by the approval policy
 
-A child that receives an approval-policy refusal such as `approval policy is never` must stop the blocked work. It must not edit `~/.codex/config.toml`, `~/.claude/settings.json`, or other configuration files to bypass the refusal. The installed Codex and Claude managed instructions require this one-line report to the parent through ORRERY Mail `send_message`:
+A child stops the blocked work and reports `MCP tool <tool-name> is blocked: <exact message>.` through ORRERY Mail `send_message`, using the exact tool name and verbatim refusal or pending-permission message. This covers Codex's `approval policy is never`, a Claude tool missing from `--allowed-tools`, and browser or OS permission that is denied or waiting for a person to press Allow. The child must not edit `~/.codex/config.toml`, `~/.claude/settings.json`, or other configuration files to bypass it, or grant permission on the user's behalf. With no parent (standalone), or if Mail is unavailable, tell the user the same line and stop.
 
-`MCP tool <tool-name> was refused by the approval policy; agentstack-resume <your-name> --tools <spec> is required.`
-
-The child supplies the exact refused tool name and its existing identity. The parent chooses `<spec>`, completes EXIT, confirms the child stopped, and follows [resume with different tools](#resume-a-stopped-child-with-different-tools). For a new child, select tools at launch with `/delegate --tools <spec>`. Do not change user settings as a repair. Resume limitations below still apply; this report does not promise that tool replacement succeeds.
-
-With no parent (standalone), the agent tells the user the same line and stops. Standalone tool replacement is currently refused as described below, so the user must resolve the supported launch path. If `send_message` itself is refused or unavailable, the agent shows the line to the user and stops without substituting a messaging path.
+The parent or user chooses the recovery from the existing procedures: [tool approval and classification limits](#approval), [new-child tool selection](#choosing-the-tools-a-child-gets---base----tools) or [Claude child resume](#resume-a-stopped-child-with-different-tools) for classified tools; [Codex overlay troubleshooting](troubleshooting.en.md#mcp-tool-call-requires-approval-but-approval-policy-is-never) for other servers; [MCP needed partway through a Codex task](#when-another-mcp-is-needed-partway-through-a-task) for its unresolved tool-change limitation; and [human connection and operation permissions](#what-a-person-does-setup-and-permission-for-connections-and-operations) for permission prompts.
 
 ### The classification table: read only and operate
 
