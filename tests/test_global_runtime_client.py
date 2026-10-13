@@ -546,36 +546,98 @@ def test_mutex_inode_is_created_whole_and_never_replaced(tmp_path):
 
 
 def test_creator_that_fails_to_write_removes_only_its_own_mutex(tmp_path, monkeypatch):
-    """A write or fsync error must not leave our empty file for later callers."""
+    """A write error must not leave our short file for later callers to time out on."""
     tmp_path.chmod(0o700)
     path = tmp_path / 'child.lock'
-    real_fsync = os.fsync
+    real_write = os.write
 
-    def failing_fsync(fd):
-        raise OSError(5, 'synthetic fsync failure')
+    def ours(fd):
+        return path.exists() and os.fstat(fd).st_ino == os.stat(path).st_ino
 
-    monkeypatch.setattr(os, 'fsync', failing_fsync)
-    with pytest.raises(OSError, match='synthetic fsync failure'):
+    def failing_write(fd, data):
+        if ours(fd):
+            raise OSError(28, 'synthetic write failure')
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, 'write', failing_write)
+    with pytest.raises(OSError, match='synthetic write failure'):
         with api['operation_inode'](path):
             pass
     assert not path.exists() and list(tmp_path.iterdir()) == []
 
     # Another caller's inode now at the path is never removed by our cleanup.
-    def replaced_then_failing(fd):
-        os.unlink(path)
-        path.write_bytes(OPERATION_MUTEX)
-        path.chmod(0o600)
-        raise OSError(5, 'synthetic fsync failure')
+    def replaced_then_failing(fd, data):
+        if ours(fd):
+            os.unlink(path)
+            path.write_bytes(OPERATION_MUTEX)
+            path.chmod(0o600)
+            raise OSError(28, 'synthetic write failure')
+        return real_write(fd, data)
 
-    monkeypatch.setattr(os, 'fsync', replaced_then_failing)
-    with pytest.raises(OSError, match='synthetic fsync failure'):
+    monkeypatch.setattr(os, 'write', replaced_then_failing)
+    with pytest.raises(OSError, match='synthetic write failure'):
         with api['operation_inode'](path):
             pass
     other = os.stat(path).st_ino
-    monkeypatch.setattr(os, 'fsync', real_fsync)
+    monkeypatch.setattr(os, 'write', real_write)
     assert path.read_bytes() == OPERATION_MUTEX
     with api['operation_inode'](path):
         assert os.stat(path).st_ino == other
+
+
+def test_fsync_failure_after_the_content_keeps_the_mutex_another_caller_holds(tmp_path, monkeypatch):
+    """Once the content is whole another caller may hold the inode; keep it.
+
+    The creator writes everything, then a second caller enters and holds the
+    lock, then the creator's fsync fails. Removing the file then would let a
+    third caller create a new inode and enter beside the second.
+    """
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    holding, release = threading.Event(), threading.Event()
+    real_fsync = os.fsync
+
+    def second():
+        with api['operation_inode'](path):
+            holding.set()
+            assert release.wait(5)
+
+    def fsync_after_second_holds(fd):
+        if threading.current_thread().name == 'creator':
+            threading.Thread(target=second, name='second').start()
+            assert holding.wait(5)
+            raise OSError(5, 'synthetic fsync failure')
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, 'fsync', fsync_after_second_holds)
+    failure = {}
+
+    def creator():
+        try:
+            api['create_mutex_inode'](path, 'orrery-client-operation-mutex-v1')
+        except OSError as exc:
+            failure['creator'] = str(exc)
+
+    first = threading.Thread(target=creator, name='creator')
+    first.start()
+    first.join(5)
+    assert failure == {'creator': '[Errno 5] synthetic fsync failure'}
+    assert holding.is_set()
+    result, inodes, entered = {}, {}, threading.Event()
+    third = threading.Thread(target=_run_operation, name='third',
+                             args=(path, 'third', result, inodes, entered))
+    third.start()
+    try:
+        # The third caller must wait on the inode the second one holds.
+        assert not entered.wait(0.3), {'third_entered_beside_second': inodes}
+        held = os.stat(path).st_ino
+        assert path.read_bytes() == OPERATION_MUTEX
+    finally:
+        release.set()
+    third.join(5)
+    assert result == {'third': 'accepted'}
+    assert inodes['third'] == held == os.stat(path).st_ino
 
 
 def _offline_context(tmp_path):

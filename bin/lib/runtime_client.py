@@ -512,19 +512,24 @@ def create_mutex_inode(path, kind):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         return
-    created = None
+    created, written = None, False
     try:
         created = os.fstat(fd)
         data = mutex_bytes(kind)
         while data:
             data = data[os.write(fd, data):]
+        written = True
         os.fsync(fd)
     except BaseException:
-        # Do not leave our own empty file for every later caller to time out
-        # on. Remove only the inode this call created, never another one.
+        # Do not leave our own partial file for every later caller to time out
+        # on. Remove it only while its content is still short: nobody locks it
+        # before the content is whole, and once it is whole another caller may
+        # already hold it, so a later fsync error keeps the file. Remove only
+        # the inode this call created, never another one.
         try:
             current = os.lstat(path)
-            if created and (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino):
+            if (not written and created
+                    and (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino)):
                 os.unlink(path)
         except OSError:
             pass
