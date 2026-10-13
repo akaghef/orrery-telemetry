@@ -276,7 +276,7 @@ def global_inventory(client_home, *, api=None, deadline=None):
         # Timeout/programming faults are not evidence of a malformed root.
         # Keep the same helper-unavailable classification as main().
         if (isinstance(exc, (KeyError, TypeError, subprocess.SubprocessError))
-                or str(exc) == 'OBSERVATION_INCOMPLETE'):
+                or str(exc) in ('OBSERVATION_INCOMPLETE', 'OBSERVATION_BUSY')):
             raise TargetError('TMUX_HELPER_FAILED') from exc
         issue(name, instance, check)
     try:

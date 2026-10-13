@@ -348,3 +348,13 @@ def test_inventory_read_fault_is_helper_unavailable_not_root_diagnostic(monkeypa
     assert json.loads(capsys.readouterr().out)=={
         'contract':'orrery-tmux-target-v1','ok':False,'allowed':False,
         'reason':'TMUX_HELPER_FAILED','failure_kind':'helper'}
+
+
+def test_busy_observation_is_transient_helper_unavailable(monkeypatch,capsys,tmp_path):
+    def busy(*args,**kwargs):raise RuntimeError('OBSERVATION_BUSY')
+    monkeypatch.setenv('AGENTSTACK_HOME',str(tmp_path))
+    monkeypatch.setitem(API['global_inventory'].__globals__,'installed_hints',busy)
+    assert API['main'](['diagnostics'])==70
+    assert json.loads(capsys.readouterr().out)=={
+        'contract':'orrery-tmux-target-v1','ok':False,'allowed':False,
+        'reason':'TMUX_HELPER_FAILED','failure_kind':'helper'}
