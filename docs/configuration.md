@@ -12,6 +12,8 @@
 
 です。file mode は `0600` です。service の environment は install 時に launchd plist / systemd unit へ書き込まれるため、変更後は `./scripts/install.sh` を再実行するか service definition も更新してください。
 
+macOS の dashboard は `~/.agentstack/dashboard/agentctl.sh restart` でも、起動時に選ばれた mode/config を `start` と同じ処理で plist に描画して job を再設置します。設定に変化が無くても再設置します。supervised-background の再起動手順は従来どおりです。
+
 ## Dashboard / `server.py`
 
 `server.py` が直接参照する `AGENTSTACK_*` は次のとおりです。

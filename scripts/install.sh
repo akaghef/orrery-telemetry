@@ -4385,6 +4385,8 @@ render_launchd_plist() {
       __LABEL_PREFIX__ "$LABEL_PREFIX"
       __INSTALL_DIR__ "$DASHBOARD_DIR"
       __PYTHON__ "$PYTHON_BIN"
+      __RUNTIME_MODE__ "${AGENTSTACK_RUNTIME_MODE:-legacy}"
+      __GLOBAL_SERVER_CONFIG__ "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}"
       __PORT__ "$PORT"
       __MAIL_DB__ "$MAIL_DB"
       __MAIL_ENV__ "$MAIL_ENV"

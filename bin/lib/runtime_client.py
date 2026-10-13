@@ -486,6 +486,88 @@ def validate_owner_receipt(inspected, identity, token, binding):
     return inspected
 
 
+# Bounded wait for a mutex whose creator has made the file but not yet written
+# its fixed content. Creation is a few syscalls; this only has to cover load.
+MUTEX_CREATION_WAIT = 10.0
+MUTEX_KINDS = {'operation_lock': 'orrery-client-operation-mutex-v1',
+               'mutex': 'orrery-client-local-mutex-v1'}
+
+
+def mutex_bytes(kind):
+    return json.dumps({'kind': kind}).encode()
+
+
+def create_mutex_inode(path, kind):
+    """Create the mutex the way every client version does: O_EXCL on the path.
+
+    Older clients create the same fixed path with O_EXCL and then write the
+    content. Doing the same keeps one inode for old and new callers alike: the
+    loser of O_EXCL uses the winner's inode, and a published inode is never
+    replaced. The content lands after the create, so readers wait for it with
+    wait_for_mutex_content instead of reading an empty file as invalid.
+    """
+    if path.exists() or path.is_symlink():
+        return
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return
+    created = None
+    data = mutex_bytes(kind)
+    try:
+        created = os.fstat(fd)
+        remaining = data
+        while remaining:
+            remaining = remaining[os.write(fd, remaining):]
+        os.fsync(fd)
+    except BaseException:
+        # Do not leave our own partial file for every later caller to time out
+        # on. The file's bytes, not how far this call got, decide: nobody
+        # locks the inode before its content is whole, and once it is whole
+        # another caller may already hold it, so a whole file is kept. The
+        # non-blocking lock also keeps it if anyone holds it. Remove only the
+        # inode this call created, never another one.
+        try:
+            current = os.lstat(path)
+            if (created and os.fstat(fd).st_size < len(data)
+                    and (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino)):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.unlink(path)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(fd)
+
+
+def mutex_content_pending(path, kind):
+    """True while the file holds a strict prefix, empty included, of its content.
+
+    Any other state, including an unreadable or unsafe file, is left to the
+    caller's own checks so that their reasons stay unchanged.
+    """
+    try:
+        raw = read_private(path)
+    except ClientError:
+        return False
+    expected = mutex_bytes(kind)
+    return len(raw) < len(expected) and expected.startswith(raw)
+
+
+def wait_for_mutex_content(path, kind):
+    """Wait for a creator to finish writing; a remnant that stays short fails.
+
+    MUTEX_INCOMPLETE is left by a creator that stopped between the create and
+    the write. It is never removed or rewritten here, because a slow creator
+    still writing looks the same; see the operator recovery in the docs.
+    """
+    deadline = time.monotonic() + MUTEX_CREATION_WAIT
+    while mutex_content_pending(path, kind):
+        if time.monotonic() >= deadline:
+            raise ClientError('MUTEX_INCOMPLETE')
+        time.sleep(0.02)
+
+
 def check_operation_inode(path):
     if read_json(path) != {'kind': 'orrery-client-operation-mutex-v1'}:
         raise ClientError('OUTPUT_SCHEMA_INVALID')
@@ -494,6 +576,8 @@ def check_operation_inode(path):
 @contextmanager
 def observation_inode(path):
     """Share the existing writer inode; never create it or wait for a writer."""
+    if mutex_content_pending(path, 'orrery-client-operation-mutex-v1'):
+        raise ClientError('OBSERVATION_BUSY')
     check_operation_inode(path)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -521,13 +605,8 @@ def observation_inode(path):
 @contextmanager
 def operation_inode(path):
     """The fixed operation mutex, also used before a root has a context."""
-    if not path.exists() and not path.is_symlink():
-        try:
-            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-            with os.fdopen(fd,'w') as out:
-                json.dump({'kind':'orrery-client-operation-mutex-v1'},out)
-                out.flush();os.fsync(out.fileno())
-        except FileExistsError:pass
+    create_mutex_inode(path,'orrery-client-operation-mutex-v1')
+    wait_for_mutex_content(path,'orrery-client-operation-mutex-v1')
     check_operation_inode(path)
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     try:
@@ -749,6 +828,10 @@ class RuntimeClient:
         if role == 'task':
             read_private(path)
             return
+        if role in MUTEX_KINDS:
+            # Preflight can meet another caller's mutex between its create and
+            # its write; wait for it exactly like the acquisition does.
+            wait_for_mutex_content(path, MUTEX_KINDS[role])
         try:
             row = read_json(path)
         except ClientError as exc:
@@ -1077,15 +1160,9 @@ class RuntimeClient:
     @contextmanager
     def mutation_mutex(self):
         path = self.outputs['mutex']
-        if not path.exists() and not path.is_symlink():
-            # O_EXCL owns this one immutable inode. Never replace a held lock.
-            try:
-                fd = os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-                with os.fdopen(fd,'w') as stream:
-                    json.dump({'kind':'orrery-client-local-mutex-v1'},stream)
-                    stream.flush();os.fsync(stream.fileno())
-            except FileExistsError:
-                pass
+        # One immutable inode; create_mutex_inode never replaces a held lock.
+        create_mutex_inode(path,'orrery-client-local-mutex-v1')
+        wait_for_mutex_content(path,'orrery-client-local-mutex-v1')
         self.validate_output(path,'mutex')
         fd = os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
         try:

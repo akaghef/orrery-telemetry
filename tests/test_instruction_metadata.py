@@ -88,3 +88,25 @@ def test_existing_directory_symlink_allows_new_user_file_but_broken_link_refuses
     broken=Path(env['HOME'])/'broken-config';broken.symlink_to('missing-directory', target_is_directory=True)
     with pytest.raises(m.Refused,match='INSTRUCTION_PATH_UNSAFE'):
         m.snapshot(broken/'CLAUDE.md')
+
+
+@pytest.mark.parametrize('provider', ['claude', 'codex'])
+def test_installed_approval_refusal_report_preserves_personal_metadata(env, provider):
+    e = engine(env, provider)
+    e.home.mkdir()
+    e.target.write_text('Personal instructions\n')
+    e.target.chmod(0o640)
+    before = m.attrs(e.target)
+    apply(e)
+    installed = e.target.read_text()
+    assert installed.startswith('Personal instructions\n')
+    assert installed.count('## MCP tool approval refusals') == 1
+    assert '`MCP tool <tool-name> is blocked: <exact message>.`' in installed
+    assert 'If you have no parent (standalone), tell the user the same line and stop.' in installed
+    assert 'a Claude tool missing from `--allowed-tools`' in installed
+    assert 'A pending Allow prompt blocks the tool call.' in installed
+    assert 'report that message then. Do not attempt to report while the call is waiting.' in installed
+    assert 'the parent chooses the documented recovery.' in installed
+    assert 'agentstack-resume <your-name>' not in installed
+    assert e.target.stat().st_mode & 0o777 == 0o640
+    assert m.attrs(e.target) == before
