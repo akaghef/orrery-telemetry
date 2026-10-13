@@ -337,3 +337,14 @@ def test_cli_partial_root_diagnostics_identifies_repair_without_returning_creden
     result=run_cli(cli_fixture,'tmux-legacy-target','--session','Control','--operation','input')
     assert result.returncode==2 and json.loads(result.stdout)=={'contract':'orrery-tmux-target-v1',
         'ok':False,'allowed':False,'reason':'GLOBAL_TARGET_OWNERSHIP_UNKNOWN','failure_kind':'target'}
+
+
+@pytest.mark.parametrize('failure',[subprocess.TimeoutExpired('settings',5),KeyError('fixture'),TypeError('fixture'),RuntimeError('OBSERVATION_INCOMPLETE')])
+def test_inventory_read_fault_is_helper_unavailable_not_root_diagnostic(monkeypatch,capsys,tmp_path,failure):
+    def broken(*args,**kwargs):raise failure
+    monkeypatch.setenv('AGENTSTACK_HOME',str(tmp_path))
+    monkeypatch.setitem(API['global_inventory'].__globals__,'installed_hints',broken)
+    assert API['main'](['diagnostics'])==70
+    assert json.loads(capsys.readouterr().out)=={
+        'contract':'orrery-tmux-target-v1','ok':False,'allowed':False,
+        'reason':'TMUX_HELPER_FAILED','failure_kind':'helper'}

@@ -39,6 +39,8 @@ stdout 全体が正しい contract を持つ単一 JSON で、command の schema
 
 reason と分類の正本は JSON の reasons です。transport は接続先を確定できない拒否、target は当該対象を許可できない拒否、helper は内部不具合で答えが無い状態です。signal は PID/PGID へ作用する前の admission で、helper 自身は signal を送りません。
 
+配置読取の timeout・期限超過・内部 KeyError/TypeError は root の破損を示す診断へ丸めず、TMUX_HELPER_FAILED として返します。読めた file の形式不一致や実在する不明な配置だけを target の拒否にします。
+
 | reason | failure_kind |
 |---|---|
 | `TMUX_DIRECTORY_UNSAFE` | transport |

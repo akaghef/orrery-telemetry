@@ -39,6 +39,8 @@ Only one complete stdout JSON with the correct contract and matching command sch
 
 The JSON reasons map is authoritative. transport denotes an unresolved transport, target a refused target, and helper an internal failure without an answer. signal admits a PID/PGID side effect; the helper itself sends no signal.
 
+Placement-read timeouts, deadline exhaustion and internal KeyError/TypeError return TMUX_HELPER_FAILED rather than a corrupt-root diagnostic. Only malformed observed files or actual unknown placement produce target refusals.
+
 | reason | failure_kind |
 |---|---|
 | `TMUX_DIRECTORY_UNSAFE` | transport |

@@ -272,6 +272,13 @@ def global_inventory(client_home, *, api=None, deadline=None):
     def issue(name=None, instance=None, check='placement'):
         diagnostics.append({'client_name': name, 'mail_instance_id': instance,
             'check': check, 'reason': 'GLOBAL_PLACEMENT_UNAVAILABLE' if check=='placement' else 'GLOBAL_ROOT_UNAVAILABLE'})
+    def read_failure(exc, name=None, instance=None, check='placement'):
+        # Timeout/programming faults are not evidence of a malformed root.
+        # Keep the same helper-unavailable classification as main().
+        if (isinstance(exc, (KeyError, TypeError, subprocess.SubprocessError))
+                or str(exc) == 'OBSERVATION_INCOMPLETE'):
+            raise TargetError('TMUX_HELPER_FAILED') from exc
+        issue(name, instance, check)
     try:
         installed = installed_hints(home, deadline)
         configs, contexts = set(), set()
@@ -300,8 +307,8 @@ def global_inventory(client_home, *, api=None, deadline=None):
             parent = api['absolute'](context.get('agentstack_home'))/'clients'
             if (parent.parent not in homes or path != parent/context.get('client_name','')/api['CLIENT_LAYOUT']['context']):
                 raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-    except (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.SubprocessError):
-        issue()
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        read_failure(exc)
     for current, instance in sorted(homes.items()):
         parent = current/'clients'
         try:
@@ -319,8 +326,8 @@ def global_inventory(client_home, *, api=None, deadline=None):
             api['safe_private_directory'](parent)
             roots = sorted(parent.iterdir())
             if not roots and instance is not None: issue(instance=instance)
-        except (OSError, ValueError, RuntimeError):
-            issue(instance=instance)
+        except (OSError, ValueError, RuntimeError) as exc:
+            read_failure(exc,instance=instance)
             continue
         for root in roots:
             name = root.name if re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', root.name) else None
@@ -346,8 +353,8 @@ def global_inventory(client_home, *, api=None, deadline=None):
                             launch.get(k)!=live.get(k) for k in ('launch_id','receipt_nonce'))):
                         raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
                     proofs.append({'live':live,'digest':digest,'agent_id':identity['agent_id']})
-            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
-                issue(name,instance,check)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                read_failure(exc,name,instance,check)
     return {'proofs':proofs,'diagnostics':diagnostics,'global_complete':not diagnostics}
 
 
