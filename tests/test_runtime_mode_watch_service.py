@@ -79,22 +79,30 @@ def test_contextless_operator_cli_uses_actual_management_socket(server, monkeypa
     assert not (server['root']/'agentstack/clients').exists()
 
 
-def test_service_dispatch_uses_global_server_without_legacy_foreground(server, monkeypatch):
+@pytest.mark.parametrize('previous', [None, 'coerce'])
+def test_service_dispatch_uses_global_server_without_legacy_foreground(server, monkeypatch, previous):
     monkeypatch.setenv('AGENTSTACK_RUNTIME_MODE','global')
     monkeypatch.setenv('AGENTSTACK_GLOBAL_SERVER_CONFIG',str(server['config_path']))
     monkeypatch.setenv('AGENTSTACK_MCP_URL','http://127.0.0.1:19876/mcp')
     monkeypatch.delenv('AGENT_NAME',raising=False)
     monkeypatch.delenv('AGENTSTACK_SESSION_ID',raising=False)
+    key='AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE'
+    if previous is None:monkeypatch.delenv(key, raising=False)
+    else:monkeypatch.setenv(key, previous)
+    before=dict(os.environ)
     class Executed(Exception): pass
-    def execute(path, argv):
+    def execute(path, argv, env):
         assert path=='/fixture/server'
         assert argv==['/fixture/server','--global-config',str(server['config_path']),
                       '--host','127.0.0.1','--port','19876','--path','/mcp']
+        assert env=={**before, key:'passthrough'}
         raise Executed
-    monkeypatch.setattr(os,'execv',execute)
+    monkeypatch.setattr(os,'execve',execute)
     with pytest.raises(Executed):
         api['main'](['service-exec','/must-not-execute-legacy-service','foreground',
                      '--server-executable','/fixture/server'])
+
+    assert dict(os.environ)==before
 
 
 def test_service_dispatch_legacy_preserves_exact_argv(monkeypatch):

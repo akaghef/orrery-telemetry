@@ -7,3 +7,5 @@
 - 新しい pane へ mode を渡し、直接 bootstrap の project 設定を保持します。旧 helper の部分配置と watcher の明示 server config も共通選択へ揃えます。
 - 起動と子登録の bootstrap に明示 context を引き継ぎ、既定の旧 mode との誤った衝突を防ぎます。
 - 未固定の継続で配置済みの既定を確認できない場合は停止し、古い helper から旧登録へ戻ることを防ぎます。説明文中の `--literal` は installer の指定と区別します。
+
+- global service の起動専用の環境は子 process へ直接渡し、起動に失敗しても呼出し元の環境へ設定を残しません。

@@ -2350,9 +2350,9 @@ def main(argv=None):
                 index = argv.index('--server-executable') + 1
                 executable = absolute(argv[index])
                 endpoint = urlsplit(local_endpoint(os.environ.get('AGENTSTACK_MCP_URL','')))
-                os.environ['AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE'] = 'passthrough'
-                os.execv(str(executable), [str(executable), '--global-config', str(operator.path),
-                    '--host', endpoint.hostname, '--port', str(endpoint.port), '--path', endpoint.path])
+                env = {**os.environ, 'AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE': 'passthrough'}
+                os.execve(str(executable), [str(executable), '--global-config', str(operator.path),
+                    '--host', endpoint.hostname, '--port', str(endpoint.port), '--path', endpoint.path], env)
             parser = argparse.ArgumentParser(prog='operator-enroll')
             parser.add_argument('action', choices=['inspect','claim','recover'])
             parser.add_argument('--agent-id', type=int, required=True)
