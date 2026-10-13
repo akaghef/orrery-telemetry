@@ -416,6 +416,65 @@ def test_tool_errors_never_echo_arbitrary_uppercase_secret():
             {'type': 'text', 'text': 'Error: UPPERCASE_SECRET_SENTINEL'}]}})
 
 
+def test_operation_mutex_is_never_read_half_written(tmp_path, monkeypatch):
+    """A second caller arrives after creation started and before the content is in place."""
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    staged, finish, second_done = threading.Event(), threading.Event(), threading.Event()
+
+    def pause(original):
+        # Stop the creator wherever its content is about to land: json.dump
+        # into an O_EXCL file, or the rename of a complete temporary file.
+        def paused(*args, **kwargs):
+            if threading.current_thread().name == 'creator' and not staged.is_set():
+                staged.set()
+                assert finish.wait(5), 'test did not release the creator'
+            return original(*args, **kwargs)
+        return paused
+
+    monkeypatch.setattr(json, 'dump', pause(json.dump))
+    monkeypatch.setattr(os, 'replace', pause(os.replace))
+    result, inodes = {}, {}
+
+    def run(name):
+        try:
+            with api['operation_inode'](path):
+                inodes[name] = os.stat(path).st_ino
+            result[name] = 'accepted'
+        except Exception as exc:
+            result[name] = str(exc)
+        finally:
+            if name == 'second':
+                second_done.set()
+
+    creator = threading.Thread(target=run, args=('creator',), name='creator')
+    second = threading.Thread(target=run, args=('second',), name='second')
+    creator.start()
+    assert staged.wait(5)
+    second.start()
+    assert not second_done.wait(0.3), result
+    finish.set()
+    creator.join(5)
+    second.join(5)
+    assert result == {'creator': 'accepted', 'second': 'accepted'}
+    assert inodes['creator'] == inodes['second'] == os.stat(path).st_ino
+    assert path.read_bytes() == b'{"kind": "orrery-client-operation-mutex-v1"}'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['child.lock']
+
+
+def test_mutex_inode_is_published_whole_and_never_replaced(tmp_path):
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'mutex.lock'
+    api['create_mutex_inode'](path, 'orrery-client-local-mutex-v1')
+    assert path.read_bytes() == b'{"kind": "orrery-client-local-mutex-v1"}'
+    assert path.stat().st_mode & 0o777 == 0o600
+    before = path.stat().st_ino
+    api['create_mutex_inode'](path, 'orrery-client-local-mutex-v1')
+    assert path.stat().st_ino == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['mutex.lock']
+
+
 def test_installed_payload_reconnects_from_its_own_root(prepared):
     import shutil
     installed = prepared['root'] / 'installed'

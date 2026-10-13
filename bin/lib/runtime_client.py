@@ -486,6 +486,29 @@ def validate_owner_receipt(inspected, identity, token, binding):
     return inspected
 
 
+def create_mutex_inode(path, kind):
+    """Publish a mutex inode only once, and only with its complete content.
+
+    O_EXCL followed by a write leaves an empty file that another caller can
+    read before the JSON lands (PRIVATE_JSON_INVALID), and a crash there leaves
+    it empty for good. Instead the content is written to a private temporary
+    file and renamed into place, so a reader sees no file or the whole file.
+    Rename alone would replace a lock that another creator already published,
+    so creation is serialized by a lock on the parent directory, held only for
+    this step, and the path is checked again under it. A published inode is
+    never replaced.
+    """
+    if path.exists() or path.is_symlink():
+        return
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(directory, fcntl.LOCK_EX)
+        if not path.exists() and not path.is_symlink():
+            atomic_json(path, {'kind': kind})
+    finally:
+        os.close(directory)
+
+
 def check_operation_inode(path):
     if read_json(path) != {'kind': 'orrery-client-operation-mutex-v1'}:
         raise ClientError('OUTPUT_SCHEMA_INVALID')
@@ -521,13 +544,7 @@ def observation_inode(path):
 @contextmanager
 def operation_inode(path):
     """The fixed operation mutex, also used before a root has a context."""
-    if not path.exists() and not path.is_symlink():
-        try:
-            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-            with os.fdopen(fd,'w') as out:
-                json.dump({'kind':'orrery-client-operation-mutex-v1'},out)
-                out.flush();os.fsync(out.fileno())
-        except FileExistsError:pass
+    create_mutex_inode(path,'orrery-client-operation-mutex-v1')
     check_operation_inode(path)
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     try:
@@ -1077,15 +1094,8 @@ class RuntimeClient:
     @contextmanager
     def mutation_mutex(self):
         path = self.outputs['mutex']
-        if not path.exists() and not path.is_symlink():
-            # O_EXCL owns this one immutable inode. Never replace a held lock.
-            try:
-                fd = os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-                with os.fdopen(fd,'w') as stream:
-                    json.dump({'kind':'orrery-client-local-mutex-v1'},stream)
-                    stream.flush();os.fsync(stream.fileno())
-            except FileExistsError:
-                pass
+        # One immutable inode; create_mutex_inode never replaces a held lock.
+        create_mutex_inode(path,'orrery-client-local-mutex-v1')
         self.validate_output(path,'mutex')
         fd = os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
         try:
