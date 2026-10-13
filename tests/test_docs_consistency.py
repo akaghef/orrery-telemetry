@@ -173,6 +173,8 @@ def test_child_tool_docs_explain_approval_refusal_reports_and_repair():
         assert "agentstack-resume" not in section
         assert "--codex-child-overlay" not in section
     english = _read("docs/delegation.en.md")
+    assert "When an MCP tool returns a refusal message" in english
+    assert "A pending Allow prompt blocks the tool call: Allow lets it continue; if permission is denied and a refusal message returns, the child reports it then." in english
     for link in (
         "(#approval)", "(#choosing-the-tools-a-child-gets---base----tools)",
         "(#resume-a-stopped-child-with-different-tools)",
@@ -182,6 +184,8 @@ def test_child_tool_docs_explain_approval_refusal_reports_and_repair():
     ):
         assert link in english
     japanese = _read("docs/delegation.md")
+    assert "MCP tool から拒否メッセージが返った場合" in japanese
+    assert "Allow 待ちの間は tool の呼出し自体が止まります。人が Allow を押せば続き、許可が拒否されてメッセージが返れば、そのとき子が報告します。" in japanese
     for link in (
         "(#承認)", "(#子に渡す道具を選ぶ--base----tools)",
         "(#停止した子の道具を変更して-resume-する)",

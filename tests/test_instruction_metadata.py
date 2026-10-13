@@ -104,7 +104,8 @@ def test_installed_approval_refusal_report_preserves_personal_metadata(env, prov
     assert '`MCP tool <tool-name> is blocked: <exact message>.`' in installed
     assert 'If you have no parent (standalone), tell the user the same line and stop.' in installed
     assert 'a Claude tool missing from `--allowed-tools`' in installed
-    assert 'denied or is waiting for a person to press Allow.' in installed
+    assert 'A pending Allow prompt blocks the tool call.' in installed
+    assert 'report that message then. Do not attempt to report while the call is waiting.' in installed
     assert 'the parent chooses the documented recovery.' in installed
     assert 'agentstack-resume <your-name>' not in installed
     assert e.target.stat().st_mode & 0o777 == 0o640
