@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "dashboard/agentdashboard.plist.template"
-PLACEHOLDER = re.compile(r"__[A-Z_]+__")
+PLACEHOLDER = re.compile(r"__[A-Z0-9_]+__")
 
 
 def _renderer(writer: str) -> str:
@@ -65,6 +65,17 @@ def test_replacement_set_matches_every_template_placeholder(writer):
         "missing": sorted(template - replacements),
         "stale": sorted(replacements - template),
     }
+
+
+def test_numeric_placeholder_added_to_template_is_rejected(tmp_path, monkeypatch):
+    template = plistlib.loads(TEMPLATE.read_bytes())
+    template["EnvironmentVariables"]["AGENTSTACK_FUTURE_SETTING2"] = "__FUTURE_SETTING2__"
+    mutated = tmp_path / "numeric-placeholder.plist.template"
+    mutated.write_bytes(plistlib.dumps(template))
+    monkeypatch.setattr(sys.modules[__name__], "TEMPLATE", mutated)
+    for writer in ("installer", "controller"):
+        with pytest.raises(AssertionError, match="__FUTURE_SETTING2__"):
+            test_replacement_set_matches_every_template_placeholder(writer)
 
 
 @pytest.mark.parametrize("mode,config", [
