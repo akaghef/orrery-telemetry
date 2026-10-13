@@ -489,6 +489,8 @@ def validate_owner_receipt(inspected, identity, token, binding):
 # Bounded wait for a mutex whose creator has made the file but not yet written
 # its fixed content. Creation is a few syscalls; this only has to cover load.
 MUTEX_CREATION_WAIT = 10.0
+MUTEX_KINDS = {'operation_lock': 'orrery-client-operation-mutex-v1',
+               'mutex': 'orrery-client-local-mutex-v1'}
 
 
 def mutex_bytes(kind):
@@ -510,11 +512,23 @@ def create_mutex_inode(path, kind):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         return
+    created = None
     try:
+        created = os.fstat(fd)
         data = mutex_bytes(kind)
         while data:
             data = data[os.write(fd, data):]
         os.fsync(fd)
+    except BaseException:
+        # Do not leave our own empty file for every later caller to time out
+        # on. Remove only the inode this call created, never another one.
+        try:
+            current = os.lstat(path)
+            if created and (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino):
+                os.unlink(path)
+        except OSError:
+            pass
+        raise
     finally:
         os.close(fd)
 
@@ -807,6 +821,10 @@ class RuntimeClient:
         if role == 'task':
             read_private(path)
             return
+        if role in MUTEX_KINDS:
+            # Preflight can meet another caller's mutex between its create and
+            # its write; wait for it exactly like the acquisition does.
+            wait_for_mutex_content(path, MUTEX_KINDS[role])
         try:
             row = read_json(path)
         except ClientError as exc:

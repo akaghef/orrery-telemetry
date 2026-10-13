@@ -545,6 +545,96 @@ def test_mutex_inode_is_created_whole_and_never_replaced(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ['mutex.lock']
 
 
+def test_creator_that_fails_to_write_removes_only_its_own_mutex(tmp_path, monkeypatch):
+    """A write or fsync error must not leave our empty file for later callers."""
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    real_fsync = os.fsync
+
+    def failing_fsync(fd):
+        raise OSError(5, 'synthetic fsync failure')
+
+    monkeypatch.setattr(os, 'fsync', failing_fsync)
+    with pytest.raises(OSError, match='synthetic fsync failure'):
+        with api['operation_inode'](path):
+            pass
+    assert not path.exists() and list(tmp_path.iterdir()) == []
+
+    # Another caller's inode now at the path is never removed by our cleanup.
+    def replaced_then_failing(fd):
+        os.unlink(path)
+        path.write_bytes(OPERATION_MUTEX)
+        path.chmod(0o600)
+        raise OSError(5, 'synthetic fsync failure')
+
+    monkeypatch.setattr(os, 'fsync', replaced_then_failing)
+    with pytest.raises(OSError, match='synthetic fsync failure'):
+        with api['operation_inode'](path):
+            pass
+    other = os.stat(path).st_ino
+    monkeypatch.setattr(os, 'fsync', real_fsync)
+    assert path.read_bytes() == OPERATION_MUTEX
+    with api['operation_inode'](path):
+        assert os.stat(path).st_ino == other
+
+
+def _offline_context(tmp_path):
+    """A real client context that the constructor accepts without any network."""
+    tmp_path.chmod(0o700)
+    home = tmp_path / 'agentstack'
+    root = home / 'clients/fixture'
+    for directory in (home, home / 'clients', root, root / 'runtime', tmp_path / 'mail'):
+        directory.mkdir(mode=0o700)
+    lock = tmp_path / 'authority.lock'
+    lock.touch(mode=0o600)
+    info = lock.stat()
+    config = {'kind': api['KIND'], 'mode': 'global', 'activation_enabled': False,
+              'wrapper_root': str(ROOT), 'isolation_root': str(tmp_path),
+              'runtime_root': str(tmp_path / 'mail'), 'agentstack_home': str(home),
+              'client_name': 'fixture', 'authority': str(tmp_path / 'authority.json'),
+              'authority_lock': str(lock), 'lock_identity': [info.st_dev, info.st_ino],
+              'management_socket': str(tmp_path / 'management.sock'),
+              'mcp_url': 'http://127.0.0.1:1/mcp', 'expected_server_instance_id': 'fixture-server',
+              'candidate_generation': 'fixture-candidate', 'authority_epoch': 'fixture-epoch',
+              'identity': None}
+    private(root / 'runtime-client.json', config)
+    return root
+
+
+@pytest.mark.parametrize('role, content', [
+    ('operation_lock', OPERATION_MUTEX),
+    ('mutex', b'{"kind": "orrery-client-local-mutex-v1"}'),
+])
+def test_client_start_waits_for_a_mutex_another_caller_is_writing(tmp_path, role, content):
+    """The constructor preflights every slot before it takes the operation mutex."""
+    import threading
+    root = _offline_context(tmp_path)
+    path = root / api['CLIENT_LAYOUT'][role]
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    before = os.fstat(fd).st_ino
+    result, done = {}, threading.Event()
+
+    def start():
+        try:
+            RuntimeClient(root / 'runtime-client.json')
+            result['start'] = 'accepted'
+        except Exception as exc:
+            result['start'] = str(exc)
+        done.set()
+
+    thread = threading.Thread(target=start)
+    try:
+        thread.start()
+        assert not done.wait(0.3), result
+        os.write(fd, content)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    thread.join(5)
+    assert result == {'start': 'accepted'}
+    assert path.read_bytes() == content and os.stat(path).st_ino == before
+
+
 def test_installed_payload_reconnects_from_its_own_root(prepared):
     import shutil
     installed = prepared['root'] / 'installed'
