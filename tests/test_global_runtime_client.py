@@ -416,6 +416,341 @@ def test_tool_errors_never_echo_arbitrary_uppercase_secret():
             {'type': 'text', 'text': 'Error: UPPERCASE_SECRET_SENTINEL'}]}})
 
 
+OPERATION_MUTEX = b'{"kind": "orrery-client-operation-mutex-v1"}'
+
+
+def _run_operation(path, name, result, inodes, done):
+    try:
+        with api['operation_inode'](path):
+            inodes[name] = os.stat(path).st_ino
+            done.set()
+        result[name] = 'accepted'
+    except Exception as exc:
+        result[name] = str(exc)
+        done.set()
+
+
+def test_operation_mutex_is_never_read_half_written(tmp_path, monkeypatch):
+    """A second caller arrives after the create and before the content is written."""
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    staged, finish = threading.Event(), threading.Event()
+    done = {'creator': threading.Event(), 'second': threading.Event()}
+
+    def pause(original):
+        # Stop the creator where its content is about to land.
+        def paused(*args, **kwargs):
+            if threading.current_thread().name == 'creator' and not staged.is_set():
+                staged.set()
+                assert finish.wait(5), 'test did not release the creator'
+            return original(*args, **kwargs)
+        return paused
+
+    monkeypatch.setattr(json, 'dump', pause(json.dump))
+    monkeypatch.setattr(os, 'write', pause(os.write))
+    result, inodes = {}, {}
+    threads = {name: threading.Thread(target=_run_operation, name=name,
+        args=(path, name, result, inodes, done[name])) for name in ('creator', 'second')}
+    threads['creator'].start()
+    assert staged.wait(5)
+    threads['second'].start()
+    assert not done['second'].wait(0.3), result
+    finish.set()
+    for thread in threads.values():
+        thread.join(5)
+    assert result == {'creator': 'accepted', 'second': 'accepted'}
+    assert inodes['creator'] == inodes['second'] == os.stat(path).st_ino
+    assert path.read_bytes() == OPERATION_MUTEX
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['child.lock']
+
+
+def test_new_caller_shares_the_inode_of_an_earlier_client_creator(tmp_path):
+    """While an update is in progress an earlier client may create the same mutex.
+
+    The earlier creator below is the create of the previous release: O_EXCL,
+    then the JSON, then the exclusive lock on that inode.
+    """
+    import fcntl
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    created, write, held, release = (threading.Event() for _ in range(4))
+    old = {}
+
+    def earlier_creator():
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        created.set()
+        assert write.wait(5)
+        with os.fdopen(fd, 'w') as out:
+            json.dump({'kind': 'orrery-client-operation-mutex-v1'}, out)
+            out.flush()
+            os.fsync(out.fileno())
+        lock = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old['inode'] = os.fstat(lock).st_ino
+        held.set()
+        assert release.wait(5)
+        os.close(lock)
+
+    result, inodes, entered = {}, {}, threading.Event()
+    creator = threading.Thread(target=earlier_creator)
+    new = threading.Thread(target=_run_operation, args=(path, 'new', result, inodes, entered))
+    creator.start()
+    assert created.wait(5)
+    new.start()
+    assert not entered.wait(0.3), result
+    write.set()
+    assert held.wait(5)
+    assert not entered.wait(0.3), result
+    assert os.stat(path).st_ino == old['inode']
+    release.set()
+    creator.join(5)
+    new.join(5)
+    assert result == {'new': 'accepted'}
+    assert inodes['new'] == old['inode'] == os.stat(path).st_ino
+    assert path.read_bytes() == OPERATION_MUTEX
+
+
+def test_mutex_left_empty_by_a_stopped_creator_is_reported_and_kept(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    path.touch(mode=0o600)
+    before = os.stat(path).st_ino
+    monkeypatch.setitem(api['wait_for_mutex_content'].__globals__, 'MUTEX_CREATION_WAIT', 0.2)
+    for _ in range(2):
+        with pytest.raises(ClientError, match='^MUTEX_INCOMPLETE$'):
+            with api['operation_inode'](path):
+                pass
+    with pytest.raises(ClientError, match='^OBSERVATION_BUSY$'):
+        with api['observation_inode'](path):
+            pass
+    assert path.read_bytes() == b'' and os.stat(path).st_ino == before
+    # The documented operator recovery: with every caller stopped, remove it.
+    path.unlink()
+    with api['operation_inode'](path):
+        pass
+    assert path.read_bytes() == OPERATION_MUTEX
+
+
+def test_mutex_inode_is_created_whole_and_never_replaced(tmp_path):
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'mutex.lock'
+    api['create_mutex_inode'](path, 'orrery-client-local-mutex-v1')
+    assert path.read_bytes() == b'{"kind": "orrery-client-local-mutex-v1"}'
+    assert path.stat().st_mode & 0o777 == 0o600
+    before = path.stat().st_ino
+    api['create_mutex_inode'](path, 'orrery-client-local-mutex-v1')
+    assert path.stat().st_ino == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['mutex.lock']
+
+
+def test_creator_that_fails_to_write_removes_only_its_own_mutex(tmp_path, monkeypatch):
+    """A write error must not leave our short file for later callers to time out on."""
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    real_write = os.write
+
+    def ours(fd):
+        return path.exists() and os.fstat(fd).st_ino == os.stat(path).st_ino
+
+    def failing_write(fd, data):
+        if ours(fd):
+            raise OSError(28, 'synthetic write failure')
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, 'write', failing_write)
+    with pytest.raises(OSError, match='synthetic write failure'):
+        with api['operation_inode'](path):
+            pass
+    assert not path.exists() and list(tmp_path.iterdir()) == []
+
+    # Another caller's inode now at the path is never removed by our cleanup.
+    def replaced_then_failing(fd, data):
+        if ours(fd):
+            os.unlink(path)
+            path.write_bytes(OPERATION_MUTEX)
+            path.chmod(0o600)
+            raise OSError(28, 'synthetic write failure')
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, 'write', replaced_then_failing)
+    with pytest.raises(OSError, match='synthetic write failure'):
+        with api['operation_inode'](path):
+            pass
+    other = os.stat(path).st_ino
+    monkeypatch.setattr(os, 'write', real_write)
+    assert path.read_bytes() == OPERATION_MUTEX
+    with api['operation_inode'](path):
+        assert os.stat(path).st_ino == other
+
+
+def test_fsync_failure_after_the_content_keeps_the_mutex_another_caller_holds(tmp_path, monkeypatch):
+    """Once the content is whole another caller may hold the inode; keep it.
+
+    The creator writes everything, then a second caller enters and holds the
+    lock, then the creator's fsync fails. Removing the file then would let a
+    third caller create a new inode and enter beside the second.
+    """
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    holding, release = threading.Event(), threading.Event()
+    real_fsync = os.fsync
+
+    def second():
+        with api['operation_inode'](path):
+            holding.set()
+            assert release.wait(5)
+
+    def fsync_after_second_holds(fd):
+        if threading.current_thread().name == 'creator':
+            threading.Thread(target=second, name='second').start()
+            assert holding.wait(5)
+            raise OSError(5, 'synthetic fsync failure')
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, 'fsync', fsync_after_second_holds)
+    failure = {}
+
+    def creator():
+        try:
+            api['create_mutex_inode'](path, 'orrery-client-operation-mutex-v1')
+        except OSError as exc:
+            failure['creator'] = str(exc)
+
+    first = threading.Thread(target=creator, name='creator')
+    first.start()
+    first.join(5)
+    assert failure == {'creator': '[Errno 5] synthetic fsync failure'}
+    assert holding.is_set()
+    result, inodes, entered = {}, {}, threading.Event()
+    third = threading.Thread(target=_run_operation, name='third',
+                             args=(path, 'third', result, inodes, entered))
+    third.start()
+    try:
+        # The third caller must wait on the inode the second one holds.
+        assert not entered.wait(0.3), {'third_entered_beside_second': inodes}
+        held = os.stat(path).st_ino
+        assert path.read_bytes() == OPERATION_MUTEX
+    finally:
+        release.set()
+    third.join(5)
+    assert result == {'third': 'accepted'}
+    assert inodes['third'] == held == os.stat(path).st_ino
+
+
+def test_interrupt_after_the_whole_write_keeps_the_mutex_another_caller_holds(tmp_path, monkeypatch):
+    """The file's bytes decide, not how far the creator's own code got.
+
+    All bytes are written, a second caller enters and holds the lock, and the
+    creator is interrupted before it records anything about that write.
+    """
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    holding, release = threading.Event(), threading.Event()
+    real_write = os.write
+
+    def second():
+        with api['operation_inode'](path):
+            holding.set()
+            assert release.wait(5)
+
+    def interrupted_after_write(fd, data):
+        written = real_write(fd, data)
+        if threading.current_thread().name == 'creator':
+            threading.Thread(target=second, name='second').start()
+            assert holding.wait(5)
+            raise KeyboardInterrupt
+        return written
+
+    monkeypatch.setattr(os, 'write', interrupted_after_write)
+    failure = {}
+
+    def creator():
+        try:
+            api['create_mutex_inode'](path, 'orrery-client-operation-mutex-v1')
+        except KeyboardInterrupt:
+            failure['creator'] = 'interrupted'
+
+    first = threading.Thread(target=creator, name='creator')
+    first.start()
+    first.join(5)
+    assert failure == {'creator': 'interrupted'}
+    assert holding.is_set()
+    result, inodes, entered = {}, {}, threading.Event()
+    third = threading.Thread(target=_run_operation, name='third',
+                             args=(path, 'third', result, inodes, entered))
+    third.start()
+    try:
+        assert not entered.wait(0.3), {'third_entered_beside_second': inodes}
+        held = os.stat(path).st_ino
+        assert path.read_bytes() == OPERATION_MUTEX
+    finally:
+        release.set()
+    third.join(5)
+    assert result == {'third': 'accepted'}
+    assert inodes['third'] == held == os.stat(path).st_ino
+
+
+def _offline_context(tmp_path):
+    """A real client context that the constructor accepts without any network."""
+    tmp_path.chmod(0o700)
+    home = tmp_path / 'agentstack'
+    root = home / 'clients/fixture'
+    for directory in (home, home / 'clients', root, root / 'runtime', tmp_path / 'mail'):
+        directory.mkdir(mode=0o700)
+    lock = tmp_path / 'authority.lock'
+    lock.touch(mode=0o600)
+    info = lock.stat()
+    config = {'kind': api['KIND'], 'mode': 'global', 'activation_enabled': False,
+              'wrapper_root': str(ROOT), 'isolation_root': str(tmp_path),
+              'runtime_root': str(tmp_path / 'mail'), 'agentstack_home': str(home),
+              'client_name': 'fixture', 'authority': str(tmp_path / 'authority.json'),
+              'authority_lock': str(lock), 'lock_identity': [info.st_dev, info.st_ino],
+              'management_socket': str(tmp_path / 'management.sock'),
+              'mcp_url': 'http://127.0.0.1:1/mcp', 'expected_server_instance_id': 'fixture-server',
+              'candidate_generation': 'fixture-candidate', 'authority_epoch': 'fixture-epoch',
+              'identity': None}
+    private(root / 'runtime-client.json', config)
+    return root
+
+
+@pytest.mark.parametrize('role, content', [
+    ('operation_lock', OPERATION_MUTEX),
+    ('mutex', b'{"kind": "orrery-client-local-mutex-v1"}'),
+])
+def test_client_start_waits_for_a_mutex_another_caller_is_writing(tmp_path, role, content):
+    """The constructor preflights every slot before it takes the operation mutex."""
+    import threading
+    root = _offline_context(tmp_path)
+    path = root / api['CLIENT_LAYOUT'][role]
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    before = os.fstat(fd).st_ino
+    result, done = {}, threading.Event()
+
+    def start():
+        try:
+            RuntimeClient(root / 'runtime-client.json')
+            result['start'] = 'accepted'
+        except Exception as exc:
+            result['start'] = str(exc)
+        done.set()
+
+    thread = threading.Thread(target=start)
+    try:
+        thread.start()
+        assert not done.wait(0.3), result
+        os.write(fd, content)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    thread.join(5)
+    assert result == {'start': 'accepted'}
+    assert path.read_bytes() == content and os.stat(path).st_ino == before
+
+
 def test_installed_payload_reconnects_from_its_own_root(prepared):
     import shutil
     installed = prepared['root'] / 'installed'
