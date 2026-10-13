@@ -212,3 +212,44 @@ MAX・keyset・limit・返却 revision は1つの read transaction に置き、f
 API 17 では登録の明示再送で status の digest を照合できます。browser の Lock は queue 済みの引継ぎと進行中の body を失効させ、storage 拒否時は page memory だけで動き reload 後に再 Unlock が必要です。
 
 API 18 の `global_runtime_observation=1`・`operator_session=1` と非秘密の `agentstack-http-operator probe` は [稼働状態と能力の確認](dashboard.md#global-runtime-proof)を参照してください。cockpit の実装と PR7 の切替は別の関門です。
+
+## mode の選択と context のない service
+
+mode の正本は共通 client の `selected` です。選択だけでは owner の credential を読まず、登録や通信をしません。新しい top-level launcher・service は既存 `env.sh` を一度読み、結果を環境へ固定します。hook・worker は継承値を使い、稼働中の process は `env.sh` を変更しても切り替わりません。service は明示 stop/start で既定を採り直します。
+
+| 入力 | 結果 |
+|---|---|
+| mode/context/config がない | 既定 legacy。旧経路を維持 |
+| 正当な global context | global。installed default より context を優先 |
+| 明示 legacy と global context/config | `RUNTIME_MODE_CONTEXT_CONFLICT` |
+| global、context なし | mode の選択は成功。agent 操作は `CONTEXT_UNAVAILABLE` |
+| 既存の隔離 server config だけ | global の operator/service。owner を借用しない |
+| 不明 mode、broken context、不正 config | 固定 reason で拒否。旧 DB へ戻らない |
+
+`agentstack-runtime-client select --json` は一時的な選択結果を返します。旧形式の context は `LEGACY_CONTEXT_REQUIRES_PR7` で拒否し、移行は後続の明示手順で行います。mode 未固定の旧 session が新しい global 既定に出会った場合は、既存の非秘密 session_index の自己 binding が照合できる間だけ legacy を続けます。証明不能なら `LEGACY_SESSION_MODE_UNRESOLVED` なので、その旧 session を終了してから明示再起動してください。project key だけを証拠にしません。
+
+context のない watcher は `agentstack-runtime-client watch-service --server-config /absolute/server-config.json` です。既存 RuntimeOperator の管理境界で readiness/binding を照合し、固定 global-consumer の route ごとに既存 client の配送処理へ渡します。0宛先は正常待機、不正な1宛先は理由を出して隔離し、別の正常宛先の配送は続けます。owner 付き watcher とイベント待機・rescue scan の実装を共用します。待機や process の生存は配送完了の証明ではありません。完了の正本は server notification fact のままです。
+
+人・service・cron の `agentstack-mailctl` と `agentstack-enroll` も同じ選択を使います。global の enrollment は `inspect --agent-id ID`、`claim/recover --agent-id ID --request-id UUID --expected-generation N` で既存管理 socket へ接続します。新 credential は stdin から渡し、argv に含めません。旧 enrollment CLI は legacy 選択時だけ呼びます。新しい controller の配布に共通 loader が欠けていれば `GLOBAL_ENTRY_UNAVAILABLE` で止まり、再配備が必要です。
+
+既定は legacy、activation は false のままです。installer に global を渡して本サービスを切り替える操作は `GLOBAL_INSTALL_REQUIRES_PR7` で拒否します。隔離 server config の実行経路と、利用者の既定切替は別の段階です。tmux の専用 socket・名前の変更はこの段階では実装しません。
+
+installer は既存の literal 設定 reader で mode の既定を読み、env.sh の他の代入やコマンド置換を実行しません。空・不正な mode は拒否します。
+
+### system controller と明示 watcher
+
+hook・worker・直接 source する Codex/Gemini bootstrap は稼働中の mode を保持します。一方、installer・agentctl・mailctl・enroll・persistent launcher は installed default を採り直す system 入口です。呼出 shell の mode と食い違えば `RUNTIME_MODE_INHERITED_CONFLICT` で変更前に拒否します。明示 `--runtime-mode` の指定は共通 selector へ渡します。古い agent shell から system 操作をするときは継承した mode/config/context を外して実行するか、対応する明示引数で意図を指定してください。
+
+既存 env.sh に legacy と global server config が同時に残れば `RUNTIME_MODE_CONTEXT_CONFLICT` です。旧 session の継続証明は mode 未固定で installed default が global のときだけ行い、名前・session・project の自己 binding を照合します。明示/継承 global の operator 操作を ambient agent 名だけで拒否しません。
+
+通常の常駐 watcher は config-only の `watch-service` です。所有者 context だけを明示した shell の watcher 起動は `watch` を使い、同じ route 処理と待機 loop を共有します。この入口は context-only の手動確認にも使うため残しています。Mail の一時的な接続拒否・socket 不在・timeout は rescue 間隔で再試行します。認証・binding・応答形式の不一致は停止し、旧経路へ戻りません。App の partial 配置も共通 loader の admission を必須とし、欠落/未対応は `GLOBAL_ENTRY_UNAVAILABLE` なので共通 client を再配備してください。
+
+legacy の Mail runner は従来の service argv を直接実行し、global の selector に依存しません。global installer の固定拒否は Codex 候補の実行より前です。
+
+App の単独配備と marketplace にも正本の共通 loader を同梱します。core の root に対する同じ admission を呼び、旧 mode の単独配備を維持します。
+
+Mail を無効にした global hook は owner の context/credential を読む前に skip します。旧 mode の hook の skip 契約は変えません。dashboard demo は合成の legacy DB 専用で、継承した global の owner 設定を使いません。
+
+Codex/Gemini launcher は新しい tmux pane に選択済みの mode/config/context を渡します。project がある直接 bootstrap は env.sh でその project/MCP URL を上書きせず、mode が未固定の場合だけ共通 selector で installed default を補います。watcher wrapper は環境と `--server-config PATH` / `--server-config=PATH` のどれでも同じ選択結果で config-only / owner watch を分岐します。古い helper の select 未対応は、共通の partial admission に戻し固定理由で拒否します。
+
+mode 未固定の継続で配置済み env.sh を selector が確認できない場合は `RUNTIME_DEFAULT_UNAVAILABLE` で停止します。helper を再配備してから同じ起動を再実行してください。env.sh が legacy でも未確認の設定を成功扱いせず、固定済み legacy と設定ファイルのない既定 legacy は維持します。installer の `--literal` は1つの引数としてだけ扱い、説明文中の同じ文字列には反応しません。

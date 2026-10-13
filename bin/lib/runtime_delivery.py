@@ -33,7 +33,6 @@ def instruction_api():
     return _INSTRUCTION_API
 
 
-
 def contract():
     global _CONTRACT
     if _CONTRACT is None:
@@ -126,19 +125,46 @@ def notification_eligible(message):
     return rank(message.get('importance')) >= rank(os.environ.get('AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE','low'))
 
 
-class RuntimeDelivery:
-    def __init__(self, client, api):
-        self.client, self.api = client, api
-        self.error = api['ClientError']
-        self.launch_path = client.outputs['launch']
-        self.proxy_receipt = None
-        self._watch_errors = {}
+class RuntimeFiles:
+    def __init__(self, api):
+        self.api, self.error = api, api['ClientError']
 
     def fail(self, reason):
         raise self.error(reason)
 
+
     def read(self, path):
         return self.api['read_json'](path)
+
+
+    def local(self, path, schema):
+        value = self.read(path)
+        validate(value, schema, self.error)
+        return value
+
+
+    @contextmanager
+    def dir_lock(self, directory, *, exclusive=True):
+        info = directory.lstat()
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            current = directory.lstat()
+            if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                self.fail('PRIVATE_DIRECTORY_REQUIRED')
+            yield
+        finally:
+            os.close(fd)
+
+
+class RuntimeDelivery(RuntimeFiles):
+    def __init__(self, client, api):
+        self.client, self.api = client, api
+        super().__init__(api)
+        self.launch_path = client.outputs['launch']
+        self.proxy_receipt = None
+        self._watch_errors = {}
+
 
     def directory(self, path):
         # Walk only the known fixed chain, never scan the client subtree.
@@ -156,10 +182,6 @@ class RuntimeDelivery:
             self.api['safe_private_directory'](current)
         return path
 
-    def local(self, path, schema):
-        value = self.read(path)
-        validate(value, schema, self.error)
-        return value
 
     def save(self, path, value, schema):
         validate(value, schema, self.error)
@@ -224,18 +246,6 @@ class RuntimeDelivery:
             self.api['safe_private_directory'](current)
         return path
 
-    @contextmanager
-    def dir_lock(self, directory, *, exclusive=True):
-        info = directory.lstat()
-        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
-            current = directory.lstat()
-            if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
-                self.fail('PRIVATE_DIRECTORY_REQUIRED')
-            yield
-        finally:
-            os.close(fd)
 
     def publish_route(self):
         directory = self.consumer_agent()
@@ -1250,75 +1260,129 @@ class RuntimeDelivery:
         return warnings
 
     def watch_once(self):
-        # Use routes only as immutable client-name locators, never token/name
-        # or completion state. Each actual operation reloads under A -> C -> M.
-        c=self.client
-        if os.environ.get('AGENTSTACK_MAIL_DISABLED')=='1':return
-        consumer=self.consumer_agent().parent
-        for folder in consumer.iterdir():
-            if not __import__('re').fullmatch(r'[1-9][0-9]*',folder.name):continue
-            route_dir=folder
-            if not (route_dir/'route.json').exists() and not (route_dir/'route.json').is_symlink():continue
-            try:
-                self.api['safe_private_directory'](route_dir)
-                with self.dir_lock(route_dir,exclusive=False):
-                    route=self.local(route_dir/'route.json','runtime_route')
-                    target=self.api['RuntimeClient'](c.clients_parent/route['client_name']/'runtime-client.json')
-                    if target.identity['agent_id']!=int(folder.name) or target.binding!=c.binding:
-                        self.fail('ROUTE_OWNER_CONFLICT')
-                delivery=RuntimeDelivery(target,self.api)
-                if target.registration_metadata().get('program')=='codex-app':continue
-                delivery.reconcile_confirmed()
-                persistent=target.profile_path.exists() and delivery.read(target.profile_path).get('execution',{}).get('interaction')=='headless'
-                for mid in delivery.hints():
-                    try:
-                        if persistent:delivery.deliver_persistent(mid)
-                        else:delivery.deliver_tmux(mid)
-                    except (self.error,OSError,ValueError) as exc:delivery.report_error(mid,exc)
-                self._watch_errors.pop(folder.name,None)
-            except (self.error,OSError,ValueError) as exc:
-                # Diagnostics are derived from the existing intent, no warning
-                # ledger and no dependence on Mail to report a local failure.
-                reason=str(exc) if isinstance(exc,self.error) else 'LOCAL_STATE_UNAVAILABLE'
-                if self._watch_errors.get(folder.name)!=reason:
-                    print('global-mail-watcher: '+reason,file=sys.stderr)
-                    self._watch_errors[folder.name]=reason
+        c = self.client
+        if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1': return
+        watch_routes(self.consumer_agent(create=False).parent, c.clients_parent,
+                     c.binding, self.api, self._watch_errors)
 
     def watch(self, stop=None):
         """Directory events with the legacy rescue interval, or legacy polling."""
-        import select
-        import threading
-        stop=stop or threading.Event()
-        settings=legacy_policy()
-        directory=self.client.runtime/'signals'
-        # Signals are server-owned. Wait without creating them when the server
-        # has not yet reconciled; admission and event setup happen afterwards.
-        while not stop.is_set():
-            try:self.api['safe_private_directory'](directory)
-            except FileNotFoundError:
-                stop.wait(settings['poll']);continue
-            break
-        if stop.is_set():return
-        events=None
-        if shutil.which('fswatch'):
-            try:
-                events=subprocess.Popen(['fswatch','-0','-r','--event','Created','--event','Updated',str(directory)],
-                    stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
-            except OSError:events=None
+        watch_loop(self.client.runtime/'signals', self.api, self.watch_once, stop)
+
+
+def watch_loop(directory, api, tick, stop=None):
+    """Shared directory-event/rescue loop; delivery truth stays in each route."""
+    import select
+    import threading
+    stop=stop or threading.Event()
+    settings=legacy_policy()
+    # Signals are server-owned. Wait without creating them when the server
+    # has not yet reconciled; admission and event setup happen afterwards.
+    while not stop.is_set():
+        try:api['safe_private_directory'](directory)
+        except FileNotFoundError:
+            stop.wait(settings['poll']);continue
+        break
+    if stop.is_set():return
+    events=None
+    if shutil.which('fswatch'):
         try:
-            while not stop.is_set():
-                self.watch_once()
-                if stop.is_set():break
-                if events is None:
-                    stop.wait(settings['poll'])
-                elif events.poll() is not None:
-                    events.stdout.close();events=None
-                else:
-                    ready,_,_=select.select([events.stdout],[],[],settings['scan'])
-                    if ready:os.read(events.stdout.fileno(),65536)
-        finally:
-            if events is not None:
-                events.terminate()
-                try:events.wait(timeout=5)
-                except subprocess.TimeoutExpired:events.kill();events.wait()
-                events.stdout.close()
+            events=subprocess.Popen(['fswatch','-0','-r','--event','Created','--event','Updated',str(directory)],
+                stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+        except OSError:events=None
+    try:
+        while not stop.is_set():
+            if tick() is False:
+                stop.wait(settings['scan']);continue
+            if stop.is_set():break
+            if events is None:
+                stop.wait(settings['poll'])
+            elif events.poll() is not None:
+                events.stdout.close();events=None
+            else:
+                ready,_,_=select.select([events.stdout],[],[],settings['scan'])
+                if ready:os.read(events.stdout.fileno(),65536)
+    finally:
+        if events is not None:
+            events.terminate()
+            try:events.wait(timeout=5)
+            except subprocess.TimeoutExpired:events.kill();events.wait()
+            events.stdout.close()
+
+
+def watch_routes(consumer, clients_parent, binding, api, errors):
+    """One per-route delivery engine for owner and config-only coordinators."""
+    if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1': return
+    def fail(reason): raise api['ClientError'](reason)
+    # File helpers require only api/error, never an owner or credential.
+    reader = RuntimeFiles(api)
+    try:
+        api['safe_private_directory'](consumer)
+    except FileNotFoundError:
+        return
+    for folder in consumer.iterdir():
+        if not __import__('re').fullmatch(r'[1-9][0-9]*',folder.name):continue
+        route_dir=folder
+        if not (route_dir/'route.json').exists() and not (route_dir/'route.json').is_symlink():continue
+        try:
+            api['safe_private_directory'](route_dir)
+            with reader.dir_lock(route_dir, exclusive=False):
+                route=reader.local(route_dir/'route.json', 'runtime_route')
+                target=api['RuntimeClient'](clients_parent/route['client_name']/'runtime-client.json')
+                if target.identity['agent_id']!=int(folder.name) or target.binding!=binding:
+                    fail('ROUTE_OWNER_CONFLICT')
+            delivery=RuntimeDelivery(target,api)
+            if delivery.consumer_agent(create=False) != folder:
+                fail('CONSUMER_ISOLATION_MISMATCH')
+            if target.registration_metadata().get('program')=='codex-app':continue
+            delivery.reconcile_confirmed()
+            persistent=target.profile_path.exists() and delivery.read(target.profile_path).get('execution',{}).get('interaction')=='headless'
+            for mid in delivery.hints():
+                try:
+                    if persistent:delivery.deliver_persistent(mid)
+                    else:delivery.deliver_tmux(mid)
+                except (api['ClientError'],OSError,ValueError,KeyError,TypeError) as exc:delivery.report_error(mid,exc)
+            errors.pop(folder.name,None)
+        except (api['ClientError'],OSError,ValueError,KeyError,TypeError) as exc:
+            # Diagnostics are derived from the existing intent, no warning
+            # ledger and no dependence on Mail to report a local failure.
+            reason=str(exc) if isinstance(exc,api['ClientError']) else 'LOCAL_STATE_UNAVAILABLE'
+            if errors.get(folder.name)!=reason:
+                print('global-mail-watcher: '+reason,file=sys.stderr)
+                errors[folder.name]=reason
+
+
+def watch_service(config_path, api, *, stop=None, once=False):
+    """Ownerless coordinator: server config admission precedes route enumeration."""
+    operator = __import__('runpy').run_path(str(Path(__file__).with_name('runtime_operator.py')))['RuntimeOperator'](config_path, api=api)
+    consumer = operator.isolation / 'agentstack/global-consumer' / hashlib.sha256(
+        operator.binding['expected_server_instance_id'].encode()).hexdigest() / 'agents'
+    for other in (operator.runtime, operator.clients_parent):
+        a, b = consumer.resolve(), other.resolve()
+        if a.is_relative_to(b) or b.is_relative_to(a):
+            raise api['ClientError']('CONSUMER_ISOLATION_MISMATCH')
+    import threading
+    stop = stop or threading.Event()
+    errors = {}
+    def tick():
+        # Shared config/binding/auth failure stops this coordinator, not legacy fallback.
+        try:
+            operator.read({'kind':'health'})
+        except (ConnectionError, FileNotFoundError, TimeoutError):
+            print('global-mail-watcher: TRANSPORT_UNAVAILABLE',file=sys.stderr)
+            return False
+        current = operator.isolation
+        for part in consumer.relative_to(current).parts:
+            current /= part
+            try: api['safe_private_directory'](current)
+            except FileNotFoundError: break
+        else:
+            watch_routes(consumer, operator.clients_parent, operator.binding, api, errors)
+    if once:
+        tick()
+        return
+    # Retry transport-only outages before event admission too.
+    while not stop.is_set() and tick() is False:
+        stop.wait(legacy_policy()['scan'])
+    if stop.is_set(): return
+    watch_loop(operator.runtime/'signals', api, tick, stop)

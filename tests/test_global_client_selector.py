@@ -40,27 +40,33 @@ def test_partial_install_admission_is_shared(tmp_path, arguments, shell):
 
 
 def test_normal_selector_resolves_cli_env_and_implicit_once(tmp_path, monkeypatch):
+    import json
     api = runpy.run_path(str(ROOT / "bin/lib/runtime_client.py"))
     selected = api["selected"]
     monkeypatch.setitem(selected.__globals__, "ROOT", tmp_path)
     monkeypatch.delenv("AGENTSTACK_CLIENT_CONFIG", raising=False)
-    assert selected(["--old-legacy-flag"]) is None
+    assert selected(["--old-legacy-flag"])['mode'] == 'legacy'
     context = tmp_path / "runtime-client.json"
     context.symlink_to(tmp_path / "missing")
-    assert selected([]) == context
-    explicit = tmp_path / "explicit.json"
-    explicit.write_text("{}")
+    with pytest.raises(api["ClientError"], match="PRIVATE_FILE_UNAVAILABLE"):
+        selected([])
+    context.unlink()
+    for target in (context, tmp_path / 'explicit.json'):
+        target.write_text(json.dumps({'kind':'orrery-runtime-client-s1', 'mode':'global'}))
+        target.chmod(0o600)
+    explicit = tmp_path / 'explicit.json'
     monkeypatch.setenv("AGENTSTACK_CLIENT_CONFIG", str(explicit))
-    assert selected([]) == explicit
-    assert selected(["--context", str(context)]) == context
-    assert selected(["--context=" + str(context)]) == context
+    assert selected([])['context'] == explicit
+    assert selected(["--context", str(context)])['context'] == context
+    assert selected(["--context=" + str(context)])['context'] == context
     with pytest.raises(api["ClientError"], match="CONTEXT_UNAVAILABLE"):
         selected(["--context"])
 
 
 def test_loader_propagates_resolved_cli_context_to_existing_front_doors(tmp_path):
     context = tmp_path / "explicit.json"
-    context.write_text("{}")
+    context.write_text('{"kind":"orrery-runtime-client-s1","mode":"global"}')
+    context.chmod(0o600)
     loader = ROOT / "bin/lib/global-client-loader.sh"
     value = subprocess.run(
         [
@@ -86,7 +92,8 @@ def test_old_register_front_door_cannot_return_legacy_after_global_selection(tmp
         (lib / name).write_bytes((ROOT / "bin/lib" / name).read_bytes())
     (lib / "agentstack-register.sh").write_text("ags_global_entry() { return 125; }\n")
     context = tmp_path / "explicit.json"
-    context.write_text("{}")
+    context.write_text('{"kind":"orrery-runtime-client-s1","mode":"global"}')
+    context.chmod(0o600)
     value = subprocess.run(
         [
             "/bin/bash",
@@ -129,7 +136,8 @@ def test_old_runtime_without_select_preserves_legacy_preregister(tmp_path, conte
     if context_mode == "explicit":
         env["AGENTSTACK_CLIENT_CONFIG"] = str(tmp_path / "missing.json")
     elif context_mode == "implicit":
-        context.write_text("{}")
+        context.write_text('{"kind":"orrery-runtime-client-s1","mode":"global"}')
+        context.chmod(0o600)
     elif context_mode == "broken":
         context.symlink_to(tmp_path / "missing.json")
     token = tmp_path / "token"

@@ -1190,6 +1190,8 @@ def test_ui_marker_drift_disables_gemini_catalog_and_spawn(monkeypatch, tmp_path
 
 
 def test_broken_extension_keeps_canonical_dashboard_available(tmp_path):
+    from _installed_client_payload import copy_client_library
+    copy_client_library(tmp_path)
     dashboard = tmp_path / "dashboard"
     dashboard.mkdir()
     for name in ("provider_server.py", "server.py", "index.html"):

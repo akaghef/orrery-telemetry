@@ -8,7 +8,7 @@ if declare -F ags_client_entry >/dev/null; then
   if [[ "$_ags_global_rc" != 125 ]]; then
     exit "$_ags_global_rc"
   fi
-
+  export AGENTSTACK_RUNTIME_MODE=legacy
 fi
 # spawn_gemini_child.sh — launch one delegated Google Antigravity child in an
 # isolated git worktree, with ORRERY Mail identity/reservations bound by a local
@@ -31,7 +31,7 @@ AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-}"
 if [[ -z "$AGENTSTACK_HOME_DIR" ]]; then
   AGENTSTACK_HOME_DIR="$(cd "$HOOKS_DIR/.." && pwd)"
 fi
-[[ -f "$AGENTSTACK_HOME_DIR/env.sh" ]] && . "$AGENTSTACK_HOME_DIR/env.sh"
+ags_client_bootstrap "$AGENTSTACK_HOME_DIR/env.sh" || exit 2
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"

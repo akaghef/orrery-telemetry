@@ -734,6 +734,8 @@ def test_clean_home_install_uninstall_reinstall(tmp_path):
         check=True,
     )
 
+    shared_loader = install_dir / "src/agentstack_codex_app/_global-client-loader.sh"
+    assert shared_loader.read_bytes() == (ROOT / "bin/lib/global-client-loader.sh").read_bytes()
     env_file = install_dir / "env.sh"
     assert env_file.is_file()
     assert env_file.stat().st_mode & 0o777 == 0o600

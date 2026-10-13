@@ -4,9 +4,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${AGENTSTACK_ENV_FILE:-$HERE/../env.sh}"
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  . "$ENV_FILE"
+_ags_mode_loader="$HERE/../bin/lib/global-client-loader.sh"
+if [[ -f "$_ags_mode_loader" ]]; then
+  . "$_ags_mode_loader"
+  ags_client_bootstrap "$ENV_FILE" --system "$@" || exit $?
+else
+  printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
+  exit 2
 fi
 
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
@@ -71,6 +75,8 @@ render_plist() {
     -e "s|__LABEL_PREFIX__|$(sed_escape "$LABEL_PREFIX")|g" \
     -e "s|__INSTALL_DIR__|$(sed_escape "$HERE")|g" \
     -e "s|__PYTHON__|$(sed_escape "$PYTHON")|g" \
+    -e "s|__RUNTIME_MODE__|$(xml_sed_escape "${AGENTSTACK_RUNTIME_MODE:-legacy}")|g" \
+    -e "s|__GLOBAL_SERVER_CONFIG__|$(xml_sed_escape "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}")|g" \
     -e "s|__PORT__|$(sed_escape "$PORT")|g" \
     -e "s|__MAIL_DB__|$(sed_escape "$MAIL_DB")|g" \
     -e "s|__MAIL_ENV__|$(sed_escape "$MAIL_ENV")|g" \

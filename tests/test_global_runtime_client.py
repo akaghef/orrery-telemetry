@@ -143,7 +143,7 @@ def test_old_wrapper_restart_fenced_before_any_registration(prepared, change, mo
     private(Path(c['authority']), authority)
     r = run(prepared, 'bin/agentstack-reregister', 'Ignored', bash=True)
     assert r.returncode != 0
-    assert 'WRITER_FENCED' in r.stderr
+    assert ('WRITER_FENCED' if mode == 'global' else 'LEGACY_CONTEXT_REQUIRES_PR7') in r.stderr
 
 
 def test_lock_replacement_and_exclusive_updater_gate(prepared):

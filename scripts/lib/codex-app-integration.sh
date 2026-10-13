@@ -208,6 +208,7 @@ default_service_mode() {
 }
 
 validate() {
+  [[ -f "$REPO_ROOT/bin/lib/global-client-loader.sh" ]] || die "GLOBAL_ENTRY_UNAVAILABLE: missing shared client loader"
   [[ -d "$SOURCE_DIR/src/agentstack_codex_app" ]] || die "missing integration source"
   [[ -f "$SOURCE_DIR/plugin/.codex-plugin/plugin.json" ]] || die "missing plugin manifest"
   [[ -f "$SOURCE_DIR/launchd/org.agentstack.codex-app-bridge.plist.template" ]] \
@@ -282,6 +283,7 @@ for name in ("README.md", "pyproject.toml", "env.sh.sample", "export-manifest.tx
     if item.exists():
         shutil.copy2(item, destination / name)
 PY
+  cp "$REPO_ROOT/bin/lib/global-client-loader.sh" "$INSTALL_DIR/src/agentstack_codex_app/_global-client-loader.sh"
   mkdir -p "$INSTALL_DIR/bin/lib" "$RUNTIME_DIR"
   cp "$SCRIPT_DIR/lib/codex-app-integration.sh" "$INSTALL_DIR/bin/lib/"
   cp "$SCRIPT_DIR/codex_plugin_trust.py" "$SCRIPT_DIR/codex_plugin_ownership.py" "$INSTALL_DIR/bin/"

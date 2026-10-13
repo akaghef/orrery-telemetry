@@ -502,7 +502,7 @@ def _reset(root: Path) -> None:
 
 def _copy_tracked_payload(root: Path) -> None:
     result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "dashboard", "bin/lib/agentstack-scientists.sh"],
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "dashboard", "bin/lib"],
         capture_output=True,
         check=True,
     )
@@ -947,12 +947,15 @@ if __name__ == "__main__":
 
 def _server_env(root: Path, port: int, control_token: str) -> dict[str, str]:
     env = os.environ.copy()
+    for key in ('AGENTSTACK_CLIENT_CONFIG', 'AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+        env.pop(key, None)
     env.update(
         {
             "HOME": str(root / "home"),
             "PATH": os.pathsep.join((str(root / "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin")),
             "PYTHONDONTWRITEBYTECODE": "1",
             "TMUX": "",
+            "AGENTSTACK_RUNTIME_MODE": "legacy",
             "AGENTSTACK_PORT": str(port),
             "AGENTSTACK_BIND_HOST": "127.0.0.1",
             "AGENTSTACK_MAIL_DB": str(root / "mail" / "storage.sqlite3"),

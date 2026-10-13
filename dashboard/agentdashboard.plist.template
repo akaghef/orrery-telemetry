@@ -26,6 +26,10 @@
     <string>__PATH__</string>
     <key>AGENTSTACK_PYTHON</key>
     <string>__PYTHON__</string>
+    <key>AGENTSTACK_RUNTIME_MODE</key>
+    <string>__RUNTIME_MODE__</string>
+    <key>AGENTSTACK_GLOBAL_SERVER_CONFIG</key>
+    <string>__GLOBAL_SERVER_CONFIG__</string>
     <key>AGENTSTACK_PORT</key>
     <string>__PORT__</string>
     <key>AGENTSTACK_LABEL_PREFIX</key>
