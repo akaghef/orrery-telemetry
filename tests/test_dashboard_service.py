@@ -12,6 +12,7 @@ import plistlib
 import pty
 import re
 import shutil
+import shlex
 import signal
 import socket
 import subprocess
@@ -313,6 +314,111 @@ def test_launchd_install_explicitly_kickstarts_before_checking_health(
     bootstrap = next(i for i, line in enumerate(dashboard_lines) if " bootstrap " in line)
     kickstart = next(i for i, line in enumerate(dashboard_lines) if " kickstart " in line)
     assert enable < bootout < wait < bootstrap < kickstart
+
+
+@pytest.mark.parametrize("old_mode,old_config,new_mode,new_config", [
+    ("legacy", None, "global", "first"),
+    ("global", "first", "global", "second"),
+    ("global", "first", "legacy", None),
+    ("legacy", None, "legacy", None),
+])
+def test_agentctl_restart_reinstalls_selected_launchd_environment(
+    tmp_path, old_mode, old_config, new_mode, new_config,
+):
+    from test_install_launchd_placeholders import PLACEHOLDER
+
+    stack = tmp_path / "stack"
+    dashboard = stack / "dashboard"
+    dashboard.mkdir(parents=True)
+    shutil.copytree(ROOT / "bin/lib", stack / "bin/lib")
+    for name in ("agentctl.sh", "agentdashboard.plist.template"):
+        shutil.copy2(ROOT / "dashboard" / name, dashboard / name)
+    configs = {name: tmp_path / (name + "-server-config.json")
+               for name in ("first", "second")}
+    for path in configs.values():
+        path.write_text(json.dumps({"kind": "orrery-global-server-s2c-v1"}))
+        path.chmod(0o600)
+    env_file = stack / "env.sh"
+
+    def select(mode, config):
+        env_file.write_text(
+            "export AGENTSTACK_RUNTIME_MODE=" + mode + "\n" +
+            ("export AGENTSTACK_GLOBAL_SERVER_CONFIG=" +
+             shlex.quote(str(configs[config])) + "\n" if config else "")
+        )
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    state = tmp_path / "loaded-environment.json"
+    calls = tmp_path / "launchctl-calls.jsonl"
+    stub = fake_bin / "launchctl.py"
+    # launchd caches the environment at bootstrap. Reading the plist at
+    # kickstart would incorrectly let a render-only repair pass this test.
+    stub.write_text(r"""from pathlib import Path
+import json, os, plistlib, sys
+state = Path(os.environ['TEST_LAUNCHCTL_STATE'])
+calls = Path(os.environ['TEST_LAUNCHCTL_CALLS'])
+op = sys.argv[1]
+if op == 'print':
+    sys.exit(0 if state.exists() else 1)
+record = {'op': op}
+if op == 'bootout':
+    state.unlink(missing_ok=True)
+elif op == 'bootstrap':
+    environment = plistlib.loads(Path(sys.argv[3]).read_bytes())['EnvironmentVariables']
+    state.write_text(json.dumps(environment))
+elif op == 'kickstart':
+    record['environment'] = json.loads(state.read_text())
+elif op != 'enable':
+    raise SystemExit(99)
+with calls.open('a') as stream:
+    stream.write(json.dumps(record) + '\n')
+""")
+    launchctl = fake_bin / "launchctl"
+    launchctl.write_text("#!/bin/sh\nexec " + shlex.join([sys.executable, str(stub)]) + ' "$@"\n')
+    launchctl.chmod(0o755)
+    uname = fake_bin / "uname"
+    uname.write_text("#!/bin/sh\necho Darwin\n")
+    uname.chmod(0o755)
+    env = {
+        "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+        "HOME": str(tmp_path / "home"),
+        "AGENTSTACK_HOME": str(stack),
+        "AGENTSTACK_ENV_FILE": str(env_file),
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX + ".restart",
+        "AGENTSTACK_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "AGENTSTACK_PORT": "19878",
+        "TEST_LAUNCHCTL_STATE": str(state),
+        "TEST_LAUNCHCTL_CALLS": str(calls),
+    }
+
+    def run(action):
+        result = subprocess.run(
+            ["/bin/bash", str(dashboard / "agentctl.sh"), action],
+            env=env, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "launchd mode" in result.stdout
+
+    select(old_mode, old_config)
+    run("start")
+    assert json.loads(state.read_text())["AGENTSTACK_RUNTIME_MODE"] == old_mode
+    calls.write_text("")
+    select(new_mode, new_config)
+    run("restart")
+    events = [json.loads(row) for row in calls.read_text().splitlines()]
+    environment = events[-1]["environment"]
+    assert environment["AGENTSTACK_RUNTIME_MODE"] == new_mode
+    assert environment["AGENTSTACK_GLOBAL_SERVER_CONFIG"] == (
+        str(configs[new_config]) if new_config else ""
+    )
+    assert [event["op"] for event in events] == [
+        "enable", "bootout", "bootstrap", "kickstart",
+    ]
+    plist = (pathlib.Path(env["HOME"]) / "Library/LaunchAgents" /
+             (env["AGENTSTACK_LABEL_PREFIX"] + ".agentdashboard.plist"))
+    assert not PLACEHOLDER.findall(plist.read_text()), "unexpanded restart placeholders"
 
 
 def test_agentctl_enables_then_waits_for_bootout_before_bootstrap(tmp_path):
