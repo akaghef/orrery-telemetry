@@ -293,10 +293,9 @@ case "${1:-status}" in
     if background_running; then
       stop_background
       start_background
-    elif launchd_loaded; then
-      launchctl kickstart -k "$GUI/$LABEL"
-      echo "restarted in launchd mode"
     else
+      # Reinstall launchd jobs through the start path so selected mode/config
+      # reaches the loaded job, even when its label is already present.
       start_any
     fi
     ;;
