@@ -91,11 +91,22 @@ render_plist() {
     -e "s|__DELIVERABLE_ROOTS__|$(sed_escape "$DELIVERABLE_ROOTS")|g" \
     -e "s|__LANG__|$(sed_escape "$LANG_SETTING")|g" \
     -e "s|__MURMUR__|$(sed_escape "$MURMUR_SETTING")|g" \
+    -e "s|__SPAWN_DIRS__|$(xml_sed_escape "$SPAWN_DIRS_SETTING")|g" \
+    -e "s|__SPAWN_ROOTS__|$(xml_sed_escape "$SPAWN_ROOTS_SETTING")|g" \
+    -e "s|__CODEX_CHILD_APPROVAL__|$(xml_sed_escape "$CODEX_CHILD_APPROVAL_SETTING")|g" \
+    -e "s|__CODEX_NETWORK__|$(xml_sed_escape "$CODEX_NETWORK_SETTING")|g" \
+    -e "s|__CODEX_ADD_DIRS__|$(xml_sed_escape "$CODEX_ADD_DIRS_SETTING")|g" \
+    -e "s|__CHILD_RESUME_RETENTION_DAYS__|$(xml_sed_escape "${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-30}")|g" \
+    -e "s|__CODEX_BIN__|$(xml_sed_escape "${AGENTSTACK_CODEX_BIN:-}")|g" \
+    -e "s|__PORTRAITS_DIR__|$(xml_sed_escape "$PORTRAITS_DIR_SETTING")|g" \
+    -e "s|__CUSTOM_PORTRAITS__|$(xml_sed_escape "$CUSTOM_PORTRAITS_SETTING")|g" \
+    -e "s|__CODEX_MODELS__|$(xml_sed_escape "$CODEX_MODELS_SETTING")|g" \
     -e "s|__CLAUDE_MODELS__|$(xml_sed_escape "$CLAUDE_MODELS_SETTING")|g" \
     -e "s|__CHILD_DEFAULT_TOOLS__|$(xml_sed_escape "$CHILD_DEFAULT_TOOLS_SETTING")|g" \
     -e "s|__WORKTREE_ROOT__|$(sed_escape "$WORKTREE_ROOT_SETTING")|g" \
     -e "s|__HOOKS_DIR__|$(sed_escape "$HOOKS_DIR")|g" \
     -e "s|__RUNTIME_DIR__|$(sed_escape "$RUNTIME_DIR")|g" \
+    -e "s|__PERSISTENT_PROFILES_DIR__|$(xml_sed_escape "${AGENTSTACK_PERSISTENT_PROFILES_DIR:-$HOME/.agentstack/profiles}")|g" \
     -e "s|__DASHBOARD_LOG__|$(sed_escape "$DASHBOARD_LOG")|g" \
     -e "s|__DASHBOARD_LOG_MAX_BYTES__|$(sed_escape "$DASHBOARD_LOG_MAX_BYTES")|g" \
     -e "s|__DASHBOARD_LOG_BACKUPS__|$(sed_escape "$DASHBOARD_LOG_BACKUPS")|g" \
