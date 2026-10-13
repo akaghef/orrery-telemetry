@@ -2315,6 +2315,14 @@ def entry_operation(entry, argv):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    tmux_commands = {'tmux-capabilities': 'capabilities',
+                     'tmux-legacy-transport': 'legacy-transport',
+                     'tmux-legacy-target': 'legacy-target'}
+    if argv and argv[0] in tmux_commands:
+        # A legacy consumer's safety admission must not construct an owner or
+        # turn its inherited mode into a second selector.
+        return runpy.run_path(str(Path(__file__).with_name('runtime_tmux.py')))['main'](
+            [tmux_commands[argv[0]], *argv[1:]])
     if argv and argv[0] == 'select':
         try:
             choice = selected(argv[1:], bootstrap='--bootstrap' in argv)

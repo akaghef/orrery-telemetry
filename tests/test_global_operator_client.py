@@ -80,6 +80,28 @@ def test_parallel_root_prepare_does_not_overwrite_identity(operator):
     assert operator.status('same')['agent_id']==result['agent_id']
 
 
+def test_tmux_global_protection_reads_existing_snapshot_without_new_state(operator):
+    operator.create('protected',agent_name='ProtectedStandalone',program='daemon',model='deterministic')
+    client=operator.client('protected')
+    with client.operation_mutex():
+        pass
+    directory=client.runtime_dir/'live-sessions'
+    directory.mkdir(mode=0o700,exist_ok=True)
+    live={'kind':'orrery-global-live-session-v1',**client.binding,
+          'agent_id':client.identity['agent_id'],'session_id':'standalone',
+          'pid':400,'process_start':'fixture-start','pane_id':'%4'}
+    operator.api['atomic_json'](directory/'standalone.json',live)
+    before={p.relative_to(client.client_root):p.read_bytes() for p in client.client_root.rglob('*') if p.is_file()}
+    revision=operator.read({'kind':'health'})['as_of_revision']
+    helper=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux.py'))
+    proofs=helper['global_proofs'](operator.clients_parent.parent,api=operator.api)
+    assert len(proofs)==1 and proofs[0]['live']==live
+    assert 'registration_token' not in json.dumps(proofs)
+    assert operator.read({'kind':'health'})['as_of_revision']==revision
+    assert {p.relative_to(client.client_root):p.read_bytes() for p in client.client_root.rglob('*') if p.is_file()}==before
+    assert not client.outputs['launch'].exists()
+
+
 def test_foreign_name_pending_requires_explicit_digest_abandon(operator):
     import hashlib
     operator.prepare('foreign')
