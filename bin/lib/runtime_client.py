@@ -486,27 +486,65 @@ def validate_owner_receipt(inspected, identity, token, binding):
     return inspected
 
 
-def create_mutex_inode(path, kind):
-    """Publish a mutex inode only once, and only with its complete content.
+# Bounded wait for a mutex whose creator has made the file but not yet written
+# its fixed content. Creation is a few syscalls; this only has to cover load.
+MUTEX_CREATION_WAIT = 10.0
 
-    O_EXCL followed by a write leaves an empty file that another caller can
-    read before the JSON lands (PRIVATE_JSON_INVALID), and a crash there leaves
-    it empty for good. Instead the content is written to a private temporary
-    file and renamed into place, so a reader sees no file or the whole file.
-    Rename alone would replace a lock that another creator already published,
-    so creation is serialized by a lock on the parent directory, held only for
-    this step, and the path is checked again under it. A published inode is
-    never replaced.
+
+def mutex_bytes(kind):
+    return json.dumps({'kind': kind}).encode()
+
+
+def create_mutex_inode(path, kind):
+    """Create the mutex the way every client version does: O_EXCL on the path.
+
+    Older clients create the same fixed path with O_EXCL and then write the
+    content. Doing the same keeps one inode for old and new callers alike: the
+    loser of O_EXCL uses the winner's inode, and a published inode is never
+    replaced. The content lands after the create, so readers wait for it with
+    wait_for_mutex_content instead of reading an empty file as invalid.
     """
     if path.exists() or path.is_symlink():
         return
-    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        fcntl.flock(directory, fcntl.LOCK_EX)
-        if not path.exists() and not path.is_symlink():
-            atomic_json(path, {'kind': kind})
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return
+    try:
+        data = mutex_bytes(kind)
+        while data:
+            data = data[os.write(fd, data):]
+        os.fsync(fd)
     finally:
-        os.close(directory)
+        os.close(fd)
+
+
+def mutex_content_pending(path, kind):
+    """True while the file holds a strict prefix, empty included, of its content.
+
+    Any other state, including an unreadable or unsafe file, is left to the
+    caller's own checks so that their reasons stay unchanged.
+    """
+    try:
+        raw = read_private(path)
+    except ClientError:
+        return False
+    expected = mutex_bytes(kind)
+    return len(raw) < len(expected) and expected.startswith(raw)
+
+
+def wait_for_mutex_content(path, kind):
+    """Wait for a creator to finish writing; a remnant that stays short fails.
+
+    MUTEX_INCOMPLETE is left by a creator that stopped between the create and
+    the write. It is never removed or rewritten here, because a slow creator
+    still writing looks the same; see the operator recovery in the docs.
+    """
+    deadline = time.monotonic() + MUTEX_CREATION_WAIT
+    while mutex_content_pending(path, kind):
+        if time.monotonic() >= deadline:
+            raise ClientError('MUTEX_INCOMPLETE')
+        time.sleep(0.02)
 
 
 def check_operation_inode(path):
@@ -517,6 +555,8 @@ def check_operation_inode(path):
 @contextmanager
 def observation_inode(path):
     """Share the existing writer inode; never create it or wait for a writer."""
+    if mutex_content_pending(path, 'orrery-client-operation-mutex-v1'):
+        raise ClientError('OBSERVATION_BUSY')
     check_operation_inode(path)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -545,6 +585,7 @@ def observation_inode(path):
 def operation_inode(path):
     """The fixed operation mutex, also used before a root has a context."""
     create_mutex_inode(path,'orrery-client-operation-mutex-v1')
+    wait_for_mutex_content(path,'orrery-client-operation-mutex-v1')
     check_operation_inode(path)
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     try:
@@ -1096,6 +1137,7 @@ class RuntimeClient:
         path = self.outputs['mutex']
         # One immutable inode; create_mutex_inode never replaces a held lock.
         create_mutex_inode(path,'orrery-client-local-mutex-v1')
+        wait_for_mutex_content(path,'orrery-client-local-mutex-v1')
         self.validate_output(path,'mutex')
         fd = os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
         try:

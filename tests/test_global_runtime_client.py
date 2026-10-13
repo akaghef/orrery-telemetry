@@ -416,16 +416,30 @@ def test_tool_errors_never_echo_arbitrary_uppercase_secret():
             {'type': 'text', 'text': 'Error: UPPERCASE_SECRET_SENTINEL'}]}})
 
 
+OPERATION_MUTEX = b'{"kind": "orrery-client-operation-mutex-v1"}'
+
+
+def _run_operation(path, name, result, inodes, done):
+    try:
+        with api['operation_inode'](path):
+            inodes[name] = os.stat(path).st_ino
+            done.set()
+        result[name] = 'accepted'
+    except Exception as exc:
+        result[name] = str(exc)
+        done.set()
+
+
 def test_operation_mutex_is_never_read_half_written(tmp_path, monkeypatch):
-    """A second caller arrives after creation started and before the content is in place."""
+    """A second caller arrives after the create and before the content is written."""
     import threading
     tmp_path.chmod(0o700)
     path = tmp_path / 'child.lock'
-    staged, finish, second_done = threading.Event(), threading.Event(), threading.Event()
+    staged, finish = threading.Event(), threading.Event()
+    done = {'creator': threading.Event(), 'second': threading.Event()}
 
     def pause(original):
-        # Stop the creator wherever its content is about to land: json.dump
-        # into an O_EXCL file, or the rename of a complete temporary file.
+        # Stop the creator where its content is about to land.
         def paused(*args, **kwargs):
             if threading.current_thread().name == 'creator' and not staged.is_set():
                 staged.set()
@@ -434,36 +448,92 @@ def test_operation_mutex_is_never_read_half_written(tmp_path, monkeypatch):
         return paused
 
     monkeypatch.setattr(json, 'dump', pause(json.dump))
-    monkeypatch.setattr(os, 'replace', pause(os.replace))
+    monkeypatch.setattr(os, 'write', pause(os.write))
     result, inodes = {}, {}
-
-    def run(name):
-        try:
-            with api['operation_inode'](path):
-                inodes[name] = os.stat(path).st_ino
-            result[name] = 'accepted'
-        except Exception as exc:
-            result[name] = str(exc)
-        finally:
-            if name == 'second':
-                second_done.set()
-
-    creator = threading.Thread(target=run, args=('creator',), name='creator')
-    second = threading.Thread(target=run, args=('second',), name='second')
-    creator.start()
+    threads = {name: threading.Thread(target=_run_operation, name=name,
+        args=(path, name, result, inodes, done[name])) for name in ('creator', 'second')}
+    threads['creator'].start()
     assert staged.wait(5)
-    second.start()
-    assert not second_done.wait(0.3), result
+    threads['second'].start()
+    assert not done['second'].wait(0.3), result
     finish.set()
-    creator.join(5)
-    second.join(5)
+    for thread in threads.values():
+        thread.join(5)
     assert result == {'creator': 'accepted', 'second': 'accepted'}
     assert inodes['creator'] == inodes['second'] == os.stat(path).st_ino
-    assert path.read_bytes() == b'{"kind": "orrery-client-operation-mutex-v1"}'
+    assert path.read_bytes() == OPERATION_MUTEX
     assert sorted(p.name for p in tmp_path.iterdir()) == ['child.lock']
 
 
-def test_mutex_inode_is_published_whole_and_never_replaced(tmp_path):
+def test_new_caller_shares_the_inode_of_an_earlier_client_creator(tmp_path):
+    """While an update is in progress an earlier client may create the same mutex.
+
+    The earlier creator below is the create of the previous release: O_EXCL,
+    then the JSON, then the exclusive lock on that inode.
+    """
+    import fcntl
+    import threading
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    created, write, held, release = (threading.Event() for _ in range(4))
+    old = {}
+
+    def earlier_creator():
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        created.set()
+        assert write.wait(5)
+        with os.fdopen(fd, 'w') as out:
+            json.dump({'kind': 'orrery-client-operation-mutex-v1'}, out)
+            out.flush()
+            os.fsync(out.fileno())
+        lock = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old['inode'] = os.fstat(lock).st_ino
+        held.set()
+        assert release.wait(5)
+        os.close(lock)
+
+    result, inodes, entered = {}, {}, threading.Event()
+    creator = threading.Thread(target=earlier_creator)
+    new = threading.Thread(target=_run_operation, args=(path, 'new', result, inodes, entered))
+    creator.start()
+    assert created.wait(5)
+    new.start()
+    assert not entered.wait(0.3), result
+    write.set()
+    assert held.wait(5)
+    assert not entered.wait(0.3), result
+    assert os.stat(path).st_ino == old['inode']
+    release.set()
+    creator.join(5)
+    new.join(5)
+    assert result == {'new': 'accepted'}
+    assert inodes['new'] == old['inode'] == os.stat(path).st_ino
+    assert path.read_bytes() == OPERATION_MUTEX
+
+
+def test_mutex_left_empty_by_a_stopped_creator_is_reported_and_kept(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    path = tmp_path / 'child.lock'
+    path.touch(mode=0o600)
+    before = os.stat(path).st_ino
+    monkeypatch.setitem(api['wait_for_mutex_content'].__globals__, 'MUTEX_CREATION_WAIT', 0.2)
+    for _ in range(2):
+        with pytest.raises(ClientError, match='^MUTEX_INCOMPLETE$'):
+            with api['operation_inode'](path):
+                pass
+    with pytest.raises(ClientError, match='^OBSERVATION_BUSY$'):
+        with api['observation_inode'](path):
+            pass
+    assert path.read_bytes() == b'' and os.stat(path).st_ino == before
+    # The documented operator recovery: with every caller stopped, remove it.
+    path.unlink()
+    with api['operation_inode'](path):
+        pass
+    assert path.read_bytes() == OPERATION_MUTEX
+
+
+def test_mutex_inode_is_created_whole_and_never_replaced(tmp_path):
     tmp_path.chmod(0o700)
     path = tmp_path / 'mutex.lock'
     api['create_mutex_inode'](path, 'orrery-client-local-mutex-v1')
