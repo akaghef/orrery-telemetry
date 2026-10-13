@@ -293,6 +293,10 @@ case "${1:-status}" in
     if background_running; then
       stop_background
       start_background
+    elif [[ ! -f "$PLIST_DST" ]] && launchd_loaded; then
+      # Match stop_all's HOME ownership guard before rendering or unloading.
+      echo "refusing to restart launchd job without a plist owned by this HOME: $PLIST_DST" >&2
+      exit 1
     else
       # Reinstall launchd jobs through the start path so selected mode/config
       # reaches the loaded job, even when its label is already present.
