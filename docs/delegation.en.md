@@ -179,6 +179,16 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 | `mcp:<server>` | Copies the user's server definition into the strict config (no tool approved) | Enables that server in the child's `config.toml` (no tool approved) |
 | `mcp:<server>:all` | The same, and approves every tool the table knows | The same, and approves every tool the table knows, tool by tool |
 
+### When an MCP tool is refused by the approval policy
+
+A child that receives an approval-policy refusal such as `approval policy is never` must stop the blocked work. It must not edit `~/.codex/config.toml`, `~/.claude/settings.json`, or other configuration files to bypass the refusal. The installed Codex and Claude managed instructions require this one-line report to the parent through ORRERY Mail `send_message`:
+
+`MCP tool <tool-name> was refused by the approval policy; agentstack-resume <your-name> --tools <spec> is required.`
+
+The child supplies the exact refused tool name and its existing identity. The parent chooses `<spec>`, completes EXIT, confirms the child stopped, and follows [resume with different tools](#resume-a-stopped-child-with-different-tools). For a new child, select tools at launch with `/delegate --tools <spec>`. Do not change user settings as a repair. Resume limitations below still apply; this report does not promise that tool replacement succeeds.
+
+With no parent (standalone), the agent tells the user the same line and stops. Standalone tool replacement is currently refused as described below, so the user must resolve the supported launch path. If `send_message` itself is refused or unavailable, the agent shows the line to the user and stops without substituting a messaging path.
+
 ### The classification table: read only and operate
 
 What a screen selection exposes and approves is decided by the classification table (`TOOL_TABLE`). It currently lists Windows-MCP 0.8.6 (20 tools) and chrome-devtools-mcp (all 30 tools of 1.10.1), each split into classes.

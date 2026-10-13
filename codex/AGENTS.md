@@ -183,6 +183,23 @@ selected above to take a reservation so another agent does not clobber it:
 
 Skipping this is the main way two Codex agents corrupt each other's work.
 
+## MCP tool approval refusals
+
+If an MCP tool is refused by the approval policy (for example,
+`approval policy is never`), do not edit configuration files such as
+`~/.codex/config.toml` or `~/.claude/settings.json` to bypass the refusal.
+Send your parent one line through ORRERY Mail `send_message`, following the
+selected connection's actual schema, then stop the blocked work:
+
+`MCP tool <tool-name> was refused by the approval policy; agentstack-resume <your-name> --tools <spec> is required.`
+
+Replace `<tool-name>` with the exact refused tool name and `<your-name>` with
+your existing identity. The parent selects `<spec>` and follows the documented
+EXIT/resume procedure; do not resume yourself or create a replacement child.
+If you have no parent (standalone), tell the user the same line and stop.
+If `send_message` is also refused or unavailable, show the line to the user
+and stop; do not change settings or invent another messaging path.
+
 ## Messaging Other Agents
 
 - **Send pointers, not files.** A message body is a path plus what changed

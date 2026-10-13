@@ -156,3 +156,22 @@ def test_api_docs_state_the_served_api_generation_and_when_it_changes() -> None:
         doc = _read(rel)
         assert f'"api":{generation}}}' in doc, f"{rel} shows another api generation"
         assert rule in doc and "CHANGELOG" in doc, f"{rel} does not say when api goes up"
+
+
+def test_child_tool_docs_explain_approval_refusal_reports_and_repair():
+    report = "`MCP tool <tool-name> was refused by the approval policy; agentstack-resume <your-name> --tools <spec> is required.`"
+    for path in ("docs/delegation.md", "docs/delegation.en.md"):
+        text = _read(path)
+        assert text.count(report) == 1, path
+        for literal in ("`approval policy is never`", "`~/.codex/config.toml`",
+                        "`~/.claude/settings.json`", "`send_message`",
+                        "`/delegate --tools <spec>`"):
+            assert literal in text, (path, literal)
+    english = _read("docs/delegation.en.md")
+    assert "With no parent (standalone), the agent tells the user the same line and stops." in english
+    assert "Standalone tool replacement is currently refused" in english
+    assert "Resume limitations below still apply" in english
+    japanese = _read("docs/delegation.md")
+    assert "親が無い standalone では、利用者に同じ1行を伝えて止まります。" in japanese
+    assert "standalone の道具の変更は下記のとおり現在拒否される" in japanese
+    assert "下記の再開の制限は引き続き適用され" in japanese

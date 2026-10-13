@@ -179,6 +179,16 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 | `mcp:<server>` | 利用者の server の定義を strict の設定に写します（tool は承認しない） | 子の `config.toml` でその server を有効にします（tool は承認しない） |
 | `mcp:<server>:all` | 上に加えて、表で分かる全 tool を承認します | 上に加えて、表で分かる全 tool を tool ごとに承認します |
 
+### MCP tool が承認の方針で拒否されたとき
+
+`approval policy is never` など、承認の方針によって MCP tool が拒否された子は、拒否された作業を止めます。回避のために `~/.codex/config.toml`、`~/.claude/settings.json` などの設定ファイルを変更してはいけません。配布される Codex・Claude の managed 指示は、ORRERY Mail の `send_message` で親に次の1行を報告するよう求めます。
+
+`MCP tool <tool-name> was refused by the approval policy; agentstack-resume <your-name> --tools <spec> is required.`
+
+子は `<tool-name>` を拒否された正確な tool 名、`<your-name>` を自分の既存の名前に置き換えます。親が `<spec>` を選び、EXIT を完了して子の停止を確認し、[道具を変更して再開する手順](#停止した子の道具を変更して-resume-する)に従います。新しい子には `/delegate --tools <spec>` で起動時に道具を選びます。利用者の設定変更を修復手順にしません。下記の再開の制限は引き続き適用され、この報告は道具の変更が成功する保証ではありません。
+
+親が無い standalone では、利用者に同じ1行を伝えて止まります。standalone の道具の変更は下記のとおり現在拒否されるため、利用者が対応する起動経路を判断します。`send_message` 自体が拒否された・使えない場合も、利用者にその1行を示して止まり、別の連絡経路を作りません。
+
 ### 分類表と、読むだけ・操作も
 
 画面の選択で何を公開し承認するかは、分類表（`TOOL_TABLE`）で決まります。今の表は Windows-MCP 0.8.6（全 20 tool）と chrome-devtools-mcp（1.10.1 の全 30 tool）で、Windows は3分類、Chrome は read と operate の2分類です。
