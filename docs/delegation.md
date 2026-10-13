@@ -179,6 +179,12 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 | `mcp:<server>` | 利用者の server の定義を strict の設定に写します（tool は承認しない） | 子の `config.toml` でその server を有効にします（tool は承認しない） |
 | `mcp:<server>:all` | 上に加えて、表で分かる全 tool を承認します | 上に加えて、表で分かる全 tool を tool ごとに承認します |
 
+### MCP tool が承認の方針で拒否されたとき
+
+MCP tool から拒否メッセージが返った場合、子は拒否された作業を止め、正確な tool 名と拒否メッセージの原文を `MCP tool <tool-name> is blocked: <exact message>.` の1行で ORRERY Mail の `send_message` から報告します。Codex の `approval policy is never`、Claude の `--allowed-tools` に無い tool の拒否、ブラウザや OS の許可が拒否されてメッセージが返った場合が対象です。Allow 待ちの間は tool の呼出し自体が止まります。人が Allow を押せば続き、許可が拒否されてメッセージが返れば、そのとき子が報告します。子は回避のために `~/.codex/config.toml`、`~/.claude/settings.json` などの設定ファイルを変更せず、利用者に代わって許可しません。親が無い standalone や Mail を使えない場合は、利用者に同じ1行を伝えて止まります。
+
+親または利用者は既存の手順から修復を選びます。分類表の対象には[承認と分類の制限](#承認)、[新しい子の道具の選択](#子に渡す道具を選ぶ--base----tools)または[Claude の子の再開](#停止した子の道具を変更して-resume-する)、それ以外の server には[Codex overlay のトラブルシューティング](troubleshooting.md#mcp-tool-call-requires-approval-but-approval-policy-is-never)、Codex の未解決の道具変更の制限には[途中で必要な MCP が増えたとき](#途中で必要な-mcp-が増えたとき)、許可画面には[人が行う接続・操作の許可](#人がやること事前の設定と接続操作時の許可)を参照してください。
+
 ### 分類表と、読むだけ・操作も
 
 画面の選択で何を公開し承認するかは、分類表（`TOOL_TABLE`）で決まります。今の表は Windows-MCP 0.8.6（全 20 tool）と chrome-devtools-mcp（1.10.1 の全 30 tool）で、Windows は3分類、Chrome は read と operate の2分類です。

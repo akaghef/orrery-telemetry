@@ -183,6 +183,30 @@ selected above to take a reservation so another agent does not clobber it:
 
 Skipping this is the main way two Codex agents corrupt each other's work.
 
+## MCP tool approval refusals
+
+If an MCP tool returns a refusal message (for example, Codex's
+`approval policy is never`, a Claude tool missing from `--allowed-tools`, or
+a denied browser or OS permission), stop the blocked work and report it.
+A pending Allow prompt blocks the tool call. If a person presses Allow, the
+call continues; if permission is denied and a refusal message returns,
+report that message then. Do not attempt to report while the call is waiting.
+Do not edit configuration files such as `~/.codex/config.toml` or
+`~/.claude/settings.json` to bypass it, and do not grant permission on the
+user's behalf.
+Send your parent one line through ORRERY Mail `send_message`, following the
+selected connection's actual schema:
+
+`MCP tool <tool-name> is blocked: <exact message>.`
+
+Replace `<tool-name>` with the exact blocked tool name and `<exact message>`
+with the verbatim refusal message. Report facts only;
+the parent chooses the documented recovery. Do not resume yourself or create
+a replacement child.
+If you have no parent (standalone), tell the user the same line and stop.
+If `send_message` is also refused or unavailable, show the line to the user
+and stop; do not change settings or invent another messaging path.
+
 ## Messaging Other Agents
 
 - **Send pointers, not files.** A message body is a path plus what changed
