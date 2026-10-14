@@ -220,6 +220,10 @@ def legacy_transport(*, run=None, binary=None, environ=None):
         return Transport(path, binary=binary, run=run, allow_absent=True)
     transport = Transport(path, binary=binary, run=run)
     result = transport.command('display-message', '-p', '#{socket_path}\t#{pid}')
+    if module_api('legacy_consumer')['server_absent'](result):
+        # A safe stale socket is an empty server, not an unknown transport.
+        # Only inventory reads consume this result; targets still need proof.
+        return transport
     fields = result.stdout.strip().split('\t')
     if (result.returncode or len(fields) != 2 or not fields[1].isdigit()
             or Path(fields[0]) != path or (server_pid and fields[1] != server_pid)):

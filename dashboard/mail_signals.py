@@ -5,7 +5,6 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 import os
-import re
 import runpy
 from pathlib import Path
 import stat
@@ -32,17 +31,11 @@ def session_names() -> set[str] | None:
         home=Path(os.environ.get('AGENTSTACK_HOME',str(Path(__file__).resolve().parents[1])))
         consumer=api['LegacyConsumer'](home)
         if not api['global_inventory'](home)['global_complete']:return None
-        if consumer.transport.identity is None:return set()
         result=consumer.command(['list-sessions','-F','#{session_name}'])
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
         return None
     if result.returncode == 0:
         return set(result.stdout.splitlines())
-    diagnostic = result.stderr.strip()
-    if result.returncode == 1 and (diagnostic.startswith('no server running on ')
-                                   or diagnostic == 'no sessions'
-                                   or re.fullmatch(r'error connecting to .+ \(No such file or directory\)', diagnostic)):
-        return set()
     return None
 
 

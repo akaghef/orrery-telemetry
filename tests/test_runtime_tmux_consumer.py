@@ -215,3 +215,43 @@ def test_actual_stop_group_cli_rechecks_after_pgid_before_signal(consumer,monkey
     assert cli['main'](['stop-group','Alpha'])==2
     assert effects==[]
     assert capsys.readouterr().err.strip()=='LEGACY_TARGET_IS_GLOBAL'
+
+
+@pytest.mark.parametrize('command', ['list-panes', 'list-sessions'])
+def test_absent_inventory_rechecks_endpoint_without_creating_it(tmp_path, command):
+    path = tmp_path / 'default'
+    transport = API['Transport'](path, binary='fixture-tmux', allow_absent=True,
+                               run=lambda *a, **kw: pytest.fail('absence must not execute tmux'))
+    c = API['LegacyConsumer'](tmp_path, transport=transport, api={}, proof_reader=lambda *a, **kw: [])
+    result = c.command([command, '-F', '#{pane_id}'])
+    assert (result.returncode, result.stdout, result.stderr) == (0, '', '')
+    assert not path.exists()
+    with pytest.raises(API['TargetError'], match='^TMUX_TARGET_UNAVAILABLE$'):
+        c.command(['list-clients'])
+    path.write_text('foreign file appeared')
+    with pytest.raises(API['TargetError'], match='^TMUX_SOCKET_UNSAFE$'):
+        c.command([command, '-F', '#{pane_id}'])
+    assert path.read_text() == 'foreign file appeared'
+
+
+@pytest.mark.parametrize('transition', ['appeared', 'disappeared'])
+def test_inventory_rechecks_socket_presence_after_bootstrap(tmp_path, transition):
+    with tempfile.TemporaryDirectory(prefix='inventory-race-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as directory:
+        path = Path(directory).resolve() / 's'
+        with socket.socket(socket.AF_UNIX) as stream:
+            if transition == 'disappeared':
+                stream.bind(str(path))
+                path.chmod(0o600)
+            transport = API['Transport'](path, binary='fixture-tmux', allow_absent=True,
+                                       run=lambda *a, **kw: pytest.fail('presence observation must not execute tmux'))
+            c = API['LegacyConsumer'](tmp_path, transport=transport, api={}, proof_reader=lambda *a, **kw: [])
+            if transition == 'appeared':
+                stream.bind(str(path))
+                path.chmod(0o600)
+                with pytest.raises(API['TargetError'], match='^TMUX_SOCKET_CHANGED$'):
+                    c.command(['list-panes', '-a'])
+            else:
+                path.unlink()
+                reply = c.command(['list-panes', '-a'])
+                assert (reply.returncode, reply.stdout) == (0, '')
+                assert not path.exists()

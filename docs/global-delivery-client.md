@@ -272,3 +272,5 @@ context 使用率も digest に含めます。提出後の応答不明は exit 3
 対象の同一性の digest は socket・pane・PID/start・owner/親の証明を結び、capture・attach と terminal open の再照合に使います。通常の画面更新では対象変更としません。compact の target digest はこの証明に入力欄の状態と ctx 値を加え、本文・時計・スピナーの更新は含めません。人の yes 待ちは観測期限に含めず、確認後の短い期限で同じ digest を再照合します。ttyd と terminal の実子も同じ helper で endpoint と対象を再照合し、cleanup は観測不明なら identity を保持します。resume 後に terminal を開けなければ `TERMINAL_OPEN_FAILED` を返しますが、成功した resume を取り消しません。
 
 `send-compact` の確認には `target` が返す `state_sha256` を使います。`capture`・`attach` が返す値は対象の同一性の確認用なので、compact の確認値として流用しません。
+
+共有 legacy consumer は、socket 不在または安全な socket で `no server running` を確認した inventory を空とします。cleanup は生存 lease がなければ退役へ進みます。unsafe socket・timeout・その他の読取不能は不明のまま保持し、観測だけで server を作りません。

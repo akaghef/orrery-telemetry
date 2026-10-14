@@ -79,7 +79,7 @@ def test_exit_leaves_mail_alone_while_the_identity_lives_elsewhere(resume, mail,
     assert (runtime / f"agent_token_{NAME}").read_text() == TOKEN
 
 
-@pytest.mark.parametrize("case", ["own_pane", "closed_pane", "dead_lease", "no_tmux"])
+@pytest.mark.parametrize("case", ["own_pane", "closed_pane", "dead_lease", "empty_inventory"])
 def test_exit_retires_when_no_other_copy_is_alive(resume, mail, tmp_path, case):
     runtime, registration, launches, calls = resume
     assert server.do_resume(NAME, open_terminal=False)["ok"]
@@ -100,3 +100,37 @@ def test_exit_retires_when_no_other_copy_is_alive(resume, mail, tmp_path, case):
     assert process.returncode == 0, process.stderr
     # Reservations are the SessionEnd hook's job; the retire-only exit never releases them.
     assert exit_calls(mail) == ["retire_agent"], mail
+
+
+@pytest.mark.parametrize("endpoint,retired", [("absent", True), ("stale", True), ("unsafe", False)])
+def test_plain_terminal_exit_classifies_actual_tmux_endpoint(resume, mail, tmp_path, endpoint, retired):
+    """Real absence retires; a socket rejected by admission keeps the row."""
+    import os
+    from pathlib import Path
+    import shutil
+    import socket
+    import tempfile
+    from test_claude_resume_mail import ROOT
+    binary = shutil.which('tmux')
+    if binary is None:
+        pytest.skip('tmux unavailable')
+    runtime, registration, _, _ = resume
+    with tempfile.TemporaryDirectory(prefix='cleanup-endpoint-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as directory:
+        base = Path(directory).resolve()
+        parent = base / ('tmux-' + str(os.getuid()))
+        parent.mkdir(mode=0o700)
+        path = parent / 'default'
+        if endpoint != 'absent':
+            with socket.socket(socket.AF_UNIX) as stream:
+                stream.bind(str(path))
+                path.chmod(0o600 if endpoint == 'stale' else 0o666)
+        env = {**os.environ, 'TMUX_TMPDIR': str(base), 'AGENTSTACK_RUNTIME_DIR': str(runtime),
+               'AGENTSTACK_HOOKS_DIR': str(ROOT / 'hooks'), 'AGENTSTACK_RUNTIME_MODE': 'legacy',
+               'AGENTSTACK_MAIL_HTTP_BEARER_MODE': 'disabled', 'AGENTSTACK_CLEANUP_RETIRE_ONLY': '1', 'PROJECT_KEY': registration['project_key']}
+        env.pop('TMUX', None)
+        env.pop('TMUX_PANE', None)
+        result = subprocess.run(['/bin/bash', str(ROOT / 'hooks/cleanup-child-agent.sh'), NAME],
+                                env=env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        assert exit_calls(mail) == (['retire_agent'] if retired else []), (result.stderr, mail)
+        assert (runtime / f'agent_token_{NAME}').read_text() == TOKEN

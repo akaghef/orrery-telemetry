@@ -7,3 +7,5 @@ compact は入力欄が空で待機している場合だけ受け付け、Claude
 端末・ttyd の実接続と detached resume も共通の対象照合に通し、観測中の PID 再使用や不明な cleanup で他の session に作用しないようにしました。対象の同一性と compact の入力欄の証明を分け、画面の更新だけで capture・attach が止まらないようにしています。人の確認待ちは観測期限に含めません。
 
 文書用の read-only demo も共有 consumer に接続し、合成 pane の観測を明示しました。利用者の tmux server には接続せず、従来の合成データと表示を維持します。
+
+共有 consumer は実際の server 不在を空と区別し、tmux の外の終了でも cleanup が退役を完了します。unsafe・timeout・読取不能は保持します。

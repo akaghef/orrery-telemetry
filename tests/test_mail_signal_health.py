@@ -272,16 +272,21 @@ def test_prune_cannot_follow_symlinked_signal_ancestors(tmp_path, monkeypatch):
 @pytest.mark.parametrize('diagnostic', ['no server running on /tmp/fixture-socket', 'no sessions', 'error connecting to /tmp/fixture-socket (No such file or directory)'])
 def test_known_absent_server_means_no_sessions(monkeypatch, diagnostic):
     from dashboard import mail_signals
-    class Consumer:
-        transport = type('Transport', (), {'identity': (1, 2)})()
-        def command(self, args):
-            assert args == ['list-sessions', '-F', '#{session_name}']
-            return subprocess.CompletedProcess(args, 1, '', diagnostic)
-    monkeypatch.setattr(mail_signals.runpy, 'run_path', lambda _: {
-        'LegacyConsumer': lambda _: Consumer(),
-        'global_inventory': lambda _: {'global_complete': True},
-    })
-    assert mail_signals.session_names() == set()
+    # Exercise the shared consumer rather than duplicating its classification
+    # in an HTTP/dashboard double.
+    with tempfile.TemporaryDirectory(prefix='absent-health-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as name:
+        base = Path(name).resolve()
+        parent = base / ('tmux-' + str(os.getuid()))
+        parent.mkdir(mode=0o700)
+        with socket_module.socket(socket_module.AF_UNIX) as stream:
+            stream.bind(str(parent / 'default'))
+            (parent / 'default').chmod(0o600)
+            monkeypatch.setenv('TMUX_TMPDIR', str(base))
+            monkeypatch.delenv('TMUX', raising=False)
+            monkeypatch.delenv('TMUX_PANE', raising=False)
+            monkeypatch.setattr(mail_signals.subprocess, 'run', lambda argv, **kw:
+                                subprocess.CompletedProcess(argv, 1, '', diagnostic))
+            assert mail_signals.session_names() == set()
 
 
 def test_legacy_signals_and_exact_session_names(tmp_path, monkeypatch):

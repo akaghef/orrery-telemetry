@@ -5,6 +5,15 @@ import re
 import subprocess
 
 
+def server_absent(result):
+    """Only tmux's explicit empty-server replies prove an empty inventory."""
+    diagnostic = (result.stderr or '').strip()
+    return result.returncode == 1 and (
+        diagnostic == 'no sessions'
+        or re.fullmatch(r'no server running on .+', diagnostic) is not None
+        or re.fullmatch(r'error connecting to .+ \(No such file or directory\)', diagnostic) is not None)
+
+
 class LegacyConsumer:
     """One explicit legacy endpoint and one admission for each target effect."""
     def __init__(self,client_home,*,transport=None,api=None,proof_reader=None,transport_api=None):
@@ -61,14 +70,32 @@ class LegacyConsumer:
         return [*self.transport.argv,*args]
 
     def command(self,args,**kwargs):
+        inventory = bool(args) and args[0] in ('list-sessions', 'list-panes') and '-t' not in args
+        if inventory:
+            # Read the pinned destination afresh. ENOENT is a known empty
+            # inventory, including a server which ended after bootstrap.
+            # A newly appeared/substituted or unsafe socket is never adopted.
+            current = self.tmux['Transport'](self.transport.path, binary=self.transport.binary,
+                                             run=self.transport.run, allow_absent=True)
+            if current.identity is None:
+                return subprocess.CompletedProcess(self.transport.argv + list(args), 0, '', '')
+            if current.identity != self.transport.identity:
+                raise self.tmux['TargetError']('TMUX_SOCKET_CHANGED')
         argv=self.admitted_argv(args)
         creating=args and args[0]=='new-session' and self.transport.identity is None
         if creating:self.tmux['private_directory'](self.transport.path.parent,create=True)
+        elif self.transport.identity is None:raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
         if not creating and self.tmux['validate_socket'](self.transport.path)!=self.transport.identity:raise self.tmux['TargetError']('TMUX_SOCKET_CHANGED')
         env=kwargs.pop('env',None) or os.environ
         env={k:v for k,v in env.items() if k not in ('TMUX','TMUX_PANE')}
         kwargs.setdefault('capture_output',True);kwargs.setdefault('text',True);kwargs.setdefault('timeout',5)
         result=self.transport.run(argv,env=env,**kwargs)
+        if inventory and server_absent(result):
+            current = self.tmux['Transport'](self.transport.path, binary=self.transport.binary,
+                                             run=self.transport.run, allow_absent=True)
+            if current.identity is not None and current.identity != self.transport.identity:
+                raise self.tmux['TargetError']('TMUX_SOCKET_CHANGED')
+            return subprocess.CompletedProcess(argv, 0, '', '')
         if creating and result.returncode==0:self.transport.identity=self.tmux['validate_socket'](self.transport.path)
         return result
 
