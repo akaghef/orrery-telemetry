@@ -147,6 +147,10 @@ class Targets:
             if again['identity_sha256']!=resolved['identity_sha256']:self.fail('TMUX_TARGET_CHANGED')
             capture=transport.command('capture-pane','-p','-t',resolved['target']['pane_id'],'-S','-'+str(lines+1),deadline=self.deadline)
             if capture.returncode:self.fail('TMUX_TARGET_UNAVAILABLE')
+            target=resolved['target']
+            actual={key:target[key] for key in ('pid','pane_id','session_id')}
+            actual['session']=target['session_name']
+            self.tmux['verify_live_pane'](transport,target,actual,api=self.api,deadline=self.deadline)
             rows=capture.stdout.splitlines();return self.response(resolved,operation,capture=dict(text='\n'.join(rows[-lines:]),truncated=len(rows)>lines,max_lines=lines)),'capture.success'
         if operation=='attach':
             if resolved['retired']:self.fail('TARGET_UNAVAILABLE')

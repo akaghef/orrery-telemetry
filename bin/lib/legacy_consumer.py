@@ -24,6 +24,16 @@ class LegacyConsumer:
         args=list(args)
         if not args:raise self.tmux['TargetError']('TMUX_TARGET_INPUT_INVALID')
         command=args[0]
+        if command=='new-session' and self.transport.identity is None:
+            # Absence at bootstrap is not permission to adopt a server which
+            # appeared before this admission. Use the existing socket/target
+            # checks for both command() and the interactive CLI handoff.
+            if self.transport.path.exists() or self.transport.path.is_symlink():
+                self.transport.identity=self.tmux['validate_socket'](self.transport.path)
+                server=self.transport.command('display-message','-p','#{pid}')
+                if server.returncode or not server.stdout.strip().isdigit() or int(server.stdout.strip())<1:
+                    raise self.tmux['TargetError']('LEGACY_TMUX_TRANSPORT_UNAVAILABLE')
+                self.transport.server_pid=int(server.stdout.strip())
         if command=='new-session' and '-s' in args and self.transport.identity is not None:
             name_index=args.index('-s')+1
             if name_index>=len(args):raise self.tmux['TargetError']('TMUX_TARGET_INPUT_INVALID')
