@@ -67,3 +67,5 @@ reason と分類の正本は JSON の reasons です。transport は接続先を
 Telemetry の transport/consumer と公開 cockpit の旧対象保護を別 PR にします。共有 CLI をこの draft で固定し、cockpit の fixture にはこの実コードと installer 正本の payload を配備します。双方の merge と配布 launcher の対応前に専用起動を有効にしません。新しい rollout flag や確認台帳を作りません。
 
 試験は一時 HOME、短い一時 directory、隔離した `-L` server を使い、実行境界は照合済みの絶対 `-S` へ固定します。既定の live tmux server、実 provider HOME、実 Mail DB は使いません。
+
+共有 helper のコード namespace は consumer process ごとに一度だけ読みます。更新後は consumer を再起動します。env.sh の literal 読取結果は env.sh と reader の dev/inode/mtime/ctime/size/mode/UID が同じ間だけ再利用します。context/live の配置観測は呼出しごとに読み、保存しません。

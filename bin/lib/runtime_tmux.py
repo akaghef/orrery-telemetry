@@ -15,6 +15,19 @@ import shlex
 import stat
 import subprocess
 import time
+import threading
+
+_MODULES = {}
+_SETTINGS = {}
+_CACHE_LOCK = threading.RLock()
+
+
+def module_api(name):
+    """Load code once per consumer process; placement/live data stays fresh."""
+    with _CACHE_LOCK:
+        if name not in _MODULES:
+            _MODULES[name] = runpy.run_path(str(Path(__file__).with_name(name + ".py")))
+        return _MODULES[name]
 
 SPEC = json.loads(Path(__file__).with_name('runtime_tmux_contract.json').read_text())
 CONTRACT = SPEC['contract']
@@ -235,11 +248,18 @@ def installed_hints(home, deadline):
     if not env_file.exists() and not env_file.is_symlink():
         return {}
     reader = Path(__file__).resolve().parents[2] / 'hooks/project-context.sh'
+    stamps = []
     for path in (reader, env_file):
         info = path.lstat()
+        stamps.append((info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns,info.st_size,info.st_mode,info.st_uid))
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or info.st_mode & 0o022 or path.resolve() != path):
             raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+    key = (str(env_file),str(reader))
+    with _CACHE_LOCK:
+        cached = _SETTINGS.get(key)
+        if cached and cached[0] == stamps:
+            return dict(cached[1])
     result = subprocess.run(['/bin/bash', '-c',
         '. "$1"; for key in AGENTSTACK_RUNTIME_MODE AGENTSTACK_GLOBAL_SERVER_CONFIG AGENTSTACK_CLIENT_CONFIG; do '
         'agentstack_installed_env_value "$key" "$2" --shell || exit 2; printf "\\n"; done',
@@ -256,17 +276,27 @@ def installed_hints(home, deadline):
             raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
         name, value = tokens[1].split('=', 1)
         values[name] = value
+    after = []
+    for path in (reader,env_file):
+        info = path.lstat()
+        after.append((info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns,info.st_size,info.st_mode,info.st_uid))
+    if stamps != after:
+        raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+    with _CACHE_LOCK:
+        if len(_SETTINGS) >= 64:
+            _SETTINGS.clear()
+        _SETTINGS[key] = (stamps,dict(values))
     return values
 
 
 def global_inventory(client_home, *, api=None, deadline=None):
     """One root reader for admission and repair diagnostics; no new state."""
     if api is None:
-        api = runpy.run_path(str(Path(__file__).with_name('runtime_client.py')))
+        api = module_api('runtime_client')
     deadline = time.monotonic()+5 if deadline is None else deadline
     home = Path(client_home)
-    operator_api = runpy.run_path(str(Path(__file__).with_name('runtime_operator.py')))
-    observation_api = runpy.run_path(str(Path(__file__).with_name('runtime_observation.py')))
+    operator_api = module_api('runtime_operator')
+    observation_api = module_api('runtime_observation')
     proofs, diagnostics = [], []
     homes = {home: None}
     def issue(name=None, instance=None, check='placement'):
@@ -370,7 +400,7 @@ def legacy_admission(transport, client_home, *, session=None, pane=None,
     if operation not in OPERATIONS:
         raise TargetError('TMUX_OPERATION_INVALID')
     if api is None:
-        api = runpy.run_path(str(Path(__file__).with_name('runtime_client.py')))
+        api = module_api('runtime_client')
     deadline = time.monotonic() + 5 if deadline is None else deadline
     targets = panes(transport, session=session, pane=pane, deadline=deadline)
     # A session-wide destructive operation protects every constituent pane.

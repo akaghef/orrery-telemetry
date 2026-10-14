@@ -358,3 +358,41 @@ def test_busy_observation_is_transient_helper_unavailable(monkeypatch,capsys,tmp
     assert json.loads(capsys.readouterr().out)=={
         'contract':'orrery-tmux-target-v1','ok':False,'allowed':False,
         'reason':'TMUX_HELPER_FAILED','failure_kind':'helper'}
+
+
+
+def test_repeated_inventory_loads_code_once_but_observes_new_roots(tmp_path,monkeypatch):
+    api=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux.py'))
+    original=runpy.run_path;loads=[]
+    def load(path,*args,**kwargs):
+        loads.append(Path(path).name)
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(runpy,'run_path',load)
+    home=tmp_path/'home';home.mkdir(mode=0o700)
+    assert api['global_inventory'](home)['global_complete'] is True
+    parent=home/'clients';parent.mkdir(mode=0o700)
+    (parent/'partial').mkdir(mode=0o700)
+    assert api['global_inventory'](home)['global_complete'] is False
+    assert loads.count('runtime_operator.py')==1
+    assert loads.count('runtime_observation.py')==1
+
+
+def test_installed_hint_cache_rechecks_file_metadata_and_content(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    api=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux.py'))
+    home=tmp_path/'home';home.mkdir(mode=0o700)
+    path=home/'env.sh';path.write_text('legacy');calls=[]
+    def read(*args,**kwargs):
+        calls.append(1)
+        return SimpleNamespace(returncode=0,stdout='export AGENTSTACK_RUNTIME_MODE='+path.read_text()+'\n')
+    monkeypatch.setattr(subprocess,'run',read)
+    import time
+    assert api['installed_hints'](home,time.monotonic()+5)['AGENTSTACK_RUNTIME_MODE']=='legacy'
+    assert api['installed_hints'](home,time.monotonic()+5)['AGENTSTACK_RUNTIME_MODE']=='legacy'
+    assert len(calls)==1
+    path.write_text('global')
+    assert api['installed_hints'](home,time.monotonic()+5)['AGENTSTACK_RUNTIME_MODE']=='global'
+    assert len(calls)==2
+    path.chmod(0o666)
+    with pytest.raises(api['TargetError'],match='GLOBAL_TARGET_OWNERSHIP_UNKNOWN'):
+        api['installed_hints'](home,time.monotonic()+5)

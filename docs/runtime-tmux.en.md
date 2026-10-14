@@ -67,3 +67,5 @@ Placement-read timeouts, deadline exhaustion and internal KeyError/TypeError ret
 Telemetry transport/consumers and public cockpit legacy protection use separate PRs. This draft fixes their shared CLI, and cockpit fixtures deploy its actual code through the installer payload declaration. Dedicated launch is not enabled before both merges and launcher deployment support. No rollout flag or verification ledger is added.
 
 Tests use temporary HOME, short private directories and isolated `-L` servers. The execution boundary pins the verified absolute `-S` socket. Tests never use the live default tmux server, real provider HOME or real Mail DB.
+
+The shared helper loads code namespaces once per consumer process; restart consumers after updating it. Literal settings results are reused only while env.sh and its reader retain the same device/inode/mtime/ctime/size/mode/UID. Context/live placement observations remain fresh per call and are never stored.
