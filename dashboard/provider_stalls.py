@@ -19,18 +19,29 @@ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _WORK = re.compile(r"(?im)^\s*[•▌●]\s*(?:Working|Thinking)\b[^\n]*\([^\n]*(?:\d+\s*s|esc to interrupt)")
 _FOOTER = re.compile(r"^(?:gpt-\S+|sol|luna|astra|terra)\s+(?:low|medium|high|xhigh|max|ultra)\b.*$", re.I)
 _UI = re.compile(r"^(?:[─━\s]+|\? for shortcuts.*|\d+% context left.*)$")
+# Codex rust-v0.159.2, tui/src/bottom_pane/unified_exec_footer.rs::summary_text.
+# Only this complete footer may sit between the error and the composer.
+_BACKGROUND_TERMINALS = re.compile(
+    r"(?:1 background terminal|(?:[2-9]|[1-9][0-9]+) background terminals)"
+    r" running · /ps to view · /stop to close"
+)
 
 
 def classify(text: str) -> dict:
-    """Only an exact terminal error immediately above the current prompt counts."""
+    """An exact terminal error and known composer chrome identify a current stop."""
     text = _ANSI.sub("", text).replace("\r", "")
     errors = list(_ERROR.finditer(text))
     if errors:
         suffix = [line.strip() for line in text[errors[-1].end():].splitlines() if line.strip()]
         prompts = [i for i, line in enumerate(suffix) if line.startswith("›")]
-        if len(prompts) == 1 and prompts[0] == 0 and all(
-            _FOOTER.fullmatch(line) or _UI.fullmatch(line)
-            for line in suffix[1:]
+        prompt = prompts[0] if len(prompts) == 1 else -1
+        if (
+            prompt in (0, 1)
+            and (prompt == 0 or _BACKGROUND_TERMINALS.fullmatch(suffix[0]))
+            and all(
+                _FOOTER.fullmatch(line) or _UI.fullmatch(line)
+                for line in suffix[prompt + 1:]
+            )
         ):
             return {"state": "capacity", "error": CAPACITY}
     # Historical work before a terminal error cannot rearm a stopped episode.
