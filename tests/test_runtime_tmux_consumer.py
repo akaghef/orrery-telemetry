@@ -124,3 +124,18 @@ def test_legacy_session_rename_pins_the_session_id_not_its_first_pane(consumer):
     with pytest.raises(API['TargetError'],match='^LEGACY_TARGET_IS_GLOBAL$'):
         c.command(['rename-session','-t','$1','NewName'])
     assert sum(argv[3]=='rename-session' for argv in calls)==1
+
+
+def test_legacy_attach_or_create_cannot_adopt_an_existing_global_session(consumer):
+    c,calls,state=consumer;original=c.transport.run
+    def run(argv,**kw):
+        if argv[3]=='list-sessions':
+            calls.append(argv);return subprocess.CompletedProcess(argv,0,'Alpha\n','')
+        return original(argv,**kw)
+    c.transport.run=run
+    c.command(['new-session','-A','-s','Alpha'])
+    assert sum(argv[3]=='new-session' for argv in calls)==1
+    state['global']=True
+    with pytest.raises(API['TargetError'],match='^LEGACY_TARGET_IS_GLOBAL$'):
+        c.command(['new-session','-A','-s','Alpha'])
+    assert sum(argv[3]=='new-session' for argv in calls)==1

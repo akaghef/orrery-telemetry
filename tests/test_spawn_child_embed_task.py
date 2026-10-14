@@ -635,6 +635,7 @@ def test_initial_watch_reuses_successful_capture_but_rechecks_failure(
 ):
     import re
     body=re.search(r'(?ms)^codex_watch_initial_task\(\) \{.*?^\}',SPAWN.read_text()).group()
+    alive_body=re.search(r'(?ms)^codex_session_alive\(\) \{.*?^\}',SPAWN.read_text()).group()
     log=tmp_path/'calls';script=tmp_path/'watch.sh'
     script.write_text("""#!/bin/bash
 sleep() { :; }
@@ -652,7 +653,7 @@ codex_turn_running_on_screen() { return 0; }
 codex_turn_finished_on_screen() { return 1; }
 pane_nonblank_tail() { cat; }
 spawn_note() { printf '%s\n' "$*"; }
-"""+body+"\ncodex_watch_initial_task Fixture task watch '' ''\n")
+"""+alive_body+"\n"+body+"\ncodex_watch_initial_task Fixture task watch '' ''\n")
     env={**os.environ,'CALL_LOG':str(log),'CAPTURE_OK':str(int(capture_ok)),'ALIVE':str(int(alive))}
     result=subprocess.run(['/bin/bash',str(script)],env=env,text=True,capture_output=True,timeout=10)
     assert result.returncode==expected,result.stderr

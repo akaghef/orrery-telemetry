@@ -24,6 +24,15 @@ class LegacyConsumer:
         args=list(args)
         if not args:raise self.tmux['TargetError']('TMUX_TARGET_INPUT_INVALID')
         command=args[0]
+        if command=='new-session' and '-s' in args and self.transport.identity is not None:
+            name_index=args.index('-s')+1
+            if name_index>=len(args):raise self.tmux['TargetError']('TMUX_TARGET_INPUT_INVALID')
+            existing=self.transport.command('list-sessions','-F','#{session_name}')
+            if existing.returncode:raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
+            if args[name_index] in existing.stdout.splitlines():
+                # -A may attach an existing session. Creation is not permission
+                # to bypass the same current-target guard.
+                self.admission(args[name_index],'attach' if '-A' in args else 'capture')
         operation={'send-keys':'input','paste-buffer':'input','split-window':'split','kill-pane':'close','kill-window':'close','kill-session':'kill-session','attach':'attach','attach-session':'attach'}.get(command,'capture')
         if '-t' in args:
             index=args.index('-t')+1
