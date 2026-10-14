@@ -31,7 +31,9 @@ The dashboard displays `MODEL CAPACITY` on DECK and `CAPACITY` on NETWORK when a
 
 `AGENTSTACK_RUNTIME_DIR/provider-stalls.json` preserves each episode across dashboard restarts. Only observed work rearms notification. Parentless sessions get a marker alone. Unverified parents or owner credentials retain the marker. If a send times out with an uncertain acceptance, it is not retried: `delivery_unknown` / `MAIL UNCONFIRMED` remains visible. During transport failures this prioritizes avoiding duplicates over guaranteeing delivery.
 
-Only the confirmed Codex capacity message is supported. Historical/quoted errors, busy or approval screens, and unknown provider errors do not trigger a notice. Codex App, headless, and **global mode are not supported yet**.
+Only the confirmed Codex capacity message is supported, either bare or with remote compaction's `Error running remote compact task: ` prefix. Unknown prefixes and other compaction errors are excluded. Historical/quoted errors, busy or approval screens, and unknown provider errors do not trigger a notice. Codex App, headless, and **global mode are not supported yet**.
+
+Detection also handles Codex's own line wrapping of the fixed error text. A single newline is allowed only between its known words; blank lines and unrelated output are never joined.
 
 Detection also accepts Codex's single background-terminal count row, including its `/ps` and `/stop` hints, between the error and the composer. Only the exact singular/plural status row is allowed. Ordinary output, queued-input bodies, and `/ps` results are not skipped.
 

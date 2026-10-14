@@ -35,7 +35,9 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 同じ停止の通知は1回だけです。`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` に状態を保存し、dashboard 再起動後も重複を防ぎます。作業再開を観測した後の次の停止は再び通知します。親無しは印だけ、親や子の credential を検証できない場合も印を残します。Mail の timeout など受理有無が不明な場合は、重複を避けるため再送せず `delivery_unknown` / `MAIL UNCONFIRMED` を表示します。障害時に「重複なし」と「必ず届く」を両方保証するものではありません。
 
-初版は上記 Codex capacity 文言だけが対象です。過去ログに残ったエラー、作業中・承認待ち、未知の provider エラーは判定しません。tmux を使わない Codex App / headless と **global mode は未対応・後続**です。
+初版は上記 Codex capacity 文言と、remote compact がその前に `Error running remote compact task: ` を付けた形式だけが対象です。未知の前置きや compact 中の他のエラーへは広げません。過去ログに残ったエラー、作業中・承認待ち、未知の provider エラーは判定しません。tmux を使わない Codex App / headless と **global mode は未対応・後続**です。
+
+Codex 自身が固定エラー文を折り返す場合も検知します。固定文言の単語間だけで改行を1つ許し、空行や無関係な行は連結しません。
 
 エラーと入力欄の間に Codex の background terminal 件数と `/ps`・`/stop` の案内行がある場合も検知します。許すのは実際の単数・複数の固定表示1行だけで、通常の出力・queued input の本文・`/ps` の実行結果は読み飛ばしません。
 
