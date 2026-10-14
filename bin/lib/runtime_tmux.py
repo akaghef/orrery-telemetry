@@ -506,10 +506,19 @@ def compact_readiness(text,provider):
 def compact_refusal(readiness):
     return module_api('terminal_state')['compact_refusal'](readiness)
 
-def target_digest(target,principal,proof,readiness,screen=None):
-    delivery=module_api('runtime_delivery')
-    normalized=module_api('terminal_state')['normalize'](screen) if screen is not None else None
-    return delivery['digest'](dict(version=1,target=target,principal=principal,proof=proof,readiness=readiness,screen_sha256=delivery['digest'](normalized) if normalized is not None else None))
+def identity_digest(target,principal,proof):
+    return module_api('runtime_delivery')['digest'](
+        dict(version=1,target=target,principal=principal,proof=proof))
+
+
+def target_digest(target,principal,proof,readiness,screen=None,provider=None):
+    """Compact binds input/context evidence, never unrelated terminal prose."""
+    suffix = (module_api('terminal_state')['prompt_suffix'](screen,provider)
+              if screen is not None else None)
+    return module_api('runtime_delivery')['digest'](dict(
+        version=1,identity_sha256=identity_digest(target,principal,proof),
+        readiness=readiness,input_suffix=suffix))
+
 
 def target_result_schema(name):
     if TARGET_SPEC is None:raise TargetError('TMUX_HELPER_FAILED')
@@ -553,6 +562,20 @@ def endpoint_candidates(home,instance,launch=None):
     return values
 
 
+def verify_live_process(live,*,api,deadline=None):
+    if api['process_start'](live['pid'],deadline=deadline)!=live['process_start']:
+        raise TargetError('TMUX_TARGET_CHANGED')
+
+
+def verify_live_pane(transport,live,actual,*,api,deadline=None):
+    """Issue a proof only after all pane/screen observations have completed."""
+    rows=panes(transport,pane=actual['pane_id'],deadline=deadline)
+    fields=('pid','pane_id','session_id','session')
+    if len(rows)!=1 or any(rows[0][key]!=actual[key] for key in fields):
+        raise TargetError('TMUX_TARGET_CHANGED')
+    verify_live_process(live,api=api,deadline=deadline)
+
+
 def live_target(live,context,launch=None,*,api=None,deadline=None):
     """Same explicit socket/pane/PID proof for observation and notifications."""
     api=module_api('runtime_client') if api is None else api
@@ -571,7 +594,7 @@ def live_target(live,context,launch=None,*,api=None,deadline=None):
             if launch:
                 expected=context['identity']['name'] if kind=='global-instance' else 'orrery-'+launch['launch_id']
                 if row['session']!=expected:raise TargetError('TMUX_TARGET_CHANGED')
-            if api['process_start'](live['pid'],deadline=deadline)!=start:raise TargetError('TMUX_TARGET_CHANGED')
+            verify_live_pane(transport,live,row,api=api,deadline=deadline)
             found.append((transport,row))
     if len(found)>1:raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
     return found[0] if found else None

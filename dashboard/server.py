@@ -2502,17 +2502,29 @@ def _write_wt_launcher(tmux_args: list[str], title: str) -> str:
     return path
 
 
+def _legacy_terminal_argv(tmux_args: list[str]) -> list[str]:
+    """Admit now and re-admit inside the actual terminal/ttyd child."""
+    if not tmux_args or tmux_args[0] != 'tmux':
+        return tmux_args
+    consumer = _legacy_tmux_consumer()
+    if consumer is None:
+        return tmux_args
+    consumer.admitted_argv(tmux_args[1:])
+    helper = Path(HOOKS_DIR).parent / 'bin/lib/runtime_tmux_consumer.py'
+    transport = consumer.transport
+    fixed = ['env', 'AGENTSTACK_HOME='+str(consumer.home)]
+    if transport.identity is not None:
+        fixed.append('TMUX='+str(transport.path)+','+str(transport.server_pid)+',0')
+    else:
+        fixed = ['env', '-u', 'TMUX', 'AGENTSTACK_HOME='+str(consumer.home), 'TMUX_TMPDIR='+str(transport.path.parent.parent)]
+    return [*fixed, sys.executable, str(helper), *tmux_args[1:]]
+
+
 def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
     adapter = _terminal_adapter()
     if adapter == "none":return _terminal_unsupported()
     try:
-        if tmux_args and tmux_args[0]=='tmux' and len(tmux_args)>1 and tmux_args[1] in ('attach','attach-session'):
-            consumer=_legacy_tmux_consumer()
-            if consumer is not None:
-                consumer.admitted_argv(tmux_args[1:])
-                # Recheck again in the terminal process; no saved permission.
-                helper=Path(HOOKS_DIR).parent/'bin/lib/runtime_tmux_consumer.py'
-                tmux_args=[sys.executable,str(helper),*tmux_args[1:]]
+        tmux_args = _legacy_terminal_argv(tmux_args)
         if adapter == "ghostty":
             cmd = [
                 "env", "-u", "TMUX", "-u", "TMUX_PANE",
@@ -2562,8 +2574,11 @@ def _launch_resume_tmux(tmux_args: list[str], title: str, open_terminal: bool | 
     # -A would attach to an existing session and block the HTTP request.
     detached = ["-d" if arg == "-A" else arg for arg in tmux_args]
     try:
-        result = subprocess.run(["env", "-u", "TMUX", "-u", "TMUX_PANE", *detached],
-                                capture_output=True, text=True, timeout=8)
+        if detached and detached[0]=='tmux':
+            result = _tmux_run(detached[1:],capture_output=True,text=True,timeout=8)
+        else:
+            result = subprocess.run(["env", "-u", "TMUX", "-u", "TMUX_PANE", *detached],
+                                    capture_output=True,text=True,timeout=8)
     except Exception as exc:
         return {"ok": False, "error": f"detached tmux launch failed: {exc}"}
     if result.returncode:
@@ -6259,7 +6274,15 @@ def ttyd_ensure(session: str) -> dict:
     if not os.path.exists(TTYD_BIN):
         return {"ok": False, "error": "ttyd が見つかりません"}
     with _TTYD_LOCK:
+        try:
+            attach_args = _legacy_terminal_argv(['tmux', 'attach', '-t', f'={session}'])
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            return {'ok': False, 'error': str(exc)}
         rec = _TTYD.get(session)
+        if rec and _ttyd_alive(rec) and rec.get('attach_args') != attach_args:
+            _ttyd_kill(rec)
+            _TTYD.pop(session, None)
+            rec = None
         if rec and _ttyd_alive(rec):
             rec["last"] = time.time()
             return {"ok": True, "url": f"http://127.0.0.1:{rec['port']}/",
@@ -6272,11 +6295,11 @@ def ttyd_ensure(session: str) -> dict:
              "-m", "3", "-t", "fontSize=13",
              "-t", "titleFixed=" + session,
              "-t", "disableLeaveAlert=true",
-             "tmux", "attach", "-t", f"={session}"],
+             *attach_args],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        _TTYD[session] = {"proc": proc, "port": port, "last": time.time()}
+        _TTYD[session] = {"proc": proc, "port": port, "last": time.time(), "attach_args": attach_args}
     time.sleep(0.5)  # ttyd の listen 開始を待つ
     if proc.poll() is not None:
         return {"ok": False, "error": "ttyd 起動失敗"}
@@ -9247,7 +9270,7 @@ def _child_session_live(name: str, boot: float | None) -> bool | None:
     try:
         # Under the lease lock: keep it shorter than a lease writer waits (10 s).
         done = _tmux_run(['has-session', '-t', f'={name}'], capture_output=True, text=True, timeout=2)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, RuntimeError, subprocess.SubprocessError):
         return None
     if done.returncode == 0:
         return True

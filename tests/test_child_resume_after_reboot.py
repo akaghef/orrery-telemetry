@@ -144,7 +144,7 @@ def test_the_lease_commands_answer_for_the_hooks(tmp_path):
 def test_the_dashboard_tells_a_live_child_from_a_gone_one(monkeypatch, tmp_path, returncode, stderr, expected):
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(server, "HOOKS_DIR", os.path.dirname(child_resume.__file__))
-    monkeypatch.setattr(server.subprocess, "run",
+    monkeypatch.setattr(server, "_tmux_run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], returncode, "", stderr))
     assert server._child_session_live(NAME, _boot()) is expected
 
@@ -291,3 +291,11 @@ def test_only_children_left_running_or_mid_resume_are_asked_about(resume, tmp_pa
     child_resume.recover_after_reboot(runtime, is_live=lambda name: asked.append(name) or True,
                                       retention_days=30, boot=_boot())
     assert asked == [NAME, ]
+
+
+@pytest.mark.parametrize('reason',['GLOBAL_TARGET_OWNERSHIP_UNKNOWN','LEGACY_TARGET_IS_GLOBAL'])
+def test_actual_dashboard_unknown_admission_keeps_reboot_liveness_unknown(monkeypatch,tmp_path,reason):
+    monkeypatch.setattr(server,'RUNTIME_DIR',str(tmp_path))
+    def unknown(*args,**kwargs):raise RuntimeError(reason)
+    monkeypatch.setattr(server,'_tmux_run',unknown)
+    assert server._child_session_live(NAME,_boot()) is None

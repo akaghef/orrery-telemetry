@@ -682,7 +682,7 @@ def test_required_mcp_initialization_failure_is_a_failed_start():
     # No native Codex or live tmux: replay a required-server startup failure.
     script = (
         'sleep() { :; }\n'
-        'tmux() { echo "Error: required MCP server chosen failed to initialize"; }\n'
+        'tmux() { echo "Error: required MCP server chosen failed to initialize"; return 1; }\n'
         'codex_session_alive() { return 1; }\n'
         + _extract("codex_watch_initial_task")
         + '\nSECONDS=0; codex_watch_initial_task Child task test /l id\n'
@@ -1282,7 +1282,7 @@ def test_codex_polls_capture_the_visible_screen_only():
     assert 'capture-pane -t "$CHILD_NAME" -p -S -30' not in text
     # The shared Claude wait plus the shared Codex watch.
     assert 'pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)' in _extract("wait_for_claude_ready")
-    assert 'pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"' in _extract("codex_watch_initial_task")
+    assert 'if pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null)"; then' in _extract("codex_watch_initial_task")
 
 
 def test_child_shell_never_sources_a_user_bootstrap():

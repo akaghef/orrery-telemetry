@@ -240,7 +240,7 @@ def test_app_desktop_metadata_is_not_current_provider_proof(target):
         target['targets'].execute('target',2,operator=True)
 
 
-def test_changed_screen_with_same_idle_and_context_invalidates_digest(target,monkeypatch):
+def test_changed_prose_keeps_compact_digest_but_changed_context_invalidates(target,monkeypatch):
     original=TMUX['Transport'].command
     screen={'text':'first reply\n❯\nctx: 14% used'}
     def terminal(self,*args,**kw):
@@ -252,7 +252,8 @@ def test_changed_screen_with_same_idle_and_context_invalidates_digest(target,mon
     screen['text']='different reply\n❯\nctx: 14% used'
     after=resolver.resolve(2,operator=True)
     assert after['compact_readiness']==before['compact_readiness']
-    assert after['state_sha256']!=before['state_sha256']
+    assert after['state_sha256']==before['state_sha256']
+    screen['text']='different reply\n❯\nctx: 15% used'
     with pytest.raises(TMUX['TargetError'],match='^RESOLUTION_DIGEST_MISMATCH$'):
         resolver.execute('send-compact',2,operator=True,confirm=lambda:True,expected=before['state_sha256'])
 
@@ -274,3 +275,222 @@ def test_unknown_compact_submission_does_not_retry_or_write_a_journal(target,mon
     # Readback is permitted; it does not retry the submitted bytes.
     resolver.execute('target',2,operator=True)
     assert len(commands)==2
+
+
+@pytest.mark.parametrize('operation',['capture','attach'])
+def test_moving_terminal_prose_preserves_actual_capture_attach(target,monkeypatch,operation):
+    original=TMUX['Transport'].command
+    count=[0]
+    def moving(self,*args,**kw):
+        if args[0]=='capture-pane':
+            count[0]+=1
+            return subprocess.CompletedProcess(args,0,f'* Stewing ({count[0]}s)\n❯\nctx: 14% used','')
+        return original(self,*args,**kw)
+    monkeypatch.setattr(TMUX['Transport'],'command',moving)
+    calls=[]
+    result=target['targets'].execute(operation,2,operator=True,exec_fn=lambda *args:calls.append(args))
+    if operation=='capture':assert result[1]=='capture.success'
+    else:assert len(calls)==1
+
+
+def test_actual_compact_rejects_pid_reuse_during_last_capture_before_send(target,monkeypatch):
+    original=TMUX['Transport'].command
+    state={'start':'fixture-start','captures':0};effects=[]
+    target['targets'].api['process_start']=lambda *args,**kw:state['start']
+    def terminal(self,*args,**kw):
+        if args[0]=='capture-pane':
+            state['captures']+=1
+            if state['captures']==3:state['start']='replacement-start'
+            return subprocess.CompletedProcess(args,0,'❯\nctx: 14% used','')
+        if args[0]=='send-keys':effects.append(args);return subprocess.CompletedProcess(args,0,'','')
+        return original(self,*args,**kw)
+    monkeypatch.setattr(TMUX['Transport'],'command',terminal)
+    first=target['targets'].resolve(2,operator=True)
+    with pytest.raises(TMUX['TargetError'],match='^TMUX_TARGET_CHANGED$'):
+        target['targets'].execute('send-compact',2,operator=True,confirm=lambda:True,expected=first['state_sha256'])
+    assert effects==[]
+
+
+
+def test_actual_global_resume_open_accepts_changing_display(target,monkeypatch):
+    from dashboard.global_backend import Backend
+    from types import SimpleNamespace
+    original=TMUX['Transport'].command;count=[0];opened=[]
+    def moving(self,*args,**kwargs):
+        if args[0]=='capture-pane':
+            count[0]+=1
+            return subprocess.CompletedProcess(args,0,f'* Stewing ({count[0]}s)\n❯\nctx: 14% used','')
+        return original(self,*args,**kwargs)
+    monkeypatch.setattr(TMUX['Transport'],'command',moving)
+    old=TMUX['module_api']
+    monkeypatch.setitem(TMUX,'module_api',lambda name: {'Targets':lambda *args,**kw:target['targets']} if name=='runtime_target' else old(name))
+    backend=object.__new__(Backend)
+    backend.operator=SimpleNamespace(api={**api,'runtime_tmux_api':lambda:TMUX},path=target['server']['config_path'],
+        resume=lambda *args,**kw:dict(agent_id=2,launch_status=dict(phase='running',operator_required=False)))
+    result=backend.post('/api/global/resume',dict(client_name='fixture',open=True),lambda p:p,
+        lambda argv,**kw:opened.append(argv) or {'ok':True})
+    assert result['agent_id']==2 and len(opened)==1
+    assert 'attach' in opened[0] and '--operator' in opened[0]
+
+
+def test_actual_global_resume_maps_unavailable_target_without_undoing_resume(target,monkeypatch):
+    from dashboard.global_backend import Backend,BackendError
+    from types import SimpleNamespace
+    old=TMUX['module_api'];events=[]
+    def unavailable(*args,**kwargs):raise TMUX['TargetError']('TMUX_TARGET_UNAVAILABLE')
+    monkeypatch.setitem(TMUX,'module_api',lambda name: {'Targets':lambda *args,**kw:SimpleNamespace(execute=unavailable)} if name=='runtime_target' else old(name))
+    backend=object.__new__(Backend)
+    backend.operator=SimpleNamespace(api={**api,'runtime_tmux_api':lambda:TMUX},path=target['server']['config_path'],
+        resume=lambda *args,**kw:events.append('resumed') or dict(agent_id=2,launch_status=dict(phase='gated',operator_required=False)))
+    with pytest.raises(BackendError,match='^TERMINAL_OPEN_FAILED$'):
+        backend.post('/api/global/resume',dict(client_name='fixture',open=True),lambda p:p,
+            lambda *args,**kw:events.append('terminal') or {'ok':True})
+    assert events==['resumed']
+
+
+@pytest.mark.parametrize('scope',['self','child'])
+@pytest.mark.parametrize('print_only',[False,True])
+@pytest.mark.parametrize('read_only',[False,True])
+def test_real_global_cli_owner_cannot_attach_any_target_variant(target,capsys,scope,print_only,read_only):
+    aid=2 if scope=='self' else target['client'].prepare_child(dict(child_client_name='attach-child',name='AttachChild',program='claude-code',model='fixture-model'))['agent_id']
+    argv=['attach','--agent-id',str(aid),'--context',str(target['client'].path)]
+    if print_only:argv.append('--print')
+    if read_only:argv.append('--read-only')
+    code=TARGET['main'](argv,api=target['targets'].api)
+    streams=capsys.readouterr();value=json.loads(streams.out)
+    assert code==2 and value['reason']=='OPERATOR_CONFIRMATION_REQUIRED'
+    assert value['effects']=='none'
+    assert 'fixture-owner-two' not in streams.out+streams.err
+
+
+@pytest.mark.parametrize('flag',['--socket','--root','--session','--argv'])
+def test_real_target_cli_rejects_arbitrary_target_fields_before_resolution(capsys,flag):
+    code=TARGET['main'](['target','--agent-id','2',flag,'/arbitrary'])
+    value=json.loads(capsys.readouterr().out)
+    assert code==2 and value['reason']=='TMUX_TARGET_INPUT_INVALID'
+    assert value['effects']=='none'
+
+
+@pytest.mark.parametrize('lines',[0,1000])
+def test_actual_capture_line_boundary_zero_and_thousand(target,lines):
+    if lines==0:
+        with pytest.raises(TMUX['TargetError'],match='^TMUX_TARGET_INPUT_INVALID$'):
+            target['targets'].execute('capture',2,operator=True,lines=lines)
+    else:
+        value,name=target['targets'].execute('capture',2,operator=True,lines=lines)
+        assert name=='capture.success' and value['capture']['max_lines']==1000
+
+
+
+def test_actual_confirmation_wait_gets_fresh_budget_and_same_digest(target,monkeypatch):
+    import time
+    original=TMUX['Transport'].command;effects=[]
+    def terminal(self,*args,**kw):
+        if args[0]=='capture-pane':return subprocess.CompletedProcess(args,0,'❯\nctx: 14% used','')
+        if args[0]=='send-keys':effects.append(args);return subprocess.CompletedProcess(args,0,'','')
+        return original(self,*args,**kw)
+    monkeypatch.setattr(TMUX['Transport'],'command',terminal)
+    resolver=target['targets'];first=resolver.resolve(2,operator=True)
+    def human_wait():
+        resolver.deadline=time.monotonic()-1
+        resolver.observations.deadline=resolver.deadline
+        return True
+    value,name=resolver.execute('send-compact',2,operator=True,expected=first['state_sha256'],confirm=human_wait)
+    assert name=='compact.submitted' and len(effects)==2
+
+
+@pytest.mark.parametrize('tty,answer',[(False,'yes'),(True,'no')])
+def test_real_operator_cli_requires_actual_yes_after_target_proof(target,monkeypatch,capsys,tty,answer):
+    import sys
+    from types import SimpleNamespace
+    first=target['targets'].resolve(2,operator=True)
+    monkeypatch.setattr(sys,'stdin',SimpleNamespace(isatty=lambda:tty))
+    monkeypatch.setattr('builtins.input',lambda _:answer)
+    code=TARGET['main'](['send-compact','--operator','--runtime-mode','global','--server-config',str(target['server']['config_path']),
+        '--agent-id','2','--confirm-state-digest',first['state_sha256']],api=target['targets'].api)
+    streams=capsys.readouterr();value=json.loads(streams.out)
+    assert code==2 and value['reason']=='OPERATOR_CONFIRMATION_REQUIRED'
+    assert value['effects']=='none'
+    assert 'fixture-owner-two' not in streams.out+streams.err
+
+
+
+def test_actual_legacy_admission_with_global_root_records_budget(target,monkeypatch,record_property):
+    import time
+    subprocess.run([*target['command'],'new-session','-d','-s','Gamma','sleep 60'],env=target['env'],check=True,capture_output=True)
+    monkeypatch.setenv('AGENTSTACK_GLOBAL_SERVER_CONFIG',str(target['server']['config_path']))
+    c=TMUX['LegacyConsumer'](Path(target['client'].config['agentstack_home']),transport=target['transport'],api=target['targets'].api)
+    started=time.monotonic()
+    result=c.command(['has-session','-t','Gamma'])
+    elapsed=time.monotonic()-started
+    assert result.returncode==0
+    record_property('global_root_admission_seconds',round(elapsed,6))
+
+
+@pytest.mark.parametrize('relation',['sibling','missing-child','stale-parent'])
+def test_actual_global_parent_permission_negative_has_valid_digest(target,monkeypatch,relation):
+    parent=target['client']
+    first=parent.prepare_child(dict(child_client_name='first',name='FirstChild',program='claude-code',model='fixture-model'))
+    second=parent.prepare_child(dict(child_client_name='second',name='SecondChild',program='claude-code',model='fixture-model'))
+    sibling=api['RuntimeClient'](parent.clients_parent/'first'/api['CLIENT_LAYOUT']['context'])
+    child=api['RuntimeClient'](parent.clients_parent/'second'/api['CLIENT_LAYOUT']['context'])
+    child.save_metadata('claude-code','fixture-model')
+    subprocess.run([*target['command'],'new-session','-d','-s','SecondChild','sleep 60'],env=target['env'],check=True,capture_output=True)
+    fields=subprocess.check_output([*target['command'],'list-panes','-s','-t','=SecondChild','-F','#{pane_id}\t#{pane_pid}'],env=target['env'],text=True).strip().split('\t')
+    (child.runtime_dir/'live-sessions').mkdir(mode=0o700,exist_ok=True)
+    api['atomic_json'](child.runtime_dir/'live-sessions/second.json',dict(kind='orrery-global-live-session-v1',**child.binding,agent_id=child.identity['agent_id'],session_id='second',pid=int(fields[1]),process_start='fixture-start',pane_id=fields[0]))
+    original=TMUX['Transport'].command;effects=[]
+    def terminal(self,*args,**kw):
+        if args[0]=='capture-pane':return subprocess.CompletedProcess(args,0,'❯\nctx: 14% used','')
+        if args[0]=='send-keys':effects.append(args);return subprocess.CompletedProcess(args,0,'','')
+        return original(self,*args,**kw)
+    monkeypatch.setattr(TMUX['Transport'],'command',terminal)
+    resolver=target['targets'];aid=child.identity['agent_id']
+    digest=resolver.resolve(aid,operator=True)['state_sha256']
+    context=sibling.path if relation=='sibling' else parent.path
+    state=child.outputs['child']
+    if relation=='missing-child':state.unlink()
+    if relation=='stale-parent':
+        value=api['read_json'](state);value['parent']['server_instance_id']='different-instance';api['atomic_json'](state,value)
+    with pytest.raises(TMUX['TargetError'],match='^OWNER_REQUIRED$'):
+        resolver.execute('send-compact',aid,context=context,expected=digest)
+    assert effects==[]
+
+
+@pytest.mark.parametrize('next_screen,reason',[
+    ('✳ Stewing… (18s · ↓ 1.1k tokens)\n❯\nctx: 14% used','TMUX_TARGET_NOT_IDLE'),
+    ('❯ draft\nctx: 14% used','TMUX_TARGET_INPUT_NOT_EMPTY'),
+    ('❯\nctx: 15% used','RESOLUTION_DIGEST_MISMATCH'),
+    ('❯\nctx: 14% used',None),
+])
+def test_actual_cli_unknown_is_exit_three_then_explicit_retry_rechecks(target,monkeypatch,capsys,next_screen,reason):
+    import sys
+    from types import SimpleNamespace
+    original=TMUX['Transport'].command
+    screen={'text':'❯\nctx: 14% used','fail':True};effects=[]
+    def terminal(self,*args,**kw):
+        if args[0]=='capture-pane':return subprocess.CompletedProcess(args,0,screen['text'],'')
+        if args[0]=='send-keys':
+            effects.append(args)
+            return subprocess.CompletedProcess(args,1 if args[-1]=='C-m' and screen['fail'] else 0,'','')
+        return original(self,*args,**kw)
+    monkeypatch.setattr(TMUX['Transport'],'command',terminal)
+    monkeypatch.setitem(TARGET['main'].__globals__,'tmux_api',lambda:TMUX)
+    monkeypatch.setattr(sys,'stdin',SimpleNamespace(isatty=lambda:True))
+    monkeypatch.setattr('builtins.input',lambda _:'yes')
+    before=root_bytes(target['client']);digest=target['targets'].resolve(2,operator=True)['state_sha256']
+    argv=['send-compact','--operator','--runtime-mode','global','--server-config',str(target['server']['config_path']),
+        '--agent-id','2','--confirm-state-digest',digest]
+    assert TARGET['main'](argv,api=target['targets'].api)==3
+    streams=capsys.readouterr();unknown=json.loads(streams.out)
+    assert unknown['reason']=='TMUX_OPERATION_OUTCOME_UNKNOWN' and unknown['effects']=='unknown'
+    assert len(effects)==2 and root_bytes(target['client'])==before
+    screen.update(text=next_screen,fail=False)
+    code=TARGET['main'](argv,api=target['targets'].api)
+    streams=capsys.readouterr();result=json.loads(streams.out)
+    assert 'fixture-owner-two' not in streams.out+streams.err
+    if reason:
+        assert code==2 and result['reason']==reason and len(effects)==2
+    else:
+        assert code==0 and result['phase']=='submitted' and len(effects)==4
+    assert root_bytes(target['client'])==before

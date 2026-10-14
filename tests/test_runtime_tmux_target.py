@@ -99,3 +99,12 @@ def test_generation_zero_and_nullable_readiness_are_valid_shared_schema():
     validator['validate_schema'](reply,API['target_result_schema']('target.success'))
     for invalid in (False,-1):
         with pytest.raises(ValueError):validator['validate_schema']({**reply,'target':{**value,'credential_generation':invalid}},API['target_result_schema']('target.success'))
+
+
+
+def test_all_public_input_branches_use_shared_validator_and_old_type_array_is_invalid():
+    api=runpy.run_path(str(ROOT/'packages/agentstack_mail/src/agentstack_mail/schema_contract.py'))
+    for schema in API['TARGET_SPEC']['input_schemas'].values():
+        api['validate_schema_definition'](schema)
+    with pytest.raises((ValueError,TypeError)):
+        api['validate_schema_definition']({'type':['boolean','null']})

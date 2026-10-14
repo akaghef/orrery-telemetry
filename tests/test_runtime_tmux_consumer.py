@@ -139,3 +139,79 @@ def test_legacy_attach_or_create_cannot_adopt_an_existing_global_session(consume
     with pytest.raises(API['TargetError'],match='^LEGACY_TARGET_IS_GLOBAL$'):
         c.command(['new-session','-A','-s','Alpha'])
     assert sum(argv[3]=='new-session' for argv in calls)==1
+
+
+@pytest.mark.parametrize('adapter',['ghostty','wt'])
+@pytest.mark.parametrize('operation',['attach-session','new-session'])
+@pytest.mark.parametrize('foreign',[False,True])
+def test_actual_terminal_caller_and_child_recheck_effect_and_endpoint(consumer,monkeypatch,operation,foreign,adapter):
+    import ast,sys
+    from types import SimpleNamespace
+    c,calls,state=consumer;effects=[];launch=[];original=c.transport.run
+    def run(argv,**kw):
+        if argv[3]=='list-sessions':return subprocess.CompletedProcess(argv,0,'Alpha\n','')
+        return original(argv,**kw)
+    c.transport.run=run
+    cli=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux_consumer.py'))
+    def modules(path):return API if str(path).endswith('runtime_tmux.py') else {'LegacyConsumer':lambda *a,**kw:c}
+    monkeypatch.setitem(cli['main'].__globals__,'runpy',SimpleNamespace(run_path=modules))
+    monkeypatch.setattr(os,'execvpe',lambda binary,argv,env:effects.append(argv))
+    def terminal(argv,**kw):
+        if adapter=='wt':argv=launch[-1]
+        index=argv.index(str(ROOT/'bin/lib/runtime_tmux_consumer.py'))
+        assert 'TMUX='+str(c.transport.path)+',123,0' in argv
+        state['global']=foreign
+        rc=cli['main'](argv[index+1:])
+        return subprocess.CompletedProcess(argv,rc,'','refused' if rc else '')
+    source=ast.parse((ROOT/'dashboard/server.py').read_text())
+    nodes=[node for node in source.body if isinstance(node,ast.FunctionDef) and node.name in ('_open_terminal_tmux','_legacy_terminal_argv')]
+    ns=dict(Path=Path,sys=sys,HOOKS_DIR=str(ROOT/'hooks'),_terminal_adapter=lambda:adapter,_wsl_distro=lambda:'FixtureWSL',
+        _write_wt_launcher=lambda argv,title:launch.append(argv) or '/fixture/launch.sh',
+        _legacy_tmux_consumer=lambda:c,subprocess=SimpleNamespace(run=terminal))
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),str(ROOT/'dashboard/server.py'),'exec'),ns)
+    args=['tmux','attach-session','-t','Alpha'] if operation=='attach-session' else ['tmux','new-session','-A','-s','Alpha']
+    result=ns['_open_terminal_tmux'](args,'Alpha')
+    assert result['ok'] is not foreign
+    if foreign:assert effects==[]
+    else:
+        assert len(effects)==1
+        assert effects[0][:3]==['fixture-tmux','-S',str(c.transport.path)]
+
+
+def test_nonascii_legacy_admission_digest_matches_literal_base_receipt(consumer,monkeypatch):
+    c,calls,state=consumer;state['actual']='日本語'
+    # Receipt computed by the base implementation; fixed public diagnostics
+    # make it independent of checkout history, UID and temporary socket names.
+    monkeypatch.setattr(c.transport,'public',lambda:dict(transport='legacy-default',
+        socket_path='/fixture/socket',argv=['fixture-tmux','-S','/fixture/socket'],
+        environment_unset=['TMUX','TMUX_PANE'],server_pid=123))
+    current=c.admission('%1','capture')
+    assert current['state_sha256']=='7b44f2f66606332f0464ab6b0fd5fe575534ba9141b7e847a0a0c93ba4ceb2ce'
+    assert current['panes'][0]['session']=='日本語'
+
+
+
+def test_actual_private_cli_retains_known_refusal_reason(consumer,monkeypatch,capsys):
+    from types import SimpleNamespace
+    c,calls,state=consumer;state['global']=True
+    cli=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux_consumer.py'))
+    monkeypatch.setitem(cli['main'].__globals__,'runpy',SimpleNamespace(run_path=lambda path:API if str(path).endswith('runtime_tmux.py') else {'LegacyConsumer':lambda *a,**kw:c}))
+    assert cli['main'](['attach-session','-t','Alpha'])==2
+    streams=capsys.readouterr()
+    assert streams.out=='' and streams.err.strip()=='LEGACY_TARGET_IS_GLOBAL'
+
+
+
+def test_actual_stop_group_cli_rechecks_after_pgid_before_signal(consumer,monkeypatch,capsys):
+    from types import SimpleNamespace
+    c,calls,state=consumer;effects=[]
+    cli=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux_consumer.py'))
+    monkeypatch.setitem(cli['main'].__globals__,'runpy',SimpleNamespace(run_path=lambda path:API if str(path).endswith('runtime_tmux.py') else {'LegacyConsumer':lambda *a,**kw:c}))
+    def process(*args,**kw):
+        state['global']=True
+        return subprocess.CompletedProcess(args,0,'555\n','')
+    monkeypatch.setattr(subprocess,'run',process)
+    monkeypatch.setattr(os,'killpg',lambda *args:effects.append(args))
+    assert cli['main'](['stop-group','Alpha'])==2
+    assert effects==[]
+    assert capsys.readouterr().err.strip()=='LEGACY_TARGET_IS_GLOBAL'

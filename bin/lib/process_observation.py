@@ -33,4 +33,3 @@ def process_start(pid, *, deadline=None):
         return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
     except (OSError, subprocess.TimeoutExpired):
         return None
-

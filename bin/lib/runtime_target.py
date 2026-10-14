@@ -115,16 +115,24 @@ class Targets:
                 if metadata.is_file():
                     program=self.api['read_json'](metadata).get('program')
                     provider={'claude-code':'claude','codex':'codex','codex-cli':'codex'}.get(program)
+        if endpoint:
+            self.tmux['verify_live_pane'](transport,live,actual,api=self.api,deadline=self.deadline)
+        else:
+            self.tmux['verify_live_process'](live,api=self.api,deadline=self.deadline)
         readiness=self.tmux['compact_readiness'](text or '',provider)
         operations=['target']+(['capture'] if endpoint else [])
         if endpoint and operator and not row.get('retired_at'):operations.append('attach')
         if endpoint and not row.get('retired_at') and principal['kind']!='owner' and not self.tmux['compact_refusal'](readiness):operations.append('send-compact')
-        state=self.tmux['target_digest'](target,principal,{'target':digest,'parent':parent_digest},readiness,screen=text)
-        return dict(root=root,target=target,principal=principal,state_sha256=state,compact_readiness=readiness,next_operations=operations,transport=endpoint[1] if endpoint else None,retired=bool(row.get('retired_at')))
+        identity=self.tmux['identity_digest'](target,principal,{'target':digest,'parent':parent_digest})
+        state=self.tmux['target_digest'](target,principal,{'target':digest,'parent':parent_digest},readiness,screen=text,provider=provider)
+        return dict(root=root,target=target,principal=principal,identity_sha256=identity,state_sha256=state,compact_readiness=readiness,next_operations=operations,transport=endpoint[1] if endpoint else None,retired=bool(row.get('retired_at')))
 
     def response(self,resolved,operation,**extra):
         keys=('principal','target','state_sha256','next_operations') + (() if operation=='attach' else ('compact_readiness',))
-        return dict(contract=self.tmux['CONTRACT'],ok=True,allowed=True,operation=operation,**{key:resolved[key] for key in keys},**extra)
+        value={key:resolved[key] for key in keys}
+        if operation in ('capture','attach'):
+            value['state_sha256']=resolved['identity_sha256']
+        return dict(contract=self.tmux['CONTRACT'],ok=True,allowed=True,operation=operation,**value,**extra)
 
     def execute(self,operation,aid,*,context=None,operator=False,lines=40,read_only=False,print_only=False,expected=None,confirm=None,exec_fn=None):
         if operation=='attach' and not operator:self.fail('OPERATOR_CONFIRMATION_REQUIRED')
@@ -136,7 +144,7 @@ class Targets:
             if not self.api['integer'](lines,1) or lines>1000:self.fail('TMUX_TARGET_INPUT_INVALID')
             # An extra line is evidence for truncation, never silently returned.
             again=self.resolve(aid,context=context,operator=operator)
-            if again['state_sha256']!=resolved['state_sha256']:self.fail('TMUX_TARGET_CHANGED')
+            if again['identity_sha256']!=resolved['identity_sha256']:self.fail('TMUX_TARGET_CHANGED')
             capture=transport.command('capture-pane','-p','-t',resolved['target']['pane_id'],'-S','-'+str(lines+1),deadline=self.deadline)
             if capture.returncode:self.fail('TMUX_TARGET_UNAVAILABLE')
             rows=capture.stdout.splitlines();return self.response(resolved,operation,capture=dict(text='\n'.join(rows[-lines:]),truncated=len(rows)>lines,max_lines=lines)),'capture.success'
@@ -149,7 +157,8 @@ class Targets:
             if print_only:return reply,'attach.admission'
             # No mutex is held during a terminal lifetime.
             current=self.resolve(aid,context=context,operator=operator)
-            if current['state_sha256']!=resolved['state_sha256']:self.fail('TMUX_TARGET_CHANGED')
+            if current['retired']:self.fail('TARGET_UNAVAILABLE')
+            if current['identity_sha256']!=resolved['identity_sha256']:self.fail('TMUX_TARGET_CHANGED')
             self.emit(reply,'attach.admission',stream=sys.stderr)
             env={k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')}
             (os.execvpe if exec_fn is None else exec_fn)(argv[0],argv,env)
@@ -157,8 +166,13 @@ class Targets:
         if resolved['retired']:self.fail('TARGET_UNAVAILABLE')
         if resolved['principal']['kind']=='owner':self.fail('TMUX_TARGET_NOT_IDLE')
         if operator and (confirm is None or not confirm()):self.fail('OPERATOR_CONFIRMATION_REQUIRED')
+        # Human confirmation is outside the observation budget and mutex.
+        if operator:
+            self.deadline=time.monotonic()+5
+            self.observations.deadline=self.deadline
         with self.api['observation_inode'](resolved['root']/'runtime/child.lock',exclusive=True):
             current=self.resolve(aid,context=context,operator=operator,held_root=resolved['root'])
+            if current['retired']:self.fail('TARGET_UNAVAILABLE')
             refusal=self.tmux['compact_refusal'](current['compact_readiness'])
             if refusal:self.fail(refusal)
             if current['state_sha256']!=expected:self.fail('RESOLUTION_DIGEST_MISMATCH')

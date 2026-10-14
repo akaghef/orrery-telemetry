@@ -268,3 +268,7 @@ operator は `--operator --runtime-mode global --server-config /absolute/server-
 context 使用率も digest に含めます。提出後の応答不明は exit 3・`effects=unknown`、自動再送と新しい journal はありません。target/capture で確認後に人が選ぶ再送は新しい明示操作で、表示と context 値が元と同じなら重複し得ます。`effects=none` の事前拒否とは区別してください。協調 mutex は人/provider の入力を止めず、最後の観測と送信の間の競合窓も残ります。
 
 旧 consumer の通知・monitor・OPEN・prune は共通の legacy admission を通し、不明な対象では副作用を止め、正常な別の対象は続けます。この段階では専用 socket の起動を有効にしません。new/rename/rollback と終了の lifecycle、launcher/provider の結線は後続で確認してから切り替えます。
+
+対象の同一性の digest は socket・pane・PID/start・owner/親の証明を結び、capture・attach と terminal open の再照合に使います。通常の画面更新では対象変更としません。compact の target digest はこの証明に入力欄の状態と ctx 値を加え、本文・時計・スピナーの更新は含めません。人の yes 待ちは観測期限に含めず、確認後の短い期限で同じ digest を再照合します。ttyd と terminal の実子も同じ helper で endpoint と対象を再照合し、cleanup は観測不明なら identity を保持します。resume 後に terminal を開けなければ `TERMINAL_OPEN_FAILED` を返しますが、成功した resume を取り消しません。
+
+`send-compact` の確認には `target` が返す `state_sha256` を使います。`capture`・`attach` が返す値は対象の同一性の確認用なので、compact の確認値として流用しません。

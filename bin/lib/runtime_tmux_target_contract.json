@@ -1041,5 +1041,12 @@
     "transport": 2,
     "helper": 70,
     "outcome": 3
+  },
+  "digest_contract": {
+    "identity": "target, principal and existing root/parent snapshot proofs; capture and attach return this digest and compare it before effects",
+    "compact": "identity plus readiness, normalized context use and current input suffix; target returns this digest for send-compact confirmation",
+    "excluded": "unrelated terminal prose, spinner, elapsed time and statusline changes",
+    "confirmation": "human confirmation outside all locks; fresh observation budget afterward, original expected compact digest retained",
+    "proof": "shared pane membership and PID/start verification after final screen observation"
   }
 }

@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -141,11 +142,14 @@ def test_manual_deck_terminal_open_ignores_automatic_policy(monkeypatch, setting
 
     monkeypatch.setattr(server.subprocess, "run", run)
     class Admitted:
+        home=ROOT
+        transport=SimpleNamespace(identity=('fixture',1),path=Path('/fixture/socket'),server_pid=7)
         def admitted_argv(self,args):return ['tmux',*args]
     monkeypatch.setattr(server, '_legacy_tmux_consumer', lambda:Admitted())
     result = server._open_terminal_tmux(["tmux", "attach", "-t", "=QuietCurie"], "QuietCurie")
     assert result == {"ok": True, "adapter": "ghostty"}
     assert commands[0][-4:] == [str(ROOT / "bin/lib/runtime_tmux_consumer.py"), "attach", "-t", "=QuietCurie"]
+    assert 'TMUX=/fixture/socket,7,0' in commands[0]
 
 
 @pytest.mark.parametrize("explicit,saved,expected", [
