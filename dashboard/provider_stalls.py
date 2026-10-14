@@ -15,8 +15,11 @@ import uuid
 
 CAPACITY = "■ Selected model is at capacity. Please try a different model."
 _ERROR = re.compile(r"(?m)^\s*■ Selected model is at capacity\.\s+Please try a different model\.[ \t]*$")
-_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_WORK = re.compile(r"(?im)^\s*[•▌●]\s*(?:Working|Thinking)\b[^\n]*\([^\n]*(?:\d+\s*s|esc to interrupt)")
+try:
+    from dashboard.terminal_state import _ANSI, _STALL_WORK as _WORK
+except ModuleNotFoundError:
+    from terminal_state import _ANSI, _STALL_WORK as _WORK
+
 _FOOTER = re.compile(r"^(?:gpt-\S+|sol|luna|astra|terra)\s+(?:low|medium|high|xhigh|max|ultra)\b.*$", re.I)
 _UI = re.compile(r"^(?:[─━\s]+|\? for shortcuts.*|\d+% context left.*)$")
 # Codex rust-v0.159.2, tui/src/bottom_pane/unified_exec_footer.rs::summary_text.

@@ -2,7 +2,9 @@
 
 # Decide explicit global context before loading any legacy environment/state.
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
-. "$_ags_global_loader" || exit 2
+. "$_ags_global_loader"
+_ags_legacy_consumer="$(dirname "$_ags_global_loader")/legacy-tmux-consumer.sh"
+if [[ -f "$_ags_legacy_consumer" ]]; then . "$_ags_legacy_consumer"; fi || exit 2
 if declare -F ags_client_entry >/dev/null; then
   if ags_client_entry end-session "$@"; then exit 0; else _ags_global_rc=$?; fi
   if [[ "$_ags_global_rc" != 125 ]]; then

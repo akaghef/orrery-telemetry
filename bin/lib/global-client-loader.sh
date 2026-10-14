@@ -10,7 +10,7 @@ ags_client_missing_admission() {
   for argument in "$@"; do
     case "$argument" in --context|--context=*|--runtime-mode|--runtime-mode=*|--server-config|--server-config=*) printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2; return 2 ;; esac
   done
-  if [[ "${AGENTSTACK_RUNTIME_MODE-legacy}" != legacy || -n "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" || -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$context" || -L "$context" ]]; then
+  if [[ "${AGENTSTACK_RUNTIME_MODE-legacy}" != legacy || -n "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" || -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$context" || -L "$context" || -e "$AGS_CLIENT_LOADER_DIR/../../clients" || -L "$AGS_CLIENT_LOADER_DIR/../../clients" ]]; then
     printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
     return 2
   fi

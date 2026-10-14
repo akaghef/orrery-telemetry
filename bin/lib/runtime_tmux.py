@@ -26,7 +26,10 @@ def module_api(name):
     """Load code once per consumer process; placement/live data stays fresh."""
     with _CACHE_LOCK:
         if name not in _MODULES:
-            _MODULES[name] = runpy.run_path(str(Path(__file__).with_name(name + ".py")))
+            path = Path(__file__).with_name(name + ".py")
+            if name == "terminal_state" and not path.is_file():
+                path = Path(__file__).resolve().parents[2]/"dashboard/terminal_state.py"
+            _MODULES[name] = runpy.run_path(str(path))
         return _MODULES[name]
 
 SPEC = json.loads(Path(__file__).with_name('runtime_tmux_contract.json').read_text())
@@ -43,6 +46,8 @@ class TargetError(RuntimeError):
 def result_schema(name):
     fields = SPEC['result_fields'][name]
     properties = {key: SPEC['result_properties'][key] for key in fields}
+    if 'reason' in properties:properties['reason']={'enum':list(REASONS)}
+    if 'capabilities' in properties:properties['capabilities']={'const':CAPABILITIES}
     if 'ok' in properties:
         properties['ok'] = {'const': name != 'error'}
     if 'allowed' in properties:
@@ -148,7 +153,7 @@ class Transport:
     def argv(self):
         return [self.binary, '-S', str(self.path)]
 
-    def command(self, *args, deadline=None):
+    def command(self, *args, deadline=None, input=None):
         if self.identity is None:
             raise TargetError('TMUX_TARGET_UNAVAILABLE')
         if validate_socket(self.path) != self.identity:
@@ -159,7 +164,7 @@ class Transport:
         env = {k: v for k, v in os.environ.items() if k not in ('TMUX', 'TMUX_PANE')}
         try:
             result = self.run([*self.argv, *args], capture_output=True, text=True,
-                              timeout=timeout, env=env)
+                              timeout=timeout, env=env, **({'input':input} if input is not None else {}))
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise TargetError('TMUX_TARGET_UNAVAILABLE') from exc
         if validate_socket(self.path) != self.identity:
@@ -218,7 +223,7 @@ def panes(transport, *, session=None, pane=None, window=None, deadline=None):
     if session is not None:
         if not isinstance(session, str) or not session or any(c in session for c in '\r\n\0:'):
             raise TargetError('TMUX_TARGET_INPUT_INVALID')
-        args = ['list-panes', '-s', '-t', '=' + session]
+        args = ['list-panes', '-s', '-t', session if re.fullmatch(r'\$[0-9]+',session) else '=' + session]
     elif window is not None:
         if not isinstance(window,str) or re.fullmatch(r'@[0-9]+',window) is None:
             raise TargetError('TMUX_TARGET_INPUT_INVALID')
@@ -237,7 +242,7 @@ def panes(transport, *, session=None, pane=None, window=None, deadline=None):
         if (len(fields) != 4 or re.fullmatch(r'\$[0-9]+', fields[0]) is None
                 or re.fullmatch(r'%[0-9]+', fields[2]) is None
                 or not fields[3].isdigit() or int(fields[3]) < 1
-                or (session is not None and fields[1] != session)
+                or (session is not None and (fields[0] if re.fullmatch(r'\$[0-9]+',session) else fields[1]) != session)
                 or (pane is not None and fields[2] != pane)):
             raise TargetError('TMUX_TARGET_UNAVAILABLE')
         rows.append(dict(session_id=fields[0], session=fields[1], pane_id=fields[2], pid=int(fields[3])))
@@ -474,6 +479,91 @@ def main(argv=None):
                       'failure_kind':REASONS[reason]},'error')
         return 70 if reason=='TMUX_HELPER_FAILED' else 2
 
+
+
+
+_TARGET_PATH = Path(__file__).with_name('runtime_tmux_target_contract.json')
+try:
+    TARGET_SPEC = json.loads(_TARGET_PATH.read_text())
+except (OSError, ValueError):
+    TARGET_SPEC = None
+if TARGET_SPEC is None:
+    CAPABILITIES = [name for name in CAPABILITIES if not name.startswith('global-target-')]
+TARGET_REASONS = {**REASONS, **({key:row['kind'] for key,row in TARGET_SPEC['reasons'].items()} if TARGET_SPEC else {})}
+
+def compact_readiness(text,provider):
+    return module_api('terminal_state')['compact_readiness'](text,provider)
+
+def compact_refusal(readiness):
+    return module_api('terminal_state')['compact_refusal'](readiness)
+
+def target_digest(target,principal,proof,readiness):
+    return module_api('runtime_delivery')['digest'](dict(version=1,target=target,principal=principal,proof=proof,readiness=readiness))
+
+def target_result_schema(name):
+    if TARGET_SPEC is None:raise TargetError('TMUX_HELPER_FAILED')
+    row=TARGET_SPEC['result_tables'][name]
+    atoms={**TARGET_SPEC['schema_atoms'],'reason':{'enum':list(TARGET_REASONS)},'failure_kind':{'enum':list(TARGET_SPEC['kind_exit'])}}
+    props={key:atoms[key] for key in row['fields']}
+    props.update({key:{'const':value} for key,value in row.get('constants',{}).items()})
+    result={'type':'object','properties':props,'required':row['fields'],'additionalProperties':False}
+    if name=='error.before_effect':
+        return {'anyOf':[{**result,'properties':{**props,'failure_kind':{'const':kind},'reason':{'enum':[key for key,val in TARGET_REASONS.items() if val==kind]}}} for kind in TARGET_SPEC['kind_exit'] if kind!='outcome']}
+    return result
+
+def target_reason(exc):
+    if TARGET_SPEC is None:return 'TMUX_HELPER_FAILED'
+    inputs={source:key for key,row in TARGET_SPEC['reasons'].items() for source in row['reader_inputs']}
+    inputs.update({source:key for key,row in TARGET_SPEC['inherited_reader_inputs'].items() for source in row['reader_inputs']})
+    if isinstance(exc, (KeyError,TypeError,subprocess.SubprocessError)):return 'TMUX_HELPER_FAILED'
+    reason=str(exc)
+    return inputs.get(reason,reason if reason in TARGET_REASONS else 'TMUX_HELPER_FAILED')
+
+
+def LegacyConsumer(*args,**kwargs):
+    return module_api('legacy_consumer')['LegacyConsumer'](*args,transport_api=globals(),**kwargs)
+
+
+def endpoint_candidates(home,instance,launch=None):
+    dedicated=global_socket(home,instance)
+    if launch and launch.get('tmux_transport')=='global-instance':
+        return [('global-instance',Transport(dedicated))]
+    values=[]
+    environments=[os.environ,{k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')}]
+    seen=set()
+    for environment in environments:
+        try:legacy=legacy_transport(environ=environment)
+        except TargetError as exc:
+            if str(exc)=='GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED':continue
+            raise
+        if legacy.path not in seen:
+            seen.add(legacy.path);values.append(('legacy-default',legacy))
+    if launch is None and dedicated.exists():values.append(('global-instance',Transport(dedicated)))
+    return values
+
+
+def live_target(live,context,launch=None,*,api=None,deadline=None):
+    """Same explicit socket/pane/PID proof for observation and notifications."""
+    api=module_api('runtime_client') if api is None else api
+    if live.get('ended'):return None
+    if launch and any(live.get(k)!=launch.get(k) for k in ('launch_id','receipt_nonce')):raise TargetError('TMUX_TARGET_CHANGED')
+    start=api['process_start'](live.get('pid'),deadline=deadline)
+    if not start or start=='absent' or start!=live.get('process_start'):return None
+    found=[]
+    for kind,transport in endpoint_candidates(Path(context['agentstack_home']),context['expected_server_instance_id'],launch):
+        try:rows=panes(transport,pane=live.get('pane_id'),deadline=deadline)
+        except TargetError as exc:
+            if str(exc)=='TMUX_TARGET_UNAVAILABLE':continue
+            raise
+        for row in rows:
+            if row['pid']!=live['pid']:continue
+            if launch:
+                expected=context['identity']['name'] if kind=='global-instance' else 'orrery-'+launch['launch_id']
+                if row['session']!=expected:raise TargetError('TMUX_TARGET_CHANGED')
+            if api['process_start'](live['pid'],deadline=deadline)!=start:raise TargetError('TMUX_TARGET_CHANGED')
+            found.append((transport,row))
+    if len(found)>1:raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+    return found[0] if found else None
 
 if __name__ == '__main__':
     raise SystemExit(main())

@@ -574,7 +574,7 @@ def check_operation_inode(path):
 
 
 @contextmanager
-def observation_inode(path):
+def observation_inode(path, *, exclusive=False):
     """Share the existing writer inode; never create it or wait for a writer."""
     if mutex_content_pending(path, 'orrery-client-operation-mutex-v1'):
         raise ClientError('OBSERVATION_BUSY')
@@ -586,7 +586,7 @@ def observation_inode(path):
     try:
         info = os.fstat(fd)
         try:
-            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise ClientError('OBSERVATION_BUSY') from exc
         current = path.lstat()
@@ -1675,15 +1675,11 @@ class RuntimeClient:
                 continue
             pane = evidence.get('pane_id')
             if pane:
-                try:
-                    panes = subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_id}'],
-                                           capture_output=True, text=True, timeout=3)
-                except (OSError, subprocess.TimeoutExpired):
-                    return 'unknown'
-                if panes.returncode:
-                    return 'unknown'
-                if pane in panes.stdout.splitlines():
-                    return 'other-session-live'
+                launch=self.outputs['launch']
+                snapshot={'context':self.config,'launch':read_json(launch) if launch.exists() else None}
+                state,_,_=pane_evidence(evidence,snapshot=snapshot)
+                if state=='live':return 'other-session-live'
+                if state=='unknown':return 'unknown'
             status = process_start(evidence.get('pid'))
             if status is None or evidence.get('process_start') is None:
                 return 'unknown'
@@ -2111,7 +2107,23 @@ def process_start(pid, *, deadline=None):
         return None
 
 
-def pane_evidence(live, *, deadline=None, lines=20):
+def unproven_client_placement(home):
+    # Negative admission for absent transport code, never a mode decision.
+    roots=Path(home)/'clients'
+    return roots.exists() or roots.is_symlink()
+
+
+_TMUX_API = None
+
+
+def runtime_tmux_api():
+    global _TMUX_API
+    if _TMUX_API is None:
+        _TMUX_API = runpy.run_path(str(Path(__file__).with_name('runtime_tmux.py')))
+    return _TMUX_API
+
+
+def pane_evidence(live, *, deadline=None, lines=20, snapshot=None):
     """Read the same PID/start/pane proof for notification and observation."""
     if live.get('ended'):
         return 'absent', None, None
@@ -2124,22 +2136,20 @@ def pane_evidence(live, *, deadline=None, lines=20):
     pane = live.get('pane_id')
     if not isinstance(pane, str) or re.fullmatch(r'%[0-9]+', pane) is None:
         return 'unknown', None, None
+    if snapshot is None:return 'unknown',None,None
     try:
-        def tmux(*args):
-            return subprocess.run(['tmux', *args], capture_output=True, text=True,
-                                  timeout=remaining(deadline, 5))
-        pid = tmux('display-message', '-p', '-t', pane, '#{pane_pid}')
-        if pid.returncode or pid.stdout.strip() != str(live.get('pid')):
-            return 'unknown', None, None
-        command = tmux('display-message', '-p', '-t', pane, '#{pane_current_command}')
+        api=runtime_tmux_api()
+        found=api['live_target'](live,snapshot['context'],snapshot.get('launch'),api=globals(),deadline=deadline)
+        if found is None:return 'unknown',None,None
+        transport,actual=found
+        command=transport.command('display-message','-p','-t',pane,'#{pane_current_command}',deadline=deadline)
         if command.returncode or command.stdout.strip() in ('bash','zsh','sh','fish','dash','ksh',''):
-            return 'unknown', None, None
-        capture = tmux('capture-pane', '-p', '-t', pane, '-S', '-' + str(lines))
-        if capture.returncode:
-            return 'unknown', None, None
-        return 'live', pane, capture.stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return 'unknown', None, None
+            return 'unknown',None,None
+        capture=transport.command('capture-pane','-p','-t',pane,'-S','-'+str(lines),deadline=deadline)
+        if capture.returncode:return 'unknown',None,None
+        return 'live',pane,capture.stdout
+    except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired):
+        return 'unknown',None,None
 
 
 def hook_path(payload):
@@ -2396,6 +2406,8 @@ def main(argv=None):
                      'tmux-legacy-transport': 'legacy-transport',
                      'tmux-diagnostics': 'diagnostics',
                      'tmux-legacy-target': 'legacy-target'}
+    if argv and argv[0] in ('target','capture','attach','send-compact'):
+        return runpy.run_path(str(Path(__file__).with_name('runtime_target.py')))['main'](argv,api=globals())
     if argv and argv[0] in tmux_commands:
         # A legacy consumer's safety admission must not construct an owner or
         # turn its inherited mode into a second selector.

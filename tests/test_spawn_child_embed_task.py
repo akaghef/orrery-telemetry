@@ -53,6 +53,7 @@ def _fake_launch_env(
         "    if [[ \"${FAKE_CODEX:-0}\" == 1 ]]; then\n"
         "      [[ -f \"$FAKE_TMUX_LOG.screen\" ]] && cat \"$FAKE_TMUX_LOG.screen\"\n"
         "      printf '\\ngpt-5.5 xhigh · ~/workspace\\n'\n"
+        "      [[ \"${FAKE_CODEX_START_RUNNING:-0}\" == 1 ]] && printf '• Working (1s • esc to interrupt)\\n'\n"
         "    else\n"
         "      printf '\\n❯ \\n'\n"
         "    fi ;;\n"
@@ -107,6 +108,8 @@ def _fake_launch_env(
         "FAKE_TMUX_ALIVE": str(tmux_alive),
         "FAKE_CODEX": "1" if codex else "0",
     })
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(bindir,env)
     return env, workdir
 
 

@@ -73,6 +73,7 @@ def _worktree_base_assignment() -> str:
 def _run_bash(script: str, env: dict[str, str] | None = None,
               check: bool = False) -> subprocess.CompletedProcess[str]:
     run_env = os.environ.copy()
+    run_env["_ags_global_loader"] = str(_ROOT / "bin/lib/global-client-loader.sh")
     if env:
         run_env.update(env)
     result = subprocess.run(
@@ -1503,13 +1504,13 @@ def test_the_dashboard_never_kills_a_codex_updating_itself(monkeypatch):
 
     screens = {"updating": "Updating Codex via `npm install -g @openai/codex`...\n", "idle": "› Ask Codex\n"}
     for name, screen in screens.items():
-        monkeypatch.setattr(server.subprocess, "run",
+        monkeypatch.setattr(server, "_tmux_run",
                             lambda argv, s=screen, **_kw: server.subprocess.CompletedProcess(argv, 0, s, ""))
         assert server._codex_self_update_on_screen("Child") is (name == "updating")
     source = (_ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
     body = source[source.index("    def kill_spawn_session() -> None:"):]
     body = body[:body.index("\n\n")]
-    assert body.index("_codex_self_update_on_screen") < body.index('"kill-session"')
+    assert body.index("_codex_self_update_on_screen") < body.index("'kill-session'")
 
 
 @pytest.mark.parametrize("parent, started", [("", False), ("ParentAgent", True)])

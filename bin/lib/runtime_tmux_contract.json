@@ -4,7 +4,10 @@
     "legacy-transport",
     "legacy-target-admission",
     "legacy-target-diagnostics",
-    "legacy-window-target-admission"
+    "legacy-window-target-admission",
+    "global-target-read",
+    "global-target-attach",
+    "global-target-compact"
   ],
   "operations": [
     "capture",
@@ -25,28 +28,7 @@
     "allowed": {
       "type": "boolean"
     },
-    "reason": {
-      "enum": [
-        "TMUX_DIRECTORY_UNSAFE",
-        "TMUX_SOCKET_UNSAFE",
-        "TMUX_SOCKET_CHANGED",
-        "TMUX_UNAVAILABLE",
-        "TMUX_TARGET_UNAVAILABLE",
-        "TMUX_TARGET_INPUT_INVALID",
-        "TMUX_TARGET_CHANGED",
-        "TMUX_OPERATION_INVALID",
-        "LEGACY_TMUX_TRANSPORT_UNAVAILABLE",
-        "GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED",
-        "LEGACY_TARGET_IS_GLOBAL",
-        "GLOBAL_TARGET_OWNERSHIP_UNKNOWN",
-        "TMUX_CLIENT_HOME_INVALID",
-        "TMUX_INSTANCE_REQUIRED",
-        "TMUX_SOCKET_PATH_TOO_LONG",
-        "TMUX_HELPER_FAILED",
-        "GLOBAL_ROOT_UNAVAILABLE",
-        "GLOBAL_PLACEMENT_UNAVAILABLE"
-      ]
-    },
+    "reason": {},
     "transport": {
       "const": "legacy-default"
     },
@@ -128,14 +110,7 @@
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
-    "capabilities": {
-      "const": [
-        "legacy-transport",
-        "legacy-target-admission",
-        "legacy-target-diagnostics",
-        "legacy-window-target-admission"
-      ]
-    },
+    "capabilities": {},
     "failure_kind": {
       "enum": [
         "target",

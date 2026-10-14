@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import os
 import re
+import runpy
 from pathlib import Path
 import stat
 import subprocess
@@ -25,9 +26,15 @@ class Signal:
 def session_names() -> set[str] | None:
     """Unknown is not absent: tool errors/timeouts must retain backlog."""
     try:
-        result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'],
-                                capture_output=True, text=True, timeout=3)
-    except (OSError, subprocess.TimeoutExpired):
+        helper=Path(__file__).resolve().parents[1]/'bin/lib/runtime_tmux.py'
+        if not helper.is_file():return None
+        api=runpy.run_path(str(helper))
+        home=Path(os.environ.get('AGENTSTACK_HOME',str(Path(__file__).resolve().parents[1])))
+        consumer=api['LegacyConsumer'](home)
+        if not api['global_inventory'](home)['global_complete']:return None
+        if consumer.transport.identity is None:return set()
+        result=consumer.command(['list-sessions','-F','#{session_name}'])
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
         return None
     if result.returncode == 0:
         return set(result.stdout.splitlines())

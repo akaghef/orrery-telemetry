@@ -400,6 +400,8 @@ The child is busy with its task and will not choose a good moment to compact. Th
 tmux send-keys -t "$CHILD_NAME" -l "/compact"; sleep 0.3; tmux send-keys -t "$CHILD_NAME" C-m
 ```
 
+In global mode, use the shared client instead of the legacy keystroke command: `agentstack-runtime-client target --context <parent-context> --agent-id <child-id> --print`, followed by `send-compact` with the returned `--confirm-state-digest`. The child must be positively idle with an empty input box. Work/unknown refuses with `TMUX_TARGET_NOT_IDLE`; any input text, including suggestions and placeholders, refuses with `TMUX_TARGET_INPUT_NOT_EMPTY`. **Known limitation:** Claude compact is often refused because suggestions look like drafts; no color heuristic is used. Wait for a subsequent empty-idle prompt or let automatic compact run. Never clear the input with `send-keys` or inject a harmless character to distinguish suggestions. Exit 3 means submission outcome unknown, not safe-to-retry; inspect target/capture and explicitly reconfirm, accepting possible duplication. Child instructions still go through Mail.
+
 Then send the next task with `send_message`; the child re-orients from the files and mail the task points to.
 
 ## 7. Completion Handling

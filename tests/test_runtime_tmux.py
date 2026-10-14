@@ -160,7 +160,7 @@ def test_capability_cli_does_not_select_an_owner_or_echo_secrets(monkeypatch, ca
     assert client['main'](['tmux-capabilities']) == 0
     value = json.loads(capsys.readouterr().out)
     assert value == {'contract': 'orrery-tmux-target-v1',
-                     'capabilities': ['legacy-transport', 'legacy-target-admission', 'legacy-target-diagnostics', 'legacy-window-target-admission']}
+                     'capabilities': ['legacy-transport', 'legacy-target-admission', 'legacy-target-diagnostics', 'legacy-window-target-admission', 'global-target-read', 'global-target-attach', 'global-target-compact']}
     assert 'not-public' not in json.dumps(value)
 
 

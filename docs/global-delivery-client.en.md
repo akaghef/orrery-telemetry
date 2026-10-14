@@ -251,3 +251,18 @@ Disabled global Mail hooks skip before reading owner context or credentials. Leg
 Codex/Gemini launchers pass selected mode/config/context into each new tmux pane. Direct bootstraps with a live project preserve its project/MCP URL; only an unpinned mode is supplemented through the shared selector. The watcher wrapper uses the selected config for both environment and `--server-config PATH` / `--server-config=PATH` forms. Unsupported select operations in old helpers use the same partial admission and fixed refusal reasons.
 
 An unpinned continuation stops with `RUNTIME_DEFAULT_UNAVAILABLE` if its selector cannot verify an installed env.sh. Redeploy the helper and rerun the same entry. An unverified file is refused even if it says legacy; pinned legacy and the default legacy path without an env.sh remain available. The installer marker `--literal` matches one complete argument, never text inside a description.
+
+<a id="explicit-tmux-target"></a>
+## Explicit target inspection, attach and compact
+
+`agentstack-runtime-client target --context /absolute/runtime-client.json --agent-id 2 --print` checks existing credentials and live evidence against the actual socket, session/pane and PID/start. It returns `state_sha256` and permitted next operations. It never falls back to a name prefix, case alias or the same pane number on another server. A standalone process outside tmux supports target inspection only. `capture --agent-id 2 --lines 40` uses the same context, accepts 1–1000 lines and reports truncation. Reads never create an operation mutex; unavailable locks fail closed.
+
+Operators use `--operator --runtime-mode global --server-config /absolute/server-config.json`. Admission uses the same UID, private configuration and current binding, without registering another owner. `attach --agent-id 2 --read-only --print` returns the complete argv. Actual attach emits a pre-exec admission on stderr and then a terminal stream; it does not fabricate a completion receipt. Owner/parent attach is refused; child instructions belong in Mail.
+
+A verified parent uses `send-compact --context /absolute/parent/runtime-client.json --agent-id 2 --confirm-state-digest <64-hex target hash>`. Operators additionally confirm yes on a TTY. Only the fixed `/compact` is submitted, after a final empty-idle prompt check. Work, approval, unknown evidence and a caller's own tool call refuse with `TMUX_TARGET_NOT_IDLE`; idle input containing any text refuses with `TMUX_TARGET_INPUT_NOT_EMPTY`. `submitted` means tmux submission, not provider completion.
+
+**Known limitation:** Claude suggestions and placeholders also count as text, so compact may frequently be refused. No color-based attribution is attempted. Wait for a subsequent empty-idle prompt or let the provider compact automatically. Never clear the input with `send-keys` or switch launchers to bypass refusal.
+
+The digest includes normalized context usage. An uncertain result after submission is exit 3 with `effects=unknown`, with no automatic replay or new journal. After target/capture inspection, an explicitly reconfirmed compact is a new operation and may duplicate an earlier submission if the screen and context value are indistinguishable. This differs from pre-effect `effects=none` refusals. The cooperative mutex does not stop human/provider input; a final observation-to-input race remains.
+
+Legacy notification, monitor, OPEN and prune consumers use the same admission. Unproven targets have no effects while healthy targets continue. This stage does not activate dedicated socket launches; new/rename/rollback, end lifecycle and launcher/provider wiring remain later activation gates.

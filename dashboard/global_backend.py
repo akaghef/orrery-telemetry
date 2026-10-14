@@ -142,6 +142,21 @@ class Backend:
         launch=result.get('launch_status')
         if (payload.get('open',True) and not payload.get('prepare_only',False)
                 and launch and launch['phase'] in ('gated','running') and not launch['operator_required']):
-            opened=open_terminal(['tmux','attach-session','-t','=orrery-'+launch['launch_id']],title=payload['client_name'])
+            target_api=api['runtime_tmux_api']()
+            targets=target_api['module_api']('runtime_target')['Targets'](self.operator,api=api,transport_api=target_api)
+            aid=result.get('agent_id')
+            if aid is None:
+                context=api['read_json'](self.operator.path_for(payload['client_name']))
+                aid=(context.get('identity') or {}).get('agent_id')
+            attached,_=targets.execute('attach',aid,operator=True,print_only=True)
+            # Re-admit immediately before the existing terminal adapter.
+            checked,_=targets.execute('attach',aid,operator=True,print_only=True)
+            if attached['state_sha256']!=checked['state_sha256']:raise BackendError('TMUX_TARGET_CHANGED')
+            # The terminal executes the common CLI, which checks again after
+            # the adapter/WT handoff. Printed tmux argv is diagnostic only.
+            entry=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+            opened=open_terminal([__import__('sys').executable,str(entry),'attach','--operator',
+                '--runtime-mode','global','--server-config',str(self.operator.path),
+                '--agent-id',str(aid)],title=payload['client_name'])
             if not opened.get('ok'):raise BackendError('TERMINAL_OPEN_FAILED')
         return result
