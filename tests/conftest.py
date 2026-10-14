@@ -95,6 +95,28 @@ def _no_child_start_watcher(monkeypatch):
     """
     monkeypatch.setenv("AGENTSTACK_CHILD_START_CHECK", "0")
 
+
+@pytest.fixture
+def isolated_provider_stall_runtime(tmp_path, monkeypatch):
+    """Import-time dashboard constants must not retain launcher runtime paths."""
+    from dashboard import server
+    for key in list(os.environ):
+        if is_inherited_stack_variable(key):
+            monkeypatch.delenv(key)
+    home = tmp_path / "provider-home"
+    home.mkdir()
+    runtime = home / ".agentstack" / "runtime"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("AGENTSTACK_MAIL_DB", str(home / "fixture.sqlite3"))
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "DB_PATH", str(home / "fixture.sqlite3"))
+    monkeypatch.setattr(server, "_provider_monitor", None)
+    monkeypatch.setattr(server, "_provider_thread", None)
+    monkeypatch.setattr(server, "_provider_stop", threading.Event())
+    yield runtime
+    server._stop_provider_stall_monitor()
+
 @pytest.fixture(autouse=True, scope="session")
 def _the_suite_leaves_real_user_instructions_alone():
     """Fail the run if a test rewrote the real user's instruction files.

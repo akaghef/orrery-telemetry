@@ -25,6 +25,15 @@ NETWORK may omit nodes outside its selected time window. Absence from the curren
 
 ## DECK
 
+### Provider-stop notifications (legacy)
+
+The dashboard displays `MODEL CAPACITY` on DECK and `CAPACITY` on NETWORK when a running Codex CLI is waiting after `Selected model is at capacity. Please try a different model.` A background worker checks approximately every five seconds even with no browser open, confirms two distinct captures, and sends one ORRERY Mail notice to the child's verified `PARENT_AGENT`. The sender is the existing child identity; the message identifies itself as telemetry's automatic observation and includes the time in JST and the error line. It never resumes the child, changes models, or sends pane keystrokes.
+
+`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` preserves each episode across dashboard restarts. Only observed work rearms notification. Parentless sessions get a marker alone. Unverified parents or owner credentials retain the marker. If a send times out with an uncertain acceptance, it is not retried: `delivery_unknown` / `MAIL UNCONFIRMED` remains visible. During transport failures this prioritizes avoiding duplicates over guaranteeing delivery.
+
+Only the confirmed Codex capacity message is supported. Historical/quoted errors, busy or approval screens, and unknown provider errors do not trigger a notice. Codex App, headless, and **global mode are not supported yet**.
+
+
 DECK opens first. **One card represents one agent**, so you can inspect who is doing what and whether each agent is stopped waiting for input.
 
 In the following image, the top counter and card area both show three agents. The counter is the total; each card shows an individual state.

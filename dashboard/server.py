@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 18
+API_GENERATION = 19
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -59,10 +59,11 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models, mail_signals
+    from dashboard import codex_models, mail_signals, provider_stalls
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import codex_models
     import mail_signals
+    import provider_stalls
 
 try:
     from dashboard.providers.codex_app import CodexAppRuntimeProvider
@@ -1564,6 +1565,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                     (m or {}).get("model_raw") or (m or {}).get("model")),
                 "ctx_used": rt.get("ctx_used"),
                 "act_state": rt.get("act_state"),
+                "provider_stall": _provider_stall_view(name, s) if running else None,
                 "work_disp": rt.get("work_disp"),
                 "last_disp": rt.get("last_disp"),
                 "task": (m or {}).get("task", ""),
@@ -2251,6 +2253,7 @@ def graph_payload(days: float, show_all: bool) -> dict:
             "sig": round(sig, 3) if running else 0.0,
             "ctx_used": rt.get("ctx_used"),
             "act_state": rt.get("act_state"),
+            "provider_stall": _provider_stall_view(name, s) if running else None,
             "ctx_window": rt.get("ctx_window"),  # ペイン直読み（権威）
             "work_disp": rt.get("work_disp"),    # work 中の経過（live）
             "work_secs": rt.get("work_secs"),
@@ -5971,6 +5974,104 @@ _RT_TTL = 4.5
 _RT_STICKY_KEYS = ("pane_model", "ctx_window")
 _rt_cache: dict[str, tuple[float, str, dict]] = {}
 _rt_lock = threading.Lock()
+# Kept separately so provider-specific evidence does not change runtime parsing.
+_provider_captures: dict[str, tuple[str, float, dict]] = {}
+_provider_monitor = None
+_provider_thread = None
+_provider_stop = threading.Event()
+
+
+def _provider_generation(session: dict) -> str:
+    return _runtime_generation(session.get("created"), session.get("session_id")) + ":" + str(session.get("pane_pid", 0))
+
+
+def _provider_stall_view(name: str, session: dict):
+    if _provider_monitor is None:
+        return None
+    return _provider_monitor.view(name, _provider_generation(session))
+
+
+@_with_registration_batch
+def _provider_stall_samples():
+    samples = []
+    sessions = tmux_state()
+    agents, _ = agentmail_state()
+    tree = _process_tree_snapshot() if agents else None
+    for name, session in sessions.items():
+        agent = agents.get(name)
+        if not agent or agent.get("program") not in {"codex", "codex-cli"}:
+            continue
+        try:
+            if not _tmux_row_state(name, session, agent, tree)[2]:
+                continue
+            registration = _codex_registration(name)
+            if not registration:
+                continue
+            _agent_runtime(name, session.get("created"), session.get("session_id"))
+            with _rt_lock:
+                captured = _provider_captures.get(name)
+            generation = _runtime_generation(session.get("created"), session.get("session_id"))
+            if not captured or captured[0] != generation:
+                continue
+            env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
+            parent = env.removeprefix("PARENT_AGENT=") if env.startswith("PARENT_AGENT=") else ""
+            samples.append(dict(name=name, agent_id=registration["agent_id"],
+                project_key=registration["project_key"], generation=_provider_generation(session),
+                parent=parent, capture_id=captured[1], evidence=captured[2]))
+        except Exception:
+            logging.warning("Provider-stop sample unavailable for %s", name)
+    return samples
+
+
+def _provider_stall_send(row: dict, event: dict) -> str:
+    """Use the child's canonical owner material and the existing Mail helper."""
+    name, parent = row["name"], row["parent"]
+    if not _valid(name) or not _valid(parent) or parent == name:
+        return "parent_unverified"
+    session = tmux_state().get(name)
+    if not session or _provider_generation(session) != row["generation"]:
+        return "parent_unverified"
+    env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
+    if env != "PARENT_AGENT=" + parent:
+        return "parent_unverified"
+    registration = _codex_registration(name)
+    if not registration or registration["agent_id"] != row["agent_id"] or registration["project_key"] != row["project_key"]:
+        return "parent_unverified"
+    if not _resume_registration(parent, {"codex", "codex-cli", "claude", "claude-code"}):
+        return "parent_unverified"
+    try:
+        module = _child_resume_module()
+        state = module._load_state(Path(RUNTIME_DIR) / "child-agents" / (name + ".json"))
+        module._validate_identity(state, agent_name=name, agent_id=row["agent_id"],
+                                  project_key=row["project_key"], program="codex")
+        token = _runtime_agent_token(name)
+        if state.get("parent_agent") != parent or not token or not secrets.compare_digest(token, state.get("registration_token", "")):
+            return "parent_unverified"
+    except Exception:
+        return "parent_unverified"
+    result = _mcp_call("send_message", dict(project_key=row["project_key"],
+        sender_name=name, sender_token=token, to=[parent], importance="high",
+        subject=f"{name} が model の容量エラーで停止", body_md=provider_stalls.message(event)), timeout=3)
+    # An HTTP failure may occur after Mail commits. Never create a second send.
+    return "sent" if result.get("ok") else "delivery_unknown"
+
+
+def _start_provider_stall_monitor():
+    global _provider_monitor, _provider_thread
+    if GLOBAL_MODE or os.name == "nt" or _provider_monitor is not None:
+        return
+    _provider_stop.clear()
+    _provider_monitor = provider_stalls.Monitor(Path(RUNTIME_DIR) / "provider-stalls.json", _provider_stall_send)
+    _provider_thread = threading.Thread(target=_provider_monitor.run,
+        args=(_provider_stall_samples, _provider_stop), name="provider-stalls", daemon=True)
+    _provider_thread.start()
+
+
+@atexit.register
+def _stop_provider_stall_monitor():
+    _provider_stop.set()
+    if _provider_thread and _provider_thread is not threading.current_thread():
+        _provider_thread.join(timeout=4)
 
 
 def _parse_runtime(text: str) -> dict:
@@ -6056,6 +6157,7 @@ def _prune_runtime_cache(sessions: dict[str, dict]) -> None:
         for name, (_, generation, _) in list(_rt_cache.items()):
             if generations.get(name) != generation:
                 _rt_cache.pop(name, None)
+                _provider_captures.pop(name, None)
 
 
 def _agent_runtime(
@@ -6085,8 +6187,14 @@ def _agent_runtime(
             )
             if r.returncode == 0:
                 out = _parse_runtime(r.stdout)
+                with _rt_lock:
+                    _provider_captures[session] = (generation, now, provider_stalls.classify(r.stdout))
+            else:
+                with _rt_lock:
+                    _provider_captures[session] = (generation, now, {"state": "unknown"})
         except Exception:
-            pass
+            with _rt_lock:
+                _provider_captures[session] = (generation, now, {"state": "unknown"})
     with _rt_lock:
         previous = _rt_cache.get(session)
         if previous and previous[1] == generation:
@@ -9252,6 +9360,7 @@ def main():
         return
     _start_supervisor_watchdog()
     _start_child_resume_maintenance()
+    _start_provider_stall_monitor()
 
     # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
     try:
@@ -9272,6 +9381,8 @@ def main():
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        _stop_provider_stall_monitor()
 
 
 if __name__ == "__main__":
