@@ -25,6 +25,19 @@ NETWORK may omit nodes outside its selected time window. Absence from the curren
 
 ## DECK
 
+### Provider-stop notifications (legacy)
+
+The dashboard displays `MODEL CAPACITY` on DECK and `CAPACITY` on NETWORK when a running Codex CLI is waiting after `Selected model is at capacity. Please try a different model.` A background worker checks approximately every five seconds even with no browser open, confirms two distinct captures, and sends one ORRERY Mail notice to the child's verified `PARENT_AGENT`. The sender is the existing child identity; the message identifies itself as telemetry's automatic observation and includes the time in JST and the error line. It never resumes the child, changes models, or sends pane keystrokes.
+
+`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` preserves each episode across dashboard restarts. Only observed work rearms notification. Parentless sessions get a marker alone. Unverified parents or owner credentials retain the marker. If a send times out with an uncertain acceptance, it is not retried: `delivery_unknown` / `MAIL UNCONFIRMED` remains visible. During transport failures this prioritizes avoiding duplicates over guaranteeing delivery.
+
+Only the confirmed Codex capacity message is supported. Historical/quoted errors, busy or approval screens, and unknown provider errors do not trigger a notice. Codex App, headless, and **global mode are not supported yet**.
+
+The state file starts with the first capacity candidate and is saved only when state changes. Work observations for a child that has never been a candidate cause no writes. Once a child has been a candidate, observed work writes the small state file approximately every five seconds, including after rearming. Persisting the latest work capture's order prevents delayed capacity captures from causing another notice in a different process or after a restart. For ticks that do not update capture ordering, observation-time checkpoints are at most hourly.
+
+Capture ordering survives state transitions and work observations, so delayed older captures cannot confirm or clear newer transitions. Replaced generations expire after seven unobserved days; definitively absent sessions expire after thirty. An unavailable tmux inventory retains the record. Only recognized fixed Mail refusals that establish rejection before acceptance (argument validation, contact policy, sender authentication), or JSON-RPC request errors before execution, are `failed`. A tool error can also follow a database commit, so internal errors and unrecognized refusal messages remain `delivery_unknown`. Neither is automatically retried.
+
+
 DECK opens first. **One card represents one agent**, so you can inspect who is doing what and whether each agent is stopped waiting for input.
 
 In the following image, the top counter and card area both show three agents. The counter is the total; each card shows an individual state.

@@ -29,6 +29,18 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ## DECK
 
+### Provider 停止の自動通知（legacy）
+
+稼働中の Codex CLI が `Selected model is at capacity. Please try a different model.` で入力待ちになったら、DECK に `MODEL CAPACITY`、NETWORK に `CAPACITY` を表示します。dashboard server はブラウザが閉じていても約5秒ごとに確認し、別の pane capture で2回確認した停止を親の `PARENT_AGENT` へ ORRERY Mail で通知します。差出人は停止した子の既存 identity、本文冒頭は「telemetry の自動検知」で、JST の検知時刻とエラー行を載せます。自動再開・モデル変更・pane へのキー送信はしません。
+
+同じ停止の通知は1回だけです。`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` に状態を保存し、dashboard 再起動後も重複を防ぎます。作業再開を観測した後の次の停止は再び通知します。親無しは印だけ、親や子の credential を検証できない場合も印を残します。Mail の timeout など受理有無が不明な場合は、重複を避けるため再送せず `delivery_unknown` / `MAIL UNCONFIRMED` を表示します。障害時に「重複なし」と「必ず届く」を両方保証するものではありません。
+
+初版は上記 Codex capacity 文言だけが対象です。過去ログに残ったエラー、作業中・承認待ち、未知の provider エラーは判定しません。tmux を使わない Codex App / headless と **global mode は未対応・後続**です。
+
+状態ファイルは capacity 候補を初めて観測したときから作り、変化がある場合だけ保存します。一度も候補になっていない子の work 観測では書き込みません。一度候補になった子は、作業中も約5秒ごとに小さな状態ファイルを書きます。解除後も最新の work capture の順序を永続化し、別 process や再起動後に遅れた capacity が届いて再通知するのを防ぐためです。capture の順序を更新しない巡回では、観測時刻だけの更新は最大1時間に1回です。
+
+状態遷移や work 観測に使った capture の順序を保持し、それ以前の遅れた capture は停止確認・解除に使いません。終了した世代の行は、新しい世代への置換なら7日、不在を tmux で確認できる場合は30日の未観測で削除します。tmux が観測不能なら保持します。Mail の入力検証・contact policy・送信者認証について、受理前だと特定できる固定の拒否文を認識した場合と、JSON-RPC の実行前の要求エラーだけを `failed` にします。DB 保存後の処理でも tool error が返るため、内部エラーや未知の拒否文は `delivery_unknown` に残します。どちらも自動再送しません。
+
 最初は DECK を開きます。**1エージェントが1枚のカード**として並ぶため、誰が何をしているか、入力待ちで止まっていないかを個別に読めます。
 
 次の画像では、上部のカウンタが3体、カードも3枚です。カウンタは全体の数、カードは各エージェントの状態を示します。

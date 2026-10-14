@@ -212,6 +212,14 @@ function render(name,g,{selected=false,avatar=scientistOf}={}){
       mailTitle.textContent=(g.mail_message||'This agent cannot send or receive ORRERY Mail')+' · '+(g.mail_reason||'');
       mailLabel.appendChild(mailTitle);grp.appendChild(mailLabel);
     }
+    if(g.provider_stall){
+      const label=svgEl('text',{x:0,y:-NR-16,
+        'text-anchor':'middle',style:'font-family:var(--mono);font-size:8.5px;fill:var(--alert)'});
+      label.textContent='CAPACITY';
+      const title=svgEl('title');
+      title.textContent=g.provider_stall.error+' · '+g.provider_stall.notification_status;
+      label.appendChild(title);grp.appendChild(label);
+    }
     return grp;
 }
 window.OrreryNetworkNode={render,scientistOf,portURL,portraitFallback,providerKeyFor,providerBadge,assetURL,renderLiveStateBubble};
