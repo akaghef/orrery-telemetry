@@ -256,7 +256,15 @@ def test_prune_cannot_follow_symlinked_signal_ancestors(tmp_path, monkeypatch):
 @pytest.mark.parametrize('diagnostic', ['no server running on /tmp/fixture-socket', 'no sessions', 'error connecting to /tmp/fixture-socket (No such file or directory)'])
 def test_known_absent_server_means_no_sessions(monkeypatch, diagnostic):
     from dashboard import mail_signals
-    monkeypatch.setattr(mail_signals.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a[0], 1, '', diagnostic))
+    class Consumer:
+        transport = type('Transport', (), {'identity': (1, 2)})()
+        def command(self, args):
+            assert args == ['list-sessions', '-F', '#{session_name}']
+            return subprocess.CompletedProcess(args, 1, '', diagnostic)
+    monkeypatch.setattr(mail_signals.runpy, 'run_path', lambda _: {
+        'LegacyConsumer': lambda _: Consumer(),
+        'global_inventory': lambda _: {'global_complete': True},
+    })
     assert mail_signals.session_names() == set()
 
 
@@ -301,6 +309,7 @@ def test_cleanup_cli_uses_installed_environment_and_defaults_to_preview(tmp_path
     helper = home / '.agentstack/dashboard/mail_signals.py'
     helper.parent.mkdir(parents=True)
     shutil.copyfile(ROOT / 'dashboard/mail_signals.py', helper)
+    copy_client_library(home / '.agentstack')
     signals = home / 'configured-signals'
     folder = signals / 'projects/probe/agents/Absent'
     folder.mkdir(parents=True)

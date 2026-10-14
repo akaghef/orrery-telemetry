@@ -99,3 +99,28 @@ def test_new_adapter_reuses_older_helper_primitives_without_new_class(consumer):
     state['global']=True
     with pytest.raises(API['TargetError'],match='^LEGACY_TARGET_IS_GLOBAL$'):
         adapter.command(['send-keys','-t','Alpha','C-m'])
+
+
+def test_pure_legacy_inventory_does_not_initialize_global_operator_contracts(tmp_path,monkeypatch):
+    function=API['global_inventory'];namespace=function.__globals__;original=namespace['module_api'];loaded=[]
+    def modules(name):
+        loaded.append(name)
+        assert name not in ('runtime_operator','runtime_observation')
+        return original(name)
+    monkeypatch.setitem(namespace,'module_api',modules)
+    monkeypatch.setitem(namespace,'installed_hints',lambda *a:{})
+    for key in ('AGENTSTACK_RUNTIME_MODE','AGENTSTACK_GLOBAL_SERVER_CONFIG','AGENTSTACK_CLIENT_CONFIG'):
+        monkeypatch.delenv(key,raising=False)
+    value=function(tmp_path,api=original('runtime_client'))
+    assert value=={'proofs':[],'diagnostics':[],'global_complete':True}
+    assert loaded==[]
+
+
+def test_legacy_session_rename_pins_the_session_id_not_its_first_pane(consumer):
+    c,calls,state=consumer
+    c.command(['rename-session','-t','$1','NewName'])
+    assert calls[-1][3:]==['rename-session','-t','$1','NewName']
+    state['global']=True
+    with pytest.raises(API['TargetError'],match='^LEGACY_TARGET_IS_GLOBAL$'):
+        c.command(['rename-session','-t','$1','NewName'])
+    assert sum(argv[3]=='rename-session' for argv in calls)==1

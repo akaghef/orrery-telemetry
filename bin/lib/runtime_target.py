@@ -119,7 +119,7 @@ class Targets:
         operations=['target']+(['capture'] if endpoint else [])
         if endpoint and operator and not row.get('retired_at'):operations.append('attach')
         if endpoint and not row.get('retired_at') and principal['kind']!='owner' and not self.tmux['compact_refusal'](readiness):operations.append('send-compact')
-        state=self.tmux['target_digest'](target,principal,{'target':digest,'parent':parent_digest},readiness)
+        state=self.tmux['target_digest'](target,principal,{'target':digest,'parent':parent_digest},readiness,screen=text)
         return dict(root=root,target=target,principal=principal,state_sha256=state,compact_readiness=readiness,next_operations=operations,transport=endpoint[1] if endpoint else None,retired=bool(row.get('retired_at')))
 
     def response(self,resolved,operation,**extra):

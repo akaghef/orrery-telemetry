@@ -238,3 +238,39 @@ def test_app_desktop_metadata_is_not_current_provider_proof(target):
     api['atomic_json'](path,{**target['live'],'app_state':'working','app_subagent':False})
     with pytest.raises(TMUX['TargetError'],match='^TMUX_TARGET_UNAVAILABLE$'):
         target['targets'].execute('target',2,operator=True)
+
+
+def test_changed_screen_with_same_idle_and_context_invalidates_digest(target,monkeypatch):
+    original=TMUX['Transport'].command
+    screen={'text':'first reply\n❯\nctx: 14% used'}
+    def terminal(self,*args,**kw):
+        if args[0]=='capture-pane':return subprocess.CompletedProcess(args,0,screen['text'],'')
+        return original(self,*args,**kw)
+    monkeypatch.setattr(TMUX['Transport'],'command',terminal)
+    resolver=target['targets']
+    before=resolver.resolve(2,operator=True)
+    screen['text']='different reply\n❯\nctx: 14% used'
+    after=resolver.resolve(2,operator=True)
+    assert after['compact_readiness']==before['compact_readiness']
+    assert after['state_sha256']!=before['state_sha256']
+    with pytest.raises(TMUX['TargetError'],match='^RESOLUTION_DIGEST_MISMATCH$'):
+        resolver.execute('send-compact',2,operator=True,confirm=lambda:True,expected=before['state_sha256'])
+
+
+def test_unknown_compact_submission_does_not_retry_or_write_a_journal(target,monkeypatch):
+    original=TMUX['Transport'].command;commands=[]
+    def terminal(self,*args,**kw):
+        if args[0]=='capture-pane':return subprocess.CompletedProcess(args,0,'❯\nctx: 14% used','')
+        if args[0]=='send-keys':
+            commands.append(args)
+            return subprocess.CompletedProcess(args,1 if args[-1]=='C-m' else 0,'','lost response')
+        return original(self,*args,**kw)
+    monkeypatch.setattr(TMUX['Transport'],'command',terminal)
+    resolver=target['targets'];before=root_bytes(target['client']);value=resolver.resolve(2,operator=True)
+    with pytest.raises(TMUX['TargetError'],match='^TMUX_OPERATION_OUTCOME_UNKNOWN$'):
+        resolver.execute('send-compact',2,operator=True,confirm=lambda:True,expected=value['state_sha256'])
+    assert commands==[('send-keys','-t',target['pane'],'-l','/compact'),('send-keys','-t',target['pane'],'C-m')]
+    assert root_bytes(target['client'])==before
+    # Readback is permitted; it does not retry the submitted bytes.
+    resolver.execute('target',2,operator=True)
+    assert len(commands)==2

@@ -33,7 +33,7 @@ class LegacyConsumer:
             proof=self.admission(target,operation)
             if target.startswith(('%','@')):pinned=target
             elif operation=='kill-session':pinned=proof['panes'][0]['session_id']
-            elif command in ('has-session','show-environment','attach','attach-session','list-panes'):
+            elif command in ('has-session','show-environment','attach','attach-session','list-panes','rename-session'):
                 pinned=proof['panes'][0]['session_id']
             else:pinned=proof['panes'][0]['pane_id']
             args[index]=pinned
@@ -63,4 +63,3 @@ class LegacyConsumer:
             if current['state_sha256']!=proof['state_sha256']:raise self.tmux['TargetError']('TMUX_TARGET_CHANGED')
             if self.api['process_start'](row['pid'])!=row['process_start']:raise self.tmux['TargetError']('TMUX_TARGET_CHANGED')
             os.killpg(int(pgid),__import__('signal').SIGSTOP)
-

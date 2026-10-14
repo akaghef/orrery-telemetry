@@ -235,6 +235,9 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=True)
     _enable_fake_codex_profile(tmp_path, env)
+    # This test checks argv/profile notices, not a synthetic 90-poll idle watch.
+    # A running screen still has no history receipt and remains unconfirmed.
+    env["FAKE_CODEX_START_RUNNING"] = "1"
     child_name = f"Profile-{prompt_path}"
     handoff = _codex_handoff(tmp_path, child_name)
     args = [
@@ -270,7 +273,7 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
     # The task went in as the child's argv, never through a paste buffer. No
     # history-binding receipt exists here, so its start is reported as unknown.
     assert "ARGV_TASK" in injected
-    assert "first-task confirmation unknown" in result.stderr
+    assert "first-task confirmation unknown" in result.stderr.lower()
     assert "\034load-buffer" not in injected and "\034paste-buffer" not in injected
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
@@ -362,6 +365,8 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     tmp_path: pathlib.Path, codex: bool,
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    if codex:
+        env["FAKE_CODEX_START_RUNNING"] = "1"
     task_file = tmp_path / "task.md"
     backtick_marker = tmp_path / "backtick-expanded"
     dollar_marker = tmp_path / "dollar-expanded"
@@ -421,7 +426,7 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     assert "ARGV_TASK" in injected
     assert "\034paste-buffer" not in injected
     if codex:
-        assert "first-task confirmation unknown" in result.stderr
+        assert "first-task confirmation unknown" in result.stderr.lower()
     else:
         assert "ARGV_TASK\034600\034" in injected, "the first prompt file must be private"
     assert "IGNORED POSITIONAL TASK" not in injected

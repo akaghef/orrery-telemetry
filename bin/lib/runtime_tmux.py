@@ -304,8 +304,6 @@ def global_inventory(client_home, *, api=None, deadline=None):
         api = module_api('runtime_client')
     deadline = time.monotonic()+5 if deadline is None else deadline
     home = Path(client_home)
-    operator_api = module_api('runtime_operator')
-    observation_api = module_api('runtime_observation')
     proofs, diagnostics = [], []
     homes = {home: None}
     def issue(name=None, instance=None, check='placement'):
@@ -336,7 +334,7 @@ def global_inventory(client_home, *, api=None, deadline=None):
             runtime = api['absolute'](context.get('runtime_root'))
             configs.add(runtime/'server-config.json')
         for path in configs:
-            operator = operator_api['RuntimeOperator'](path, api=api)
+            operator = module_api('runtime_operator')['RuntimeOperator'](path, api=api)
             homes[operator.clients_parent.parent] = operator.binding['expected_server_instance_id']
         if any(values.get('AGENTSTACK_RUNTIME_MODE','legacy') not in ('','legacy')
                for values in (installed,os.environ)) and not configs and not contexts:
@@ -380,11 +378,11 @@ def global_inventory(client_home, *, api=None, deadline=None):
                 if not isinstance(identity,dict) or not api['integer'](identity.get('agent_id'),1):
                     raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
                 runtime = api['absolute'](context.get('runtime_root'))
-                operator = operator_api['RuntimeOperator'](runtime/'server-config.json',api=api)
+                operator = module_api('runtime_operator')['RuntimeOperator'](runtime/'server-config.json',api=api)
                 if operator.clients_parent != parent:
                     raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
                 check = 'snapshot'
-                snapshot = observation_api['Observations'](operator,lambda _:None,deadline=deadline)
+                snapshot = module_api('runtime_observation')['Observations'](operator,lambda _:None,deadline=deadline)
                 value,digest = snapshot.snapshot(root,identity['agent_id'])
                 launch = value['launch']
                 for live in value['lives']:
@@ -497,8 +495,10 @@ def compact_readiness(text,provider):
 def compact_refusal(readiness):
     return module_api('terminal_state')['compact_refusal'](readiness)
 
-def target_digest(target,principal,proof,readiness):
-    return module_api('runtime_delivery')['digest'](dict(version=1,target=target,principal=principal,proof=proof,readiness=readiness))
+def target_digest(target,principal,proof,readiness,screen=None):
+    delivery=module_api('runtime_delivery')
+    normalized=module_api('terminal_state')['normalize'](screen) if screen is not None else None
+    return delivery['digest'](dict(version=1,target=target,principal=principal,proof=proof,readiness=readiness,screen_sha256=delivery['digest'](normalized) if normalized is not None else None))
 
 def target_result_schema(name):
     if TARGET_SPEC is None:raise TargetError('TMUX_HELPER_FAILED')
