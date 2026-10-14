@@ -54,6 +54,8 @@ def test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(monkeypatc
         return _Done()
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, fake_run)
 
     result = server.do_exit("GrayKepler")
 
@@ -99,6 +101,8 @@ def test_interactive_antigravity_keeps_existing_slash_exit_path(monkeypatch) -> 
         raise AssertionError(f"unexpected command: {argv}")
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, fake_run)
 
     result = server.do_exit("GrayHopper")
 
@@ -170,6 +174,8 @@ def test_jump_preserves_finished_antigravity_shell_instead_of_resuming(monkeypat
         return {"ok": True, "adapter": "terminal"}
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, fake_run)
     monkeypatch.setattr(server, "_open_terminal_tmux", fake_open)
 
     result = server.do_jump("GrayHopper")

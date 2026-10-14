@@ -330,6 +330,8 @@ def tmux_resume(resume, monkeypatch):
             raise AssertionError(argv)
         return SimpleNamespace(returncode=status, stdout=stdout, stderr='fixture failed' if status else '')
     monkeypatch.setattr(server.subprocess, 'run', run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, runtime.parent, server, run, sessions=sessions)
     def open_window(argv, **kw):
         state['windows'].append(argv)
         assert not state['started'] and state['active']
@@ -417,8 +419,7 @@ def test_real_isolated_tmux_preserves_husk_until_the_cli_gate_commits(monkeypatc
     bindir.mkdir()
     wrapper = bindir / 'tmux'
     socket_dir = Path(tempfile.mkdtemp(prefix='resume139-tmux-'))
-    socket_name = 'fixture'
-    wrapper.write_text('#!/bin/sh\nexec ' + tmux_binary + ' -L ' + socket_name + ' -f /dev/null "$@"\n')
+    wrapper.write_text('#!/bin/sh\nexec ' + tmux_binary + ' -f /dev/null "$@"\n')
     wrapper.chmod(0o700)
     monkeypatch.setenv('TMUX_TMPDIR', str(socket_dir))
     monkeypatch.setenv('PATH', str(bindir) + ':' + os.environ['PATH'])
@@ -428,7 +429,8 @@ def test_real_isolated_tmux_preserves_husk_until_the_cli_gate_commits(monkeypatc
     cli = tmp_path / 'fixture-cli'
     cli.write_text('#!/bin/sh\nprintf started > ' + str(marker) + '\nsleep 30\n')
     cli.chmod(0o700)
-    monkeypatch.setattr(server, '_open_terminal_tmux', lambda *a, **k: {'ok': succeeds, 'adapter': 'fixture'})
+    windows = []
+    monkeypatch.setattr(server, '_open_terminal_tmux', lambda *a, **k: windows.append(a) or {'ok': succeeds, 'adapter': 'fixture'})
     try:
         old = subprocess.run([str(wrapper), 'new-session', '-d', '-P', '-F', '#{session_id}', '-s', NAME,
                               '/bin/sh', '-c', 'sleep 30'], capture_output=True, text=True, check=True).stdout.strip()
@@ -438,6 +440,7 @@ def test_real_isolated_tmux_preserves_husk_until_the_cli_gate_commits(monkeypatc
         # Detached startup cannot fail at the window boundary.
         expected_success = not opens or succeeds
         assert answer['ok'] is expected_success, answer
+        assert len(windows) == int(opens)
         sessions = subprocess.run([str(wrapper), 'list-sessions', '-F', '#{session_id}:#{session_name}'],
                                   capture_output=True, text=True, check=True).stdout.splitlines()
         if expected_success:

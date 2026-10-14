@@ -93,7 +93,9 @@ def test_exit_retires_when_no_other_copy_is_alive(resume, mail, tmp_path, case):
         lease.parent.mkdir(parents=True)
         lease.write_text("")
     else:
-        env = {"FAKE_TMUX_FAIL": "1"}
+        # No other pane is a confirmed empty observation, not an unreadable
+        # server (the tmux_unreadable negative above covers that separately).
+        env = {"FAKE_TMUX_PANES": ""}
     process = run_resumed(launches, tmp_path, "exit 0\n", env=env)
     assert process.returncode == 0, process.stderr
     # Reservations are the SessionEnd hook's job; the retire-only exit never releases them.

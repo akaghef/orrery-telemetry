@@ -48,6 +48,16 @@ PRODUCTION_LABELS = tuple(
 SAMPLE_SECONDS = 2.0
 
 
+@pytest.fixture(autouse=True)
+def _close_synthetic_tmux_endpoints():
+    """Fixture sockets do not accumulate across a full serial worker."""
+    yield
+    import sys
+    module = sys.modules.get('_fake_tmux_transport')
+    if module is not None:
+        module._cleanup()
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _no_inherited_agentstack_env():
     """Run the suite as CI does: with no AGENTSTACK_* in the environment.

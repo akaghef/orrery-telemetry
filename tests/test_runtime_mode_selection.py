@@ -275,7 +275,7 @@ def test_direct_bootstrap_preserves_pinned_legacy_before_existing_flow(tmp_path,
     script='. "$1"; printf "\\nMODE=%s CONFIG=%s\\n" "$AGENTSTACK_RUNTIME_MODE" "${AGENTSTACK_GLOBAL_SERVER_CONFIG-unset}"'
     env={**os.environ,'HOME':str(tmp_path),'AGENTSTACK_HOME':str(stack),'AGENTSTACK_RUNTIME_MODE':'legacy',
          'AGENTSTACK_LABEL_PREFIX':'org.agentstack.test.r1-direct','AGENTSTACK_MCP_URL':'http://127.0.0.1:1/mcp'}
-    for key in ('AGENTSTACK_PROJECT_KEY','AGENTSTACK_GLOBAL_SERVER_CONFIG','AGENTSTACK_CLIENT_CONFIG','TMUX','TMUX_PANE'):env.pop(key,None)
+    for key in ('PROJECT_KEY','AGENTSTACK_PROJECT_KEY','AGENTSTACK_GLOBAL_SERVER_CONFIG','AGENTSTACK_CLIENT_CONFIG','TMUX','TMUX_PANE'):env.pop(key,None)
     if project:env['AGENTSTACK_PROJECT_KEY']=str(tmp_path)
     result=subprocess.run(['/bin/bash','-c',script,'fixture',str(stack/'bin'/source.name)],env=env,capture_output=True,text=True,timeout=20)
     assert result.returncode==0 and 'MODE=legacy CONFIG=unset' in result.stdout
@@ -388,9 +388,11 @@ def test_bundled_app_loader_admits_only_proven_legacy(tmp_path,monkeypatch,hint)
 @pytest.mark.parametrize('entry', ['agentstack-preregister-child','agentstack-reregister'])
 def test_registration_helper_reads_installed_default_before_legacy_library(tmp_path,entry):
     import shutil
+    from _installed_client_payload import copy_client_library
     root=tmp_path/'install';lib=root/'bin/lib';lib.mkdir(parents=True)
     for name in ('global-client-loader.sh','runtime_client.py'):
         shutil.copyfile(ROOT/'bin/lib'/name,lib/name)
+    copy_client_library(root)
     shutil.copyfile(ROOT/'bin'/entry,root/'bin'/entry)
     (lib/'agentstack-register.sh').write_text('printf "%s" "$AGENTSTACK_RUNTIME_MODE"; exit 0\n')
     (root/'env.sh').write_text('export AGENTSTACK_RUNTIME_MODE=global\n')
@@ -476,6 +478,8 @@ def test_actual_continuation_never_admits_an_unverified_default(
     shutil.copyfile(ROOT / 'bin/lib/global-client-loader.sh', lib / 'global-client-loader.sh')
     if helper == 'current':
         shutil.copyfile(ROOT / 'bin/lib/runtime_client.py', lib / 'runtime_client.py')
+        from _installed_client_payload import copy_client_library
+        copy_client_library(stack)
     elif helper == 'old':
         (lib / 'runtime_client.py').write_text('raise SystemExit(2)\n')
     entry = f'agentstack-{provider}-bootstrap'

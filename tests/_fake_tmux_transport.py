@@ -16,15 +16,22 @@ def _cleanup():
 atexit.register(_cleanup)
 
 
-def add_transport_evidence(bindir,env):
+def add_transport_evidence(bindir,env,*,inherited=True):
     binary=Path(bindir)/'tmux';old=binary.read_text()
     base=tempfile.TemporaryDirectory(prefix='ttx-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None)
-    directory=Path(base.name).resolve();path=directory/'stub.sock'
+    directory=Path(base.name).resolve()
+    if inherited:
+        path=directory/'stub.sock'
+    else:
+        parent=directory/('tmux-'+str(os.getuid()));parent.mkdir(mode=0o700)
+        path=parent/'default';env['TMUX_TMPDIR']=str(directory)
     stream=socket.socket(socket.AF_UNIX);stream.bind(str(path));path.chmod(0o600)
     _RESOURCES.append((stream,base))
     # This is a fixture socket, not a service; every byte of PID evidence below
     # is synthetic. The real OS-process admission has its own outer test.
-    env['TMUX']=str(path)+',300,0';env.pop('TMUX_PANE',None)
+    if inherited:env['TMUX']=str(path)+',300,0'
+    else:env.pop('TMUX',None)
+    env.pop('TMUX_PANE',None)
     env['FAKE_TMUX_SOCKET']=str(path)
     env['FAKE_TMUX_SESSION_FILE']=str(directory/'session')
     prefix='''
@@ -43,6 +50,14 @@ if [[ "$*" == *'#{session_id}'* && "$*" == *'#{pane_pid}'* ]]; then
   name="$(cat "$FAKE_TMUX_SESSION_FILE" 2>/dev/null)"
   [[ -n "$name" ]] || exit 1
   printf '$1\\t%s\\t%%1\\t400\\n' "$name"; exit 0
+fi
+if [[ "${1:-}" == display-message && " $* " == *' -t '* ]]; then
+  case "${!#}" in
+    '#{pane_id}') printf '%s\\n' '%1'; exit 0 ;;
+    '#{session_name}'|'#S')
+      name="$(cat "$FAKE_TMUX_SESSION_FILE" 2>/dev/null)"
+      printf '%s\\n' "${FAKE_WARM_IDENTITY_OVERRIDE:-$name}"; exit 0 ;;
+  esac
 fi
 '''
     lines=old.splitlines(keepends=True);binary.write_text(lines[0]+prefix+''.join(lines[1:]));binary.chmod(0o755)

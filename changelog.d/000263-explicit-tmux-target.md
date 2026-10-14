@@ -5,3 +5,5 @@
 compact は入力欄が空で待機している場合だけ受け付け、Claude の suggestion と placeholder も文字があれば拒否します。提出後の結果不明は自動再送せず、重複の可能性を明示します。既定の旧 mode と、provider の自動 compact は維持します。[対象の読取と復旧](../docs/global-delivery-client.md#explicit-tmux-target)を参照してください。
 
 端末・ttyd の実接続と detached resume も共通の対象照合に通し、観測中の PID 再使用や不明な cleanup で他の session に作用しないようにしました。対象の同一性と compact の入力欄の証明を分け、画面の更新だけで capture・attach が止まらないようにしています。人の確認待ちは観測期限に含めません。
+
+文書用の read-only demo も共有 consumer に接続し、合成 pane の観測を明示しました。利用者の tmux server には接続せず、従来の合成データと表示を維持します。
