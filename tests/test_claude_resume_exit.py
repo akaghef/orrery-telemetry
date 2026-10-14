@@ -134,3 +134,45 @@ def test_plain_terminal_exit_classifies_actual_tmux_endpoint(resume, mail, tmp_p
         assert result.returncode == 0, result.stderr
         assert exit_calls(mail) == (['retire_agent'] if retired else []), (result.stderr, mail)
         assert (runtime / f'agent_token_{NAME}').read_text() == TOKEN
+
+
+def test_permission_denied_endpoint_retains_identity_and_signal_inventory(resume, mail, tmp_path, monkeypatch):
+    """A real EACCES is unknown for both cleanup and signal pruning."""
+    import os
+    from pathlib import Path
+    import shutil
+    import socket
+    import tempfile
+    from dashboard import mail_signals
+    from test_claude_resume_mail import ROOT
+    if shutil.which('tmux') is None:
+        pytest.skip('tmux unavailable')
+    runtime, registration, _, _ = resume
+    token = runtime / f'agent_token_{NAME}'
+    before = token.read_bytes()
+    with tempfile.TemporaryDirectory(prefix='denied-endpoint-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as directory:
+        base = Path(directory).resolve()
+        parent = base / ('tmux-' + str(os.getuid()))
+        parent.mkdir(mode=0o700)
+        path = parent / 'default'
+        with socket.socket(socket.AF_UNIX) as stream:
+            stream.bind(str(path))
+            path.chmod(0o600)
+            monkeypatch.setenv('TMUX_TMPDIR', str(base))
+            monkeypatch.delenv('TMUX', raising=False)
+            monkeypatch.delenv('TMUX_PANE', raising=False)
+            env = {**os.environ, 'AGENTSTACK_RUNTIME_DIR': str(runtime),
+                   'AGENTSTACK_HOOKS_DIR': str(ROOT / 'hooks'), 'AGENTSTACK_RUNTIME_MODE': 'legacy',
+                   'AGENTSTACK_MAIL_HTTP_BEARER_MODE': 'disabled', 'AGENTSTACK_CLEANUP_RETIRE_ONLY': '1',
+                   'PROJECT_KEY': registration['project_key']}
+            parent.chmod(0o000)
+            try:
+                with pytest.raises(PermissionError):
+                    os.lstat(path)
+                sessions = mail_signals.session_names()
+                result = subprocess.run(['/bin/bash', str(ROOT / 'hooks/cleanup-child-agent.sh'), NAME],
+                                        env=env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+                assert result.returncode == 0, result.stderr
+                assert (sessions, exit_calls(mail), token.read_bytes()) == (None, [], before), (sessions, mail, result.stderr)
+            finally:
+                parent.chmod(0o700)

@@ -91,7 +91,7 @@ def test_legacy_dashboard_session_id_is_resolved_as_id_not_literal_name(consumer
 
 def test_new_adapter_reuses_older_helper_primitives_without_new_class(consumer):
     c,calls,state=consumer
-    api={k:v for k,v in API.items() if k not in ('LegacyConsumer','TARGET_SPEC','TARGET_REASONS','runtime_api_view')}
+    api={k:v for k,v in API.items() if k not in ('LegacyConsumer','TARGET_SPEC','TARGET_REASONS','runtime_api_view','lstat_if_present')}
     factory=runpy.run_path(str(ROOT/'bin/lib/legacy_consumer.py'))['LegacyConsumer']
     adapter=factory(c.home,transport=c.transport,api=c.api,proof_reader=c.proof_reader,transport_api=api)
     adapter.command(['send-keys','-t','Alpha','C-m'])
@@ -255,3 +255,45 @@ def test_inventory_rechecks_socket_presence_after_bootstrap(tmp_path, transition
                 reply = c.command(['list-panes', '-a'])
                 assert (reply.returncode, reply.stdout) == (0, '')
                 assert not path.exists()
+
+
+@pytest.mark.parametrize('failure', [PermissionError(13, 'fixture denied'), OSError(5, 'fixture IO error')])
+def test_inventory_stat_errors_are_unknown_after_bootstrap(tmp_path, monkeypatch, failure):
+    with tempfile.TemporaryDirectory(prefix='inventory-error-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as directory:
+        path = Path(directory).resolve() / 's'
+        with socket.socket(socket.AF_UNIX) as stream:
+            stream.bind(str(path))
+            path.chmod(0o600)
+            transport = API['Transport'](path, binary='fixture-tmux')
+            c = API['LegacyConsumer'](tmp_path, transport=transport, api={}, proof_reader=lambda *a, **kw: [])
+            stat_call, lstat_call = os.stat, os.lstat
+            def deny(original):
+                def observe(value, *a, **kw):
+                    if os.fspath(value) == str(path):
+                        raise failure
+                    return original(value, *a, **kw)
+                return observe
+            with monkeypatch.context() as patch:
+                patch.setattr(os, 'stat', deny(stat_call))
+                patch.setattr(os, 'lstat', deny(lstat_call))
+                with pytest.raises((API['TargetError'], OSError)):
+                    c.command(['list-panes', '-a'])
+            assert path.lstat().st_mode & 0o777 == 0o600
+
+
+def test_fresh_admission_keeps_older_transport_api_compatible(tmp_path):
+    api = {key: value for key, value in API.items() if key not in ('LegacyConsumer', 'lstat_if_present')}
+    path = tmp_path / 'default'
+    transport = API['Transport'](path, binary='fixture-tmux', allow_absent=True)
+    factory = runpy.run_path(str(ROOT / 'bin/lib/legacy_consumer.py'))['LegacyConsumer']
+    adapter = factory(tmp_path, transport=transport, api={}, proof_reader=lambda *a, **kw: [], transport_api=api)
+    assert adapter.admitted_argv(['new-session', '-A', '-s', 'Fresh']) == [
+        'fixture-tmux', '-S', str(path), 'new-session', '-A', '-s', 'Fresh']
+    assert not path.exists()
+
+
+def test_missing_endpoint_parent_is_absent_without_creating_directories(tmp_path):
+    path = tmp_path / 'missing-parent' / 'default'
+    transport = API['Transport'](path, binary='fixture-tmux', allow_absent=True)
+    assert transport.identity is None
+    assert not path.parent.exists()

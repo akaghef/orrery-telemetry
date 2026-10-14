@@ -91,6 +91,10 @@ def check_pinned_transport(pinned, reply):
     return {**pinned,'server_pid':reply['server_pid']}
 
 
+def lstat_if_present(path):
+    return module_api('legacy_consumer')['lstat_if_present'](path)
+
+
 def private_directory(path, *, create=False):
     path = Path(path)
     if create:
@@ -100,7 +104,8 @@ def private_directory(path, *, create=False):
             pass
     info = path.lstat()
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-            or info.st_mode & 0o077 or path.resolve() != path):
+            or info.st_mode & 0o077 or info.st_mode & 0o700 != 0o700
+            or path.resolve() != path):
         raise TargetError('TMUX_DIRECTORY_UNSAFE')
     return path
 
@@ -120,9 +125,9 @@ def global_socket(client_home, mail_instance_id, *, base=None, create=False):
     # macOS sockaddr_un is the narrower supported boundary (104 bytes incl NUL).
     if len(os.fsencode(path)) >= 104:
         raise TargetError('TMUX_SOCKET_PATH_TOO_LONG')
-    if create or directory.exists() or directory.is_symlink():
+    if create or lstat_if_present(directory) is not None:
         private_directory(directory, create=create)
-    if path.exists() or path.is_symlink():
+    if lstat_if_present(path) is not None:
         validate_socket(path)
     return path
 
@@ -151,10 +156,10 @@ class Transport:
         if not self.binary:
             raise TargetError('TMUX_UNAVAILABLE')
         self.run = subprocess.run if run is None else run
-        if allow_absent and not self.path.exists() and not self.path.is_symlink():
+        if allow_absent and lstat_if_present(self.path) is None:
             if not self.path.is_absolute() or self.path.resolve() != self.path:
                 raise TargetError('TMUX_SOCKET_UNSAFE')
-            if self.path.parent.exists() or self.path.parent.is_symlink():
+            if lstat_if_present(self.path.parent) is not None:
                 private_directory(self.path.parent)
             self.identity = None
         else:
@@ -214,11 +219,10 @@ def legacy_transport(*, run=None, binary=None, environ=None):
     global_parent = Path('/tmp').resolve() / ('orrery-tmux-' + str(os.getuid()))
     if path.parent == global_parent:
         raise TargetError('GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED')
-    if not inherited and not path.exists() and not path.is_symlink():
-        # A fresh legacy cockpit can display an empty roster before any tmux
-        # server exists. Pin its destination without creating a server.
-        return Transport(path, binary=binary, run=run, allow_absent=True)
-    transport = Transport(path, binary=binary, run=run)
+    transport = Transport(path, binary=binary, run=run, allow_absent=not inherited)
+    if transport.identity is None:
+        # Read-only bootstrap of an actually absent default endpoint.
+        return transport
     result = transport.command('display-message', '-p', '#{socket_path}\t#{pid}')
     if module_api('legacy_consumer')['server_absent'](result):
         # A safe stale socket is an empty server, not an unknown transport.
@@ -562,7 +566,7 @@ def endpoint_candidates(home,instance,launch=None):
             raise
         if legacy.path not in seen:
             seen.add(legacy.path);values.append(('legacy-default',legacy))
-    if launch is None and dedicated.exists():values.append(('global-instance',Transport(dedicated)))
+    if launch is None and lstat_if_present(dedicated) is not None:values.append(('global-instance',Transport(dedicated)))
     return values
 
 

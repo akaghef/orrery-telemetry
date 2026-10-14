@@ -8,4 +8,4 @@ compact は入力欄が空で待機している場合だけ受け付け、Claude
 
 文書用の read-only demo も共有 consumer に接続し、合成 pane の観測を明示しました。利用者の tmux server には接続せず、従来の合成データと表示を維持します。
 
-共有 consumer は実際の server 不在を空と区別し、tmux の外の終了でも cleanup が退役を完了します。unsafe・timeout・読取不能は保持します。
+共有 consumer は実際の server 不在を空と区別し、tmux の外の終了でも cleanup が退役を完了します。unsafe・timeout・読取不能は保持します。不在は直接の lstat の ENOENT に限定し、親 directory の権限喪失も不明として保持します。

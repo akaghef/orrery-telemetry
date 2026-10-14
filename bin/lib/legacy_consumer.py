@@ -5,6 +5,14 @@ import re
 import subprocess
 
 
+def lstat_if_present(path):
+    """Only ENOENT proves absence; permission/IO errors remain unknown."""
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        return None
+
+
 def server_absent(result):
     """Only tmux's explicit empty-server replies prove an empty inventory."""
     diagnostic = (result.stderr or '').strip()
@@ -37,7 +45,7 @@ class LegacyConsumer:
             # Absence at bootstrap is not permission to adopt a server which
             # appeared before this admission. Use the existing socket/target
             # checks for both command() and the interactive CLI handoff.
-            if self.transport.path.exists() or self.transport.path.is_symlink():
+            if lstat_if_present(self.transport.path) is not None:
                 self.transport.identity=self.tmux['validate_socket'](self.transport.path)
                 server=self.transport.command('display-message','-p','#{pid}')
                 if server.returncode or not server.stdout.strip().isdigit() or int(server.stdout.strip())<1:

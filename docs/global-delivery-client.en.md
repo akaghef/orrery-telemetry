@@ -271,4 +271,4 @@ The identity digest binds the socket, pane, PID/start and owner/parent proof for
 
 For `send-compact`, confirm the `state_sha256` returned by `target`. The digest returned by `capture` or `attach` proves target identity only and is not a compact confirmation value.
 
-The shared legacy consumer treats an absent socket or confirmed `no server running` on a safe socket as an empty inventory. Cleanup may retire when no live lease remains. Unsafe sockets, timeouts and other read failures stay unknown and retain the identity; observation never creates a server.
+Only ENOENT from a direct `lstat` proves absence; EACCES and other I/O errors stay unknown. The parent directory must also grant owner rwx. The shared legacy consumer treats an absent socket or confirmed `no server running` on a safe socket as an empty inventory. Cleanup may retire when no live lease remains. Unsafe sockets, timeouts and other read failures stay unknown and retain the identity; observation never creates a server.

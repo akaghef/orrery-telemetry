@@ -273,4 +273,4 @@ context 使用率も digest に含めます。提出後の応答不明は exit 3
 
 `send-compact` の確認には `target` が返す `state_sha256` を使います。`capture`・`attach` が返す値は対象の同一性の確認用なので、compact の確認値として流用しません。
 
-共有 legacy consumer は、socket 不在または安全な socket で `no server running` を確認した inventory を空とします。cleanup は生存 lease がなければ退役へ進みます。unsafe socket・timeout・その他の読取不能は不明のまま保持し、観測だけで server を作りません。
+不在は直接の `lstat` の ENOENT だけで判断し、EACCES・その他の I/O エラーは不明として保持します。親 directory は owner の rwx も必要です。共有 legacy consumer は、socket 不在または安全な socket で `no server running` を確認した inventory を空とします。cleanup は生存 lease がなければ退役へ進みます。unsafe socket・timeout・その他の読取不能は不明のまま保持し、観測だけで server を作りません。
