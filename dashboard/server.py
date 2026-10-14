@@ -6053,7 +6053,9 @@ def _provider_stall_send(row: dict, event: dict) -> str:
         sender_name=name, sender_token=token, to=[parent], importance="high",
         subject=f"{name} が model の容量エラーで停止", body_md=provider_stalls.message(event)), timeout=3)
     # An HTTP failure may occur after Mail commits. Never create a second send.
-    return "sent" if result.get("ok") else "delivery_unknown"
+    if result.get("ok"):
+        return "sent"
+    return "failed" if result.get("rejected") else "delivery_unknown"
 
 
 def _start_provider_stall_monitor():
@@ -6061,7 +6063,8 @@ def _start_provider_stall_monitor():
     if GLOBAL_MODE or os.name == "nt" or _provider_monitor is not None:
         return
     _provider_stop.clear()
-    _provider_monitor = provider_stalls.Monitor(Path(RUNTIME_DIR) / "provider-stalls.json", _provider_stall_send)
+    _provider_monitor = provider_stalls.Monitor(Path(RUNTIME_DIR) / "provider-stalls.json",
+        _provider_stall_send, session_names=mail_signals.session_names)
     _provider_thread = threading.Thread(target=_provider_monitor.run,
         args=(_provider_stall_samples, _provider_stop), name="provider-stalls", daemon=True)
     _provider_thread.start()
@@ -7008,7 +7011,7 @@ def _mcp_jsonrpc(method: str, params: dict, timeout: int = 15) -> dict:
     except ValueError as e:
         return {"ok": False, "error": f"invalid JSON-RPC response: {e}"}
     if isinstance(body, dict) and body.get("error"):
-        return {"ok": False, "error": str(body["error"])}
+        return {"ok": False, "error": str(body["error"]), "rejected": True}
     if not isinstance(body, dict) or "result" not in body:
         return {"ok": False, "error": "JSON-RPC response has no result"}
     return {"ok": True, "result": body["result"]}
@@ -7065,7 +7068,7 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
             for block in result.get("content") or []
             if isinstance(block, dict)
         ).strip()
-        return {"ok": False, "error": text or "ORRERY Mail tool failed"}
+        return {"ok": False, "error": text or "ORRERY Mail tool failed", "rejected": True}
     # Newer MCP servers expose the decoded payload in structuredContent.
     try:
         data = result.get("structuredContent")
@@ -7076,7 +7079,7 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
             except ValueError:
                 lowered = text.lower()
                 if "error calling tool" in lowered or "validation error" in lowered:
-                    return {"ok": False, "error": text.strip()}
+                    return {"ok": False, "error": text.strip(), "rejected": True}
                 data = {"text": text}
     except (KeyError, IndexError, TypeError, ValueError) as e:
         return {"ok": False, "error": f"unexpected response shape: {e}"}

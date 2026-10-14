@@ -43,12 +43,14 @@ def classify(text: str) -> dict:
 class Monitor:
     """A durable event claim bounds each episode to one Mail send attempt."""
 
-    def __init__(self, path: Path, send):
+    def __init__(self, path: Path, send, *, session_names=None):
         self.path = Path(path)
         self.send = send
         self._lock = threading.RLock()
         self._rows = {}
         self._views = {}
+        self._saved_text = None
+        self._session_names = session_names
 
     @contextmanager
     def _transaction(self):
@@ -65,6 +67,7 @@ class Monitor:
                 state_fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
             except FileNotFoundError:
                 self._rows = {}
+                self._saved_text = None
             else:
                 with os.fdopen(state_fd, encoding="utf-8") as source:
                     info = os.fstat(source.fileno())
@@ -75,27 +78,32 @@ class Monitor:
                 if saved.get("version") != 1 or not isinstance(saved.get("events"), dict):
                     raise ValueError("invalid provider-stall state")
                 self._rows = saved["events"]
+                self._saved_text = json.dumps(saved, ensure_ascii=False, sort_keys=True)
             yield
         finally:
             os.close(fd)
 
     def _save(self):
+        text = json.dumps({"version": 1, "events": self._rows}, ensure_ascii=False, sort_keys=True)
+        # Publish even when another monitor saved the same state in between.
+        self._views = {
+            (row["name"], row["generation"]): {
+                key: row[key] for key in ("kind", "since", "error", "notification_status")
+            } for row in self._rows.values() if row["phase"] == "stalled"
+        }
+        if text == self._saved_text:
+            return
         fd, name = tempfile.mkstemp(prefix=".provider-stalls-", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as target:
-                json.dump({"version": 1, "events": self._rows}, target, ensure_ascii=False)
+                target.write(text)
                 target.flush()
                 os.fsync(target.fileno())
             os.replace(name, self.path)
-            # HTTP reads never wait for Mail or an inter-process state lock.
-            self._views = {
-                (row["name"], row["generation"]): {
-                    key: row[key] for key in ("kind", "since", "error", "notification_status")
-                } for row in self._rows.values() if row["phase"] == "stalled"
-            }
             directory = os.open(self.path.parent, os.O_RDONLY)
             try:
                 os.fsync(directory)
+                self._saved_text = text
             finally:
                 os.close(directory)
         finally:
@@ -105,29 +113,39 @@ class Monitor:
     def tick(self, samples, *, now=None):
         now = datetime.now(timezone.utc).timestamp() if now is None else now
         samples = list(samples)
+        # No capacity candidate and no journal: do not even create a lock/root.
+        if not os.path.lexists(self.path) and not any(
+            row["evidence"].get("state") == "capacity" for row in samples
+        ):
+            return
         with self._lock, self._transaction():
             for row in samples:
                 key = json.dumps([row["project_key"], row["agent_id"], row["generation"]])
                 old = self._rows.get(key)
-                if old:
+                capture = row["capture_id"]
+                # A delayed scrape must not undo or confirm a newer transition.
+                if old and capture <= old["capture_id"]:
+                    continue
+                if old and now - old["last_seen"] >= 3600:
                     old["last_seen"] = now
                 state = row["evidence"].get("state", "unknown")
                 if state == "work":
-                    self._rows.pop(key, None)
+                    if old:
+                        self._rows[key] = dict(name=row["name"], generation=row["generation"],
+                            phase="clear", capture_id=capture, last_seen=now)
                     continue
                 if state != "capacity":
                     if old and old["phase"] == "candidate":
-                        self._rows.pop(key, None)
+                        old.update(phase="clear", capture_id=capture)
                     continue
-                if old is None:
+                if old is None or old["phase"] == "clear":
                     self._rows[key] = dict(name=row["name"], generation=row["generation"],
-                        phase="candidate", capture_id=row["capture_id"], first_seen=now,
+                        phase="candidate", capture_id=capture, first_seen=now,
                         last_seen=now)
                     continue
-                old["last_seen"] = now
-                if old["phase"] != "candidate" or old["capture_id"] == row["capture_id"]:
+                if old["phase"] != "candidate":
                     continue
-                old.update(phase="stalled", kind="model_capacity", error=CAPACITY,
+                old.update(phase="stalled", capture_id=capture, kind="model_capacity", error=CAPACITY,
                            event_id=str(uuid.uuid4()), since=now,
                            notification_status="delivery_unknown")
                 # Commit the claim before a call whose result could be lost.
@@ -146,10 +164,15 @@ class Monitor:
             # A replacement generation is positive evidence. Mere absence or a
             # long dashboard outage must never rearm the same stopped session.
             current = {(row["project_key"], row["agent_id"]): row["generation"] for row in samples}
+            # Only query definitive tmux inventory for rows past the expiry.
+            expired = any(now - row["last_seen"] >= 30 * 86400 for row in self._rows.values())
+            names = self._session_names() if expired and self._session_names else None
             for key, value in list(self._rows.items()):
                 project, agent_id, generation = json.loads(key)
                 replacement = current.get((project, agent_id), generation)
-                if now - value["last_seen"] >= 7 * 86400 and replacement != generation:
+                age = now - value["last_seen"]
+                if ((age >= 7 * 86400 and replacement != generation)
+                        or (age >= 30 * 86400 and names is not None and value["name"] not in names)):
                     del self._rows[key]
             self._save()
 

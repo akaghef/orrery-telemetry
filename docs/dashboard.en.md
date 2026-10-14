@@ -33,6 +33,8 @@ The dashboard displays `MODEL CAPACITY` on DECK and `CAPACITY` on NETWORK when a
 
 Only the confirmed Codex capacity message is supported. Historical/quoted errors, busy or approval screens, and unknown provider errors do not trigger a notice. Codex App, headless, and **global mode are not supported yet**.
 
+The state file starts with the first capacity candidate and is saved only when state changes; observation-time checkpoints are at most hourly. Capture ordering survives state transitions and rearming, so delayed older captures cannot confirm or clear newer transitions. Replaced generations expire after seven unobserved days; definitively absent sessions expire after thirty. An unavailable tmux inventory retains the record. Explicit Mail tool/JSON-RPC rejection is `failed`; only uncertain acceptance is `delivery_unknown`. Neither is automatically retried.
+
 
 DECK opens first. **One card represents one agent**, so you can inspect who is doing what and whether each agent is stopped waiting for input.
 

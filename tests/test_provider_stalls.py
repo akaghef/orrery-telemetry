@@ -273,3 +273,105 @@ def test_fixture_replaces_import_time_runtime(isolated_provider_stall_runtime):
     assert server.RUNTIME_DIR == str(isolated_provider_stall_runtime)
     assert os.environ["AGENTSTACK_RUNTIME_DIR"] == server.RUNTIME_DIR
     assert "AGENTSTACK_CLIENT_CONFIG" not in os.environ
+
+
+def test_idle_monitor_creates_no_state_or_lock(tmp_path):
+    path = tmp_path / "runtime" / "provider-stalls.json"
+    monitor = stalls.Monitor(path, lambda *args: pytest.fail("idle send"))
+    monitor.tick([], now=100)
+    monitor.tick([sample(1, text=IDLE)], now=105)
+    monitor.tick([sample(2, text=WORK)], now=110)
+    assert not path.exists()
+    assert not path.with_suffix(".lock").exists()
+
+
+def test_unchanged_stall_does_not_rewrite_or_fsync(tmp_path, monkeypatch):
+    path = tmp_path / "state.json"
+    monitor = stalls.Monitor(path, lambda *args: "sent")
+    monitor.tick([sample(1)], now=100)
+    monitor.tick([sample(2)], now=105)
+    before = (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes())
+    monkeypatch.setattr(stalls.os, "fsync", lambda fd: pytest.fail("unchanged fsync"))
+    monitor.tick([sample(3)], now=110)
+    assert (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes()) == before
+
+
+@pytest.mark.parametrize("names, pruned", [(set(), True), ({"ChildCurie"}, False), (None, False)])
+def test_expired_absent_generation_is_pruned_only_with_proof(tmp_path, names, pruned):
+    path = tmp_path / "state.json"
+    monitor = stalls.Monitor(path, lambda *args: "sent", session_names=lambda: names)
+    monitor.tick([sample(1)], now=100)
+    monitor.tick([sample(2)], now=105)
+    monitor.tick([], now=100 + 31 * 86400)
+    assert (monitor.view("ChildCurie", "101:$1:17") is None) == pruned
+
+
+@pytest.mark.parametrize("response, expected", [
+    ({"ok": True, "result": {"isError": True, "content": [{"type": "text", "text": "contact policy rejected"}]}}, "failed"),
+    ({"ok": False, "error": "timeout"}, "delivery_unknown"),
+    ({"ok": True, "result": None}, "delivery_unknown"),
+])
+def test_explicit_mail_rejection_differs_from_unknown_delivery(monkeypatch, response, expected):
+    from dashboard import server
+    from types import SimpleNamespace
+    monkeypatch.setattr(server, "tmux_state", lambda: {"ChildCurie": dict(created=101, session_id="$1", pane_pid=17)})
+    monkeypatch.setattr(server, "_tmux", lambda a: "PARENT_AGENT=ParentNewton")
+    monkeypatch.setattr(server, "_codex_registration", lambda n: dict(agent_id=2, project_key="/project"))
+    monkeypatch.setattr(server, "_resume_registration", lambda *a: {"agent_id": 1})
+    monkeypatch.setattr(server, "_runtime_agent_token", lambda n: "fixture-owner")
+    monkeypatch.setattr(server, "_child_resume_module", lambda: SimpleNamespace(
+        _load_state=lambda p: dict(parent_agent="ParentNewton", registration_token="fixture-owner"),
+        _validate_identity=lambda *a, **k: None))
+    monkeypatch.setattr(server, "_mcp_tool_parameters", lambda t: None)
+    monkeypatch.setattr(server, "_mcp_jsonrpc", lambda *a: response)
+    assert server._provider_stall_send(sample(2), dict(since=100, event_id="fixture", error=ERROR)) == expected
+
+
+def test_jsonrpc_rejection_is_marked_as_definite(monkeypatch):
+    import io
+    from dashboard import server
+    monkeypatch.setattr(server, "_legacy_mail_bearer_enabled", lambda: False)
+    monkeypatch.setattr(server.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(
+        b'{"jsonrpc":"2.0","error":{"code":-32602,"message":"invalid parameters"}}'))
+    assert server._mcp_jsonrpc("tools/call", {})["rejected"] is True
+
+
+def test_delayed_work_cannot_rearm_a_newer_stalled_episode(tmp_path):
+    sent = []
+    path = tmp_path / "state.json"
+    send = lambda r, e: sent.append(e["event_id"]) or "sent"
+    a, b = stalls.Monitor(path, send), stalls.Monitor(path, send)
+    a.tick([sample(10)], now=100)
+    a.tick([sample(20)], now=105)
+    b.tick([sample(15, text=WORK)], now=106)
+    assert b.view("ChildCurie", "101:$1:17") is not None
+    a.tick([sample(30)], now=110)
+    a.tick([sample(40)], now=115)
+    assert len(sent) == 1
+
+
+def test_older_capacity_cannot_confirm_newer_candidate(tmp_path):
+    attempts = []
+    monitor = stalls.Monitor(tmp_path / "state.json", lambda *args: attempts.append(args) or "sent")
+    monitor.tick([sample(200)], now=200)
+    monitor.tick([sample(100)], now=205)
+    assert not attempts
+    monitor.tick([sample(300)], now=210)
+    assert len(attempts) == 1
+
+
+def test_rearmed_episode_keeps_its_capture_floor_across_restart(tmp_path):
+    path = tmp_path / "state.json"
+    sent = []
+    send = lambda *args: sent.append(args) or "sent"
+    monitor = stalls.Monitor(path, send)
+    monitor.tick([sample(10)], now=100)
+    monitor.tick([sample(20)], now=105)
+    monitor.tick([sample(30, text=WORK)], now=110)
+    monitor = stalls.Monitor(path, send)
+    monitor.tick([sample(21)], now=115)
+    monitor.tick([sample(22)], now=120)
+    assert len(sent) == 1
+    monitor.tick([sample(40)], now=125)
+    monitor.tick([sample(50)], now=130)
+    assert len(sent) == 2
