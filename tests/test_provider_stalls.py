@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 import subprocess
 import threading
 
@@ -37,6 +38,50 @@ def test_current_terminal_error_only():
     ):
         assert stalls.classify(text)["state"] != "capacity", text
     assert stalls.classify(WORK)["state"] == "work"
+
+
+def test_live_capacity_frame_with_background_terminals_notifies(tmp_path):
+    frame = (Path(__file__).parent / "fixtures" / "codex-capacity-background-terminals.txt").read_text()
+    assert stalls.classify(frame) == {"state": "capacity", "error": ERROR}
+    sent = []
+    monitor = stalls.Monitor(tmp_path / "state.json", lambda *args: sent.append(args) or "sent")
+    monitor.tick([sample(1, text=frame)], now=100)
+    assert not sent
+    monitor.tick([sample(2, text=frame)], now=105)
+    monitor.tick([sample(3, text=frame)], now=110)
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 10, 123])
+def test_capacity_allows_one_exact_background_terminal_summary(count):
+    plural = "" if count == 1 else "s"
+    status = f"{count} background terminal{plural} running · /ps to view · /stop to close"
+    assert stalls.classify(ERROR + "\n  " + status + IDLE)["state"] == "capacity"
+
+
+@pytest.mark.parametrize("intervening", [
+    "0 background terminals running · /ps to view · /stop to close",
+    "1 background terminals running · /ps to view · /stop to close",
+    "2 background terminal running · /ps to view · /stop to close",
+    "2 background terminals running · /ps to view",
+    "2 background terminals running · /ps to view · /stop to close; arbitrary output",
+    "• Queued follow-up inputs\n  ↳ fixture follow-up",
+    "/ps\nBackground terminals\n  • fixture process",
+    "1 background terminal running · /ps to view · /stop to close\n"
+    "1 background terminal running · /ps to view · /stop to close",
+])
+def test_capacity_rejects_other_lines_before_prompt(intervening):
+    assert stalls.classify(ERROR + "\n" + intervening + IDLE)["state"] != "capacity"
+
+
+def test_background_summary_does_not_hide_work_history_or_quoted_errors():
+    status = "3 background terminals running · /ps to view · /stop to close\n"
+    for text in (
+        ERROR + "\n" + WORK + status + IDLE,
+        ERROR + "\n• Follow-up response\n" + status + IDLE,
+        "```\n" + ERROR + "\n" + status + "```\n" + IDLE,
+    ):
+        assert stalls.classify(text)["state"] != "capacity"
 
 
 def test_two_captures_one_notice_restart_then_work_rearms(tmp_path):
