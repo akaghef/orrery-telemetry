@@ -52,6 +52,49 @@ def test_live_capacity_frame_with_background_terminals_notifies(tmp_path):
     assert len(sent) == 1
 
 
+def test_live_remote_compact_capacity_frame_notifies(tmp_path):
+    frame = (Path(__file__).parent / "fixtures" / "codex-remote-compact-capacity.txt").read_text()
+    assert stalls.classify(frame) == {"state": "capacity", "error": ERROR}
+    sent = []
+    monitor = stalls.Monitor(tmp_path / "state.json", lambda *args: sent.append(args) or "sent")
+    monitor.tick([sample(1, text=frame)], now=100)
+    assert not sent
+    monitor.tick([sample(2, text=frame)], now=105)
+    monitor.tick([sample(3, text=frame)], now=110)
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("status", ["", "3 background terminals running · /ps to view · /stop to close\n"])
+def test_remote_compact_capacity_only_allows_verified_prefix(status):
+    error = "■ Error running remote compact task: " + ERROR.removeprefix("■ ")
+    assert stalls.classify(error + "\n" + status + IDLE)["state"] == "capacity"
+    for text in (
+        error + "\n" + WORK + status + IDLE,
+        error + "\n• Follow-up response\n" + status + IDLE,
+        "```\n" + error + "\n```\n" + status + IDLE,
+        "> " + error + "\n" + status + IDLE,
+        "Example: " + error + "\n" + status + IDLE,
+        error + "\n■ Different failure\n" + status + IDLE,
+    ):
+        assert stalls.classify(text)["state"] != "capacity", text
+
+
+@pytest.mark.parametrize("prefix", [
+    "Error running compact task: ", "Error: ", "Example: ",
+    "Error running remote compact task: Error running remote compact task: ",
+])
+def test_capacity_does_not_accept_unverified_prefixes(prefix):
+    assert stalls.classify("■ " + prefix + ERROR.removeprefix("■ ") + IDLE)["state"] != "capacity"
+
+
+@pytest.mark.parametrize("message", [
+    "stream disconnected before completion", "context window exceeded",
+    "Selected model is at capacity. Please try a different model. extra output",
+])
+def test_remote_compact_other_errors_do_not_count_as_capacity(message):
+    assert stalls.classify("■ Error running remote compact task: " + message + IDLE)["state"] != "capacity"
+
+
 @pytest.mark.parametrize("count", [1, 2, 3, 10, 123])
 def test_capacity_allows_one_exact_background_terminal_summary(count):
     plural = "" if count == 1 else "s"
