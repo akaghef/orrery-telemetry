@@ -52,8 +52,9 @@ def test_live_capacity_frame_with_background_terminals_notifies(tmp_path):
     assert len(sent) == 1
 
 
-def test_live_remote_compact_capacity_frame_notifies(tmp_path):
-    frame = (Path(__file__).parent / "fixtures" / "codex-remote-compact-capacity.txt").read_text()
+@pytest.mark.parametrize("fixture", ["codex-remote-compact-capacity.txt", "codex-remote-compact-capacity-80.txt"])
+def test_live_remote_compact_capacity_frame_notifies(tmp_path, fixture):
+    frame = (Path(__file__).parent / "fixtures" / fixture).read_text()
     assert stalls.classify(frame) == {"state": "capacity", "error": ERROR}
     sent = []
     monitor = stalls.Monitor(tmp_path / "state.json", lambda *args: sent.append(args) or "sent")
@@ -93,6 +94,28 @@ def test_capacity_does_not_accept_unverified_prefixes(prefix):
 ])
 def test_remote_compact_other_errors_do_not_count_as_capacity(message):
     assert stalls.classify("■ Error running remote compact task: " + message + IDLE)["state"] != "capacity"
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_wrapped_capacity_does_not_join_unrelated_lines(remote):
+    error = ERROR if not remote else "■ Error running remote compact task: " + ERROR.removeprefix("■ ")
+    wrapped = error.replace("Please try", "Please\n  try")
+    for gap in ("\n", "  \n  "):
+        assert stalls.classify(error.replace("Please try", "Please" + gap + "try") + IDLE)["state"] == "capacity"
+    for text in (
+        error.replace("Please try", "Please\n\n  try"),
+        error.replace("Please try", "Please\n  unrelated output\n  try"),
+        error.replace("Please try", "Please\n> try"),
+        error.removesuffix(" model."),
+        wrapped + " extra output",
+        wrapped + "\n• Follow-up response",
+        "```\n" + wrapped + "\n```",
+        "> " + wrapped,
+        "Example: " + wrapped,
+        wrapped.removeprefix("■ "),
+    ):
+        assert stalls.classify(text + IDLE)["state"] != "capacity", text
+    assert stalls.classify(wrapped + "\n" + WORK)["state"] == "work"
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 10, 123])
@@ -251,6 +274,66 @@ def test_isolated_real_tmux_capture(tmp_path):
     finally:
         tmux("kill-server")
         directory.cleanup()
+
+
+@pytest.mark.parametrize("width", [60, 80, 100, 120])
+@pytest.mark.parametrize("remote", [False, True])
+def test_capacity_in_real_pane_after_codex_wrap(tmp_path, monkeypatch, width, remote):
+    """Codex's explicit history newlines survive capture-pane -J."""
+    import os
+    import shlex
+    import shutil
+    import sys
+    import tempfile
+    import textwrap
+    import time
+    from dashboard import server
+
+    if not shutil.which("tmux"):
+        pytest.skip("tmux unavailable")
+    error = ERROR if not remote else "■ Error running remote compact task: " + ERROR.removeprefix("■ ")
+    wrapped = textwrap.fill(error, width=width, subsequent_indent="  ")
+    frame = tmp_path / "frame.txt"
+    frame.write_text(wrapped + IDLE)
+    if remote and width == 80:
+        fixture = Path(__file__).parent / "fixtures" / "codex-remote-compact-capacity-80.txt"
+        assert fixture.read_text().startswith(wrapped + "\n")
+    env = {**os.environ, "HOME": str(tmp_path), "TMUX": ""}
+    run = subprocess.run
+    with tempfile.TemporaryDirectory(prefix="stall-wrap-", dir="/private/tmp") as directory:
+        socket = directory + "/s"
+
+        def tmux(*args):
+            return run(["tmux", "-f", "/dev/null", "-S", socket, *args],
+                capture_output=True, text=True, timeout=5, check=True, env=env)
+
+        writer = "import pathlib,sys,time; print(pathlib.Path(sys.argv[1]).read_text(),flush=True); time.sleep(10)"
+        try:
+            tmux("new-session", "-d", "-s", "FixtureWrap", "-x", str(width), "-y", "24",
+                shlex.join([sys.executable, "-c", writer, str(frame)]))
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                captured = tmux("capture-pane", "-p", "-J", "-t", "FixtureWrap").stdout
+                if "sol medium" in captured:
+                    break
+                time.sleep(.02)
+            assert tmux("display-message", "-p", "-t", "FixtureWrap", "#{pane_width}").stdout.strip() == str(width)
+            # Explicit Codex-style newlines survive -J; terminal wraps join.
+            assert wrapped in captured
+            assert len(wrapped.splitlines()) == (2 if len(error) > width else 1)
+
+            def capture_from_isolated_socket(args, **kwargs):
+                assert args[:2] == ["tmux", "capture-pane"]
+                assert "-J" in args
+                return run([args[0], "-S", socket, *args[1:]], **{**kwargs, "env": env})
+
+            monkeypatch.setattr(server.subprocess, "run", capture_from_isolated_socket)
+            monkeypatch.setattr(server, "_rt_cache", {})
+            monkeypatch.setattr(server, "_provider_captures", {})
+            server._agent_runtime("FixtureWrap", 101, "$1")
+            assert server._provider_captures["FixtureWrap"][2]["state"] == "capacity"
+        finally:
+            run(["tmux", "-S", socket, "kill-server"], capture_output=True, timeout=5, env=env)
 
 
 def test_sampler_uses_shared_capture_and_session_parent(monkeypatch):

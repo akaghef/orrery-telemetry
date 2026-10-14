@@ -33,6 +33,8 @@ The dashboard displays `MODEL CAPACITY` on DECK and `CAPACITY` on NETWORK when a
 
 Only the confirmed Codex capacity message is supported, either bare or with remote compaction's `Error running remote compact task: ` prefix. Unknown prefixes and other compaction errors are excluded. Historical/quoted errors, busy or approval screens, and unknown provider errors do not trigger a notice. Codex App, headless, and **global mode are not supported yet**.
 
+Detection also handles Codex's own line wrapping of the fixed error text. A single newline is allowed only between its known words; blank lines and unrelated output are never joined.
+
 Detection also accepts Codex's single background-terminal count row, including its `/ps` and `/stop` hints, between the error and the composer. Only the exact singular/plural status row is allowed. Ordinary output, queued-input bodies, and `/ps` results are not skipped.
 
 The state file starts with the first capacity candidate and is saved only when state changes. Work observations for a child that has never been a candidate cause no writes. Once a child has been a candidate, observed work writes the small state file approximately every five seconds, including after rearming. Persisting the latest work capture's order prevents delayed capacity captures from causing another notice in a different process or after a restart. For ticks that do not update capture ordering, observation-time checkpoints are at most hourly.

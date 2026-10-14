@@ -37,6 +37,8 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 初版は上記 Codex capacity 文言と、remote compact がその前に `Error running remote compact task: ` を付けた形式だけが対象です。未知の前置きや compact 中の他のエラーへは広げません。過去ログに残ったエラー、作業中・承認待ち、未知の provider エラーは判定しません。tmux を使わない Codex App / headless と **global mode は未対応・後続**です。
 
+Codex 自身が固定エラー文を折り返す場合も検知します。固定文言の単語間だけで改行を1つ許し、空行や無関係な行は連結しません。
+
 エラーと入力欄の間に Codex の background terminal 件数と `/ps`・`/stop` の案内行がある場合も検知します。許すのは実際の単数・複数の固定表示1行だけで、通常の出力・queued input の本文・`/ps` の実行結果は読み飛ばしません。
 
 状態ファイルは capacity 候補を初めて観測したときから作り、変化がある場合だけ保存します。一度も候補になっていない子の work 観測では書き込みません。一度候補になった子は、作業中も約5秒ごとに小さな状態ファイルを書きます。解除後も最新の work capture の順序を永続化し、別 process や再起動後に遅れた capacity が届いて再通知するのを防ぐためです。capture の順序を更新しない巡回では、観測時刻だけの更新は最大1時間に1回です。
