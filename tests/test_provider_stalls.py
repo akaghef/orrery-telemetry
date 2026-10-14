@@ -307,7 +307,8 @@ def test_expired_absent_generation_is_pruned_only_with_proof(tmp_path, names, pr
 
 
 @pytest.mark.parametrize("response, expected", [
-    ({"ok": True, "result": {"isError": True, "content": [{"type": "text", "text": "contact policy rejected"}]}}, "failed"),
+    ({"ok": True, "result": {"isError": True, "content": [{"type": "text", "text": "Error calling tool 'send_message': Recipient is not accepting messages."}]}}, "failed"),
+    ({"ok": True, "result": {"isError": True, "content": [{"type": "text", "text": "Error calling tool 'send_message': OS error: fixture archive failure after database commit"}]}}, "delivery_unknown"),
     ({"ok": False, "error": "timeout"}, "delivery_unknown"),
     ({"ok": True, "result": None}, "delivery_unknown"),
 ])
@@ -327,13 +328,19 @@ def test_explicit_mail_rejection_differs_from_unknown_delivery(monkeypatch, resp
     assert server._provider_stall_send(sample(2), dict(since=100, event_id="fixture", error=ERROR)) == expected
 
 
-def test_jsonrpc_rejection_is_marked_as_definite(monkeypatch):
+@pytest.mark.parametrize("code, rejected", [
+    (-32600, True), (-32601, True), (-32602, True),
+    (-32603, False), (-32000, False), (None, False), ([], False),
+])
+def test_jsonrpc_only_pre_dispatch_errors_are_definite(monkeypatch, code, rejected):
     import io
+    import json
     from dashboard import server
     monkeypatch.setattr(server, "_legacy_mail_bearer_enabled", lambda: False)
+    body = json.dumps({"jsonrpc": "2.0", "error": {"code": code, "message": "fixture"}}).encode()
     monkeypatch.setattr(server.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(
-        b'{"jsonrpc":"2.0","error":{"code":-32602,"message":"invalid parameters"}}'))
-    assert server._mcp_jsonrpc("tools/call", {})["rejected"] is True
+        body))
+    assert server._mcp_jsonrpc("tools/call", {})["rejected"] is rejected
 
 
 def test_delayed_work_cannot_rearm_a_newer_stalled_episode(tmp_path):
@@ -375,3 +382,133 @@ def test_rearmed_episode_keeps_its_capture_floor_across_restart(tmp_path):
     monitor.tick([sample(40)], now=125)
     monitor.tick([sample(50)], now=130)
     assert len(sent) == 2
+
+
+def test_work_after_clear_advances_shared_capture_floor(tmp_path):
+    path = tmp_path / "state.json"
+    sent = []
+    send = lambda *args: sent.append(args) or "sent"
+    a, b = stalls.Monitor(path, send), stalls.Monitor(path, send)
+    a.tick([sample(10)], now=100)
+    a.tick([sample(20)], now=105)
+    a.tick([sample(30, text=WORK)], now=110)
+    # Clear is already persisted; later work must still reach other monitors.
+    a.tick([sample(50, text=WORK)], now=115)
+    b.tick([sample(40)], now=120)
+    b.tick([sample(45)], now=125)
+    assert len(sent) == 1
+    assert b.view("ChildCurie", "101:$1:17") is None
+    restarted = stalls.Monitor(path, send)
+    restarted.tick([sample(46)], now=130)
+    restarted.tick([sample(47)], now=135)
+    assert len(sent) == 1
+    # A genuinely newer stop can still be notified.
+    restarted.tick([sample(60)], now=140)
+    restarted.tick([sample(70)], now=145)
+    assert len(sent) == 2
+
+
+@pytest.mark.parametrize("history", ["never_candidate", "candidate", "stalled"])
+def test_work_writes_capture_order_only_for_tracked_children(tmp_path, monkeypatch, history):
+    path = tmp_path / "state.json"
+    monitor = stalls.Monitor(path, lambda *args: "sent")
+    if history == "never_candidate":
+        # Another child's journal must not make this working child writable.
+        other = sample(1)
+        other.update(name="OtherChild", agent_id=3, generation="102:$2:18")
+        monitor.tick([other], now=100)
+    else:
+        monitor.tick([sample(10)], now=100)
+        if history == "stalled":
+            monitor.tick([sample(20)], now=105)
+        monitor.tick([sample(30, text=WORK)], now=110)
+    writes = []
+    replace = stalls.os.replace
+
+    def counted_replace(source, destination):
+        if destination == path:
+            writes.append(destination)
+        return replace(source, destination)
+
+    monkeypatch.setattr(stalls.os, "replace", counted_replace)
+    for capture in range(31, 41):
+        monitor.tick([sample(capture, text=WORK)], now=110 + capture)
+    assert len(writes) == (0 if history == "never_candidate" else 10)
+
+
+@pytest.mark.parametrize("case", [
+    "postcommit_os", "postcommit_value", "argument_unknown", "argument_type",
+    "contact_blocked", "contact_required", "sender_token",
+])
+def test_real_mail_rejection_contract_and_postcommit_uncertainty(tmp_path, monkeypatch, case):
+    """Use real FastMCP errors: isError alone does not establish non-delivery."""
+    import asyncio
+    import sqlite3
+    from fastmcp import Client
+    from agentstack_mail import app, config, db
+    from dashboard import server
+
+    database = tmp_path / "mail.sqlite3"
+    project = str(tmp_path / "project")
+    for key, value in {
+        "AGENTSTACK_MAIL_ENV_FILE": str(tmp_path / "missing.env"),
+        "AGENTSTACK_MAIL_DATABASE_URL": "sqlite+aiosqlite:///" + str(database),
+        "AGENTSTACK_MAIL_DB": str(database),
+        "AGENTSTACK_MAIL_STORAGE_ROOT": str(tmp_path / "archive"),
+        "AGENTSTACK_MAIL_NOTIFICATIONS_SIGNALS_DIR": str(tmp_path / "signals"),
+        "AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED": "false",
+        "AGENTSTACK_MAIL_TOOLS_LOG_ENABLED": "false",
+        "AGENTSTACK_MAIL_CONTACT_ENFORCEMENT_ENABLED": "true",
+        "AGENTSTACK_MAIL_MESSAGING_AUTO_HANDSHAKE_ON_BLOCK": "false",
+    }.items():
+        monkeypatch.setenv(key, value)
+    db.reset_database_state()
+    config.clear_settings_cache()
+
+    async def run():
+        async with Client(app.build_mcp_server()) as client:
+            await client.call_tool("ensure_project", {"human_key": project})
+            agents = []
+            for name in ("ChildCurie", "ParentNewton"):
+                result = await client.call_tool("register_agent", dict(
+                    project_key=project, name=name, program="codex", model="fixture"))
+                agents.append(result.structured_content or result.data)
+            for agent in agents:
+                policy = "open"
+                if agent is agents[1]:
+                    policy = {"contact_blocked": "block_all", "contact_required": "contacts_only"}.get(case, "open")
+                await client.call_tool("set_contact_policy", dict(
+                    project_key=project, agent_name=agent["name"], policy=policy))
+            args = dict(project_key=project, sender_name=agents[0]["name"],
+                to=[agents[1]["name"]], subject="capacity notice", body_md="fixture body",
+                auto_contact_if_blocked=False)
+            if case == "argument_unknown":
+                args["unknown_argument"] = "fixture"
+            elif case == "argument_type":
+                args["subject"] = 123
+            elif case == "sender_token":
+                args["sender_token"] = "different-test-credential"
+            if case.startswith("postcommit_"):
+                async def fail_archive(*a, **kw):
+                    error = OSError if case == "postcommit_os" else ValueError
+                    raise error("fixture archive failure after database commit")
+                monkeypatch.setattr(app, "write_message_bundle", fail_archive)
+            result = await client.call_tool("send_message", args, raise_on_error=False)
+            assert result.is_error
+            return dict(isError=result.is_error,
+                content=[block.model_dump(mode="json") for block in result.content])
+
+    try:
+        payload = asyncio.run(run())
+        monkeypatch.setattr(server, "_mcp_tool_parameters", lambda *a: None)
+        monkeypatch.setattr(server, "_mcp_jsonrpc", lambda *a, **kw: dict(ok=True, result=payload))
+        interpreted = server._mcp_call("send_message", {})
+        assert interpreted["ok"] is False
+        assert interpreted["rejected"] is (not case.startswith("postcommit_")), payload
+        with sqlite3.connect(database) as connection:
+            expected = int(case.startswith("postcommit_"))
+            assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == expected
+            assert connection.execute("SELECT COUNT(*) FROM message_recipients").fetchone()[0] == expected
+    finally:
+        db.reset_database_state()
+        config.clear_settings_cache()

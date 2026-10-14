@@ -7011,7 +7011,11 @@ def _mcp_jsonrpc(method: str, params: dict, timeout: int = 15) -> dict:
     except ValueError as e:
         return {"ok": False, "error": f"invalid JSON-RPC response: {e}"}
     if isinstance(body, dict) and body.get("error"):
-        return {"ok": False, "error": str(body["error"]), "rejected": True}
+        error = body["error"]
+        # Protocol dispatch/argument failures precede execution. Internal
+        # errors (-32603, server-defined codes) can follow a committed send.
+        rejected = isinstance(error, dict) and error.get("code") in (-32600, -32601, -32602)
+        return {"ok": False, "error": str(error), "rejected": rejected}
     if not isinstance(body, dict) or "result" not in body:
         return {"ok": False, "error": "JSON-RPC response has no result"}
     return {"ok": True, "result": body["result"]}
@@ -7043,6 +7047,27 @@ def _mcp_tool_parameters(tool: str) -> set[str] | None:
     return None
 
 
+def _mcp_send_rejected(method: str, text: str) -> bool:
+    """Recognize only Mail refusals whose source precedes message creation."""
+    if method != "send_message":
+        return False
+    text = text.removeprefix("Error calling tool 'send_message': ")
+    # boundary.py: ToolArgumentBoundary rejects before invoking the tool.
+    # app.py: send_message checks contact policy and sender_token before
+    # _deliver_message/_create_message. These fixed messages are contracted
+    # against real FastMCP responses in test_provider_stalls.py.
+    # ToolExecutionError.error_type is not published on this legacy wire;
+    # generic INVALID_ARGUMENT/ValueError, OS errors and isError alone say
+    # nothing about commit timing and must remain delivery_unknown.
+    return bool(
+        re.fullmatch(r"Tool 'send_message' does not accept \d+ of the supplied argument\(s\); check the published schema", text)
+        or re.match(r"Tool 'send_message' rejected its arguments: \d+ validation error\(s\)(?: |$)", text)
+        or text == "Recipient is not accepting messages."
+        or text.startswith("Contact approval required for recipients: ")
+        or re.fullmatch(r"Invalid argument value: sender_token does not match registered token for agent '[A-Za-z0-9]+'\. Check that all parameters have valid values\.", text)
+    )
+
+
 def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
     """Call one ORRERY Mail tool, shaping arguments to its advertised schema."""
     allowed = _mcp_tool_parameters(method)
@@ -7068,7 +7093,8 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
             for block in result.get("content") or []
             if isinstance(block, dict)
         ).strip()
-        return {"ok": False, "error": text or "ORRERY Mail tool failed", "rejected": True}
+        return {"ok": False, "error": text or "ORRERY Mail tool failed",
+                "rejected": _mcp_send_rejected(method, text)}
     # Newer MCP servers expose the decoded payload in structuredContent.
     try:
         data = result.get("structuredContent")
@@ -7079,7 +7105,8 @@ def _mcp_call(method: str, args: dict, timeout: int = 15) -> dict:
             except ValueError:
                 lowered = text.lower()
                 if "error calling tool" in lowered or "validation error" in lowered:
-                    return {"ok": False, "error": text.strip(), "rejected": True}
+                    return {"ok": False, "error": text.strip(),
+                            "rejected": _mcp_send_rejected(method, text.strip())}
                 data = {"text": text}
     except (KeyError, IndexError, TypeError, ValueError) as e:
         return {"ok": False, "error": f"unexpected response shape: {e}"}
