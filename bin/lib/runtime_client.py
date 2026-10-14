@@ -33,6 +33,11 @@ from functools import wraps
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
+_PROCESS_API = runpy.run_path(str(Path(__file__).with_name('process_observation.py')))
+ClientError = _PROCESS_API['ClientError']
+integer = _PROCESS_API['integer']
+remaining = _PROCESS_API['remaining']
+process_start = _PROCESS_API['process_start']
 KIND = 'orrery-runtime-client-s1'
 PROFILE_KIND = 'orrery-global-client-profile-v1'
 METADATA_KIND = 'orrery-global-registration-metadata-v1'
@@ -57,8 +62,6 @@ S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITE
 
 
 
-class ClientError(RuntimeError):
-    pass
 
 
 _CONTRACT = None
@@ -282,8 +285,6 @@ def absolute(value):
     return Path(value)
 
 
-def integer(value, minimum=0):
-    return type(value) is int and value >= minimum
 
 
 def _legacy_session_proof():
@@ -462,13 +463,6 @@ def local_endpoint(value):
     return value
 
 
-def remaining(deadline, limit=5):
-    if deadline is None:
-        return limit
-    budget = deadline - time.monotonic()
-    if budget <= 0:
-        raise ClientError('OBSERVATION_INCOMPLETE')
-    return min(limit, budget)
 
 
 def validate_owner_receipt(inspected, identity, token, binding):
@@ -2095,16 +2089,6 @@ def provider_ancestor():
     return None
 
 
-def process_start(pid, *, deadline=None):
-    if not integer(pid,1):
-        return None
-    try:
-        result = subprocess.run(['ps','-p',str(pid),'-o','lstart='], capture_output=True, text=True, timeout=remaining(deadline, 3))
-        if result.returncode == 1 and not result.stderr:
-            return 'absent'
-        return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
-    except (OSError, subprocess.TimeoutExpired):
-        return None
 
 
 def unproven_client_placement(home):

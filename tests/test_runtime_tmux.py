@@ -373,8 +373,12 @@ def test_repeated_inventory_loads_code_once_but_observes_new_roots(tmp_path,monk
     parent=home/'clients';parent.mkdir(mode=0o700)
     (parent/'partial').mkdir(mode=0o700)
     assert api['global_inventory'](home)['global_complete'] is False
-    assert loads.count('runtime_operator.py')==1
-    assert loads.count('runtime_observation.py')==1
+    assert loads.count('runtime_client.py')==1
+    assert loads.count('runtime_operator.py')==0
+    assert loads.count('runtime_observation.py')==0
+    for name in ('runtime_operator','runtime_observation'):
+        api['module_api'](name);api['module_api'](name)
+        assert loads.count(name+'.py')==1
 
 
 def test_installed_hint_cache_rechecks_file_metadata_and_content(tmp_path,monkeypatch):

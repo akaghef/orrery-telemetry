@@ -2272,6 +2272,7 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/bin/lib/runtime_target.py"
   "$REPO_ROOT/bin/lib/runtime_tmux_consumer.py"
   "$REPO_ROOT/bin/lib/legacy_consumer.py"
+  "$REPO_ROOT/bin/lib/process_observation.py"
   "$REPO_ROOT/bin/lib/legacy-tmux-consumer.sh"
   "$REPO_ROOT/bin/lib/runtime_tmux_target_contract.json"
   "$REPO_ROOT/dashboard/terminal_state.py"

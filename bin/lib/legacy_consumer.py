@@ -12,7 +12,7 @@ class LegacyConsumer:
         if self.tmux is None:raise RuntimeError("GLOBAL_TARGET_HELPER_UNAVAILABLE")
         self.home=Path(client_home)
         self.transport=self.tmux['legacy_transport']() if transport is None else transport
-        self.api=self.tmux['module_api']('runtime_client') if api is None else api
+        self.api=(self.tmux['runtime_api_view']() if 'runtime_api_view' in self.tmux else self.tmux['module_api']('runtime_client')) if api is None else api
         self.proof_reader=proof_reader
 
     def admission(self,target,operation):

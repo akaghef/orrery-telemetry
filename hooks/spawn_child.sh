@@ -2211,8 +2211,14 @@ codex_watch_initial_task() {
     while (( waited < wait_max && SECONDS < deadline )); do
         sleep 3
         waited=$((waited + 3))
-        pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-        if ! codex_session_alive "$session_name"; then
+        # A successful admitted capture already proves this exact session is
+        # present. Reuse that read within this poll; a second has-session
+        # would repeat the same socket/PID/root proof without adding an effect.
+        local captured_alive=false
+        if pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null)"; then
+            captured_alive=true
+        fi
+        if [[ "$captured_alive" != true ]] && ! codex_session_alive "$session_name"; then
             echo "[$log_prefix] Codex session '$session_name' died after ${waited}s; last pane output:" >&2
             printf '%s\n' "$pane_text" | tail -15 >&2
             return 2

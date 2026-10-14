@@ -32,6 +32,17 @@ def module_api(name):
             _MODULES[name] = runpy.run_path(str(path))
         return _MODULES[name]
 
+class RuntimeAPIView:
+    """Load the same client functions only when the observation needs them."""
+    def __getitem__(self,name):
+        module='process_observation' if name in ('process_start','integer','remaining','ClientError') else 'runtime_client'
+        return module_api(module)[name]
+
+
+def runtime_api_view():
+    return RuntimeAPIView()
+
+
 SPEC = json.loads(Path(__file__).with_name('runtime_tmux_contract.json').read_text())
 CONTRACT = SPEC['contract']
 CAPABILITIES = SPEC['capabilities']
@@ -301,7 +312,7 @@ def installed_hints(home, deadline):
 def global_inventory(client_home, *, api=None, deadline=None):
     """One root reader for admission and repair diagnostics; no new state."""
     if api is None:
-        api = module_api('runtime_client')
+        api = runtime_api_view()
     deadline = time.monotonic()+5 if deadline is None else deadline
     home = Path(client_home)
     proofs, diagnostics = [], []

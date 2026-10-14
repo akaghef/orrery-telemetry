@@ -56,7 +56,7 @@ def _fake_launch_env(
         "      [[ \"${FAKE_CODEX_START_RUNNING:-0}\" == 1 ]] && printf '• Working (1s • esc to interrupt)\\n'\n"
         "    else\n"
         "      printf '\\n❯ \\n'\n"
-        "    fi ;;\n"
+        "    fi; exit 0 ;;\n"
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
         "  load-buffer) cat \"$4\" >> \"$FAKE_TMUX_LOG\" ;;\n"
@@ -235,9 +235,6 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=True)
     _enable_fake_codex_profile(tmp_path, env)
-    # This test checks argv/profile notices, not a synthetic 90-poll idle watch.
-    # A running screen still has no history receipt and remains unconfirmed.
-    env["FAKE_CODEX_START_RUNNING"] = "1"
     child_name = f"Profile-{prompt_path}"
     handoff = _codex_handoff(tmp_path, child_name)
     args = [
@@ -365,8 +362,6 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     tmp_path: pathlib.Path, codex: bool,
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
-    if codex:
-        env["FAKE_CODEX_START_RUNNING"] = "1"
     task_file = tmp_path / "task.md"
     backtick_marker = tmp_path / "backtick-expanded"
     dollar_marker = tmp_path / "dollar-expanded"
@@ -629,3 +624,41 @@ def test_late_launcher_exit_skips_the_new_attempt_session_registry_and_worktree(
     assert not marker.exists() and not pathlib.Path(env['FAKE_TMUX_LOG']).exists()
     for path, saved in before.items():
         assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == saved
+
+
+@pytest.mark.parametrize('capture_ok,alive,expected,captures,has_calls',[
+    (True,False,3,2,0),
+    (False,False,2,1,1),
+])
+def test_initial_watch_reuses_successful_capture_but_rechecks_failure(
+    tmp_path,capture_ok,alive,expected,captures,has_calls,
+):
+    import re
+    body=re.search(r'(?ms)^codex_watch_initial_task\(\) \{.*?^\}',SPAWN.read_text()).group()
+    log=tmp_path/'calls';script=tmp_path/'watch.sh'
+    script.write_text("""#!/bin/bash
+sleep() { :; }
+tmux() {
+  printf '%s\n' "$1" >> "$CALL_LOG"
+  if [[ "$1" == capture-pane ]]; then
+    printf '%s\n' '• Working (1s • esc to interrupt)'
+    [[ "$CAPTURE_OK" == 1 ]]; return $?
+  fi
+  [[ "$ALIVE" == 1 ]]
+}
+codex_initial_task_status() { echo unknown; }
+codex_trust_screen_up() { return 1; }
+codex_turn_running_on_screen() { return 0; }
+codex_turn_finished_on_screen() { return 1; }
+pane_nonblank_tail() { cat; }
+spawn_note() { printf '%s\n' "$*"; }
+"""+body+"\ncodex_watch_initial_task Fixture task watch '' ''\n")
+    env={**os.environ,'CALL_LOG':str(log),'CAPTURE_OK':str(int(capture_ok)),'ALIVE':str(int(alive))}
+    result=subprocess.run(['/bin/bash',str(script)],env=env,text=True,capture_output=True,timeout=10)
+    assert result.returncode==expected,result.stderr
+    calls=log.read_text().splitlines()
+    assert calls.count('capture-pane')==captures
+    assert calls.count('has-session')==has_calls
+    assert not set(calls)-{'capture-pane','has-session'}
+    if expected==3:assert 'confirmation unknown' in result.stdout.lower()
+    else:assert 'died' in result.stderr

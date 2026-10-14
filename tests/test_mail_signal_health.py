@@ -322,7 +322,9 @@ def test_cleanup_cli_uses_installed_environment_and_defaults_to_preview(tmp_path
     tmux = commands / 'tmux'
     tmux.write_text('#!/bin/sh\necho "no server running on fixture" >&2\nexit 1\n')
     tmux.chmod(0o755)
+    private_tmux = home / 'private-tmux'; private_tmux.mkdir(mode=0o700)
     env = {'HOME': str(home), 'PATH': str(commands) + ':' + os.environ['PATH'],
+           'TMUX_TMPDIR': str(private_tmux),
            'AGENTSTACK_SIGNALS_DIR': '~/configured-signals', 'AGENTSTACK_RUNTIME_DIR': '~/runtime'}
     preview = subprocess.run([sys.executable, str(helper)], env=env, capture_output=True, text=True, timeout=10)
     assert preview.returncode == 0, preview.stderr

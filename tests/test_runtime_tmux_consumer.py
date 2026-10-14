@@ -91,7 +91,7 @@ def test_legacy_dashboard_session_id_is_resolved_as_id_not_literal_name(consumer
 
 def test_new_adapter_reuses_older_helper_primitives_without_new_class(consumer):
     c,calls,state=consumer
-    api={k:v for k,v in API.items() if k not in ('LegacyConsumer','TARGET_SPEC','TARGET_REASONS')}
+    api={k:v for k,v in API.items() if k not in ('LegacyConsumer','TARGET_SPEC','TARGET_REASONS','runtime_api_view')}
     factory=runpy.run_path(str(ROOT/'bin/lib/legacy_consumer.py'))['LegacyConsumer']
     adapter=factory(c.home,transport=c.transport,api=c.api,proof_reader=c.proof_reader,transport_api=api)
     adapter.command(['send-keys','-t','Alpha','C-m'])
