@@ -212,19 +212,23 @@ def legacy_transport(*, run=None, binary=None, environ=None):
     return transport
 
 
-def panes(transport, *, session=None, pane=None, deadline=None):
-    if (session is None) == (pane is None):
+def panes(transport, *, session=None, pane=None, window=None, deadline=None):
+    if sum(value is not None for value in (session,pane,window)) != 1:
         raise TargetError('TMUX_TARGET_INPUT_INVALID')
     if session is not None:
         if not isinstance(session, str) or not session or any(c in session for c in '\r\n\0:'):
             raise TargetError('TMUX_TARGET_INPUT_INVALID')
         args = ['list-panes', '-s', '-t', '=' + session]
+    elif window is not None:
+        if not isinstance(window,str) or re.fullmatch(r'@[0-9]+',window) is None:
+            raise TargetError('TMUX_TARGET_INPUT_INVALID')
+        args = ['list-panes', '-t', window]
     else:
         if not isinstance(pane, str) or re.fullmatch(r'%[0-9]+', pane) is None:
             raise TargetError('TMUX_TARGET_INPUT_INVALID')
         args = ['display-message', '-p', '-t', pane]
     fmt = '#{session_id}\t#{session_name}\t#{pane_id}\t#{pane_pid}'
-    result = transport.command(*args, '-F', fmt, deadline=deadline) if session is not None else transport.command(*args, fmt, deadline=deadline)
+    result = transport.command(*args, '-F', fmt, deadline=deadline) if pane is None else transport.command(*args, fmt, deadline=deadline)
     if result.returncode:
         raise TargetError('TMUX_TARGET_UNAVAILABLE')
     rows = []
@@ -395,16 +399,16 @@ def global_proofs(client_home, *, api=None, deadline=None):
     return result['proofs']
 
 
-def legacy_admission(transport, client_home, *, session=None, pane=None,
+def legacy_admission(transport, client_home, *, session=None, pane=None, window=None,
                      operation='capture', api=None, proof_reader=None, deadline=None):
     if operation not in OPERATIONS:
         raise TargetError('TMUX_OPERATION_INVALID')
     if api is None:
         api = module_api('runtime_client')
     deadline = time.monotonic() + 5 if deadline is None else deadline
-    targets = panes(transport, session=session, pane=pane, deadline=deadline)
+    targets = panes(transport, session=session, pane=pane, window=window, deadline=deadline)
     # A session-wide destructive operation protects every constituent pane.
-    if operation == 'kill-session' and pane is not None:
+    if operation == 'kill-session' and session is None:
         targets = panes(transport, session=targets[0]['session'], deadline=deadline)
     reader = global_proofs if proof_reader is None else proof_reader
     proofs = reader(client_home, api=api, deadline=deadline)
@@ -419,8 +423,8 @@ def legacy_admission(transport, client_home, *, session=None, pane=None,
                     and live.get('process_start') == start):
                 raise TargetError('LEGACY_TARGET_IS_GLOBAL')
     # Re-read socket and actual pane membership after the root snapshots.
-    after = panes(transport, session=session, pane=pane, deadline=deadline)
-    if operation == 'kill-session' and pane is not None:
+    after = panes(transport, session=session, pane=pane, window=window, deadline=deadline)
+    if operation == 'kill-session' and session is None:
         after = panes(transport, session=after[0]['session'], deadline=deadline)
     expected = [{k: v for k, v in row.items() if k != 'process_start'} for row in targets]
     if after != expected:
@@ -443,6 +447,7 @@ def main(argv=None):
     selection = admit.add_mutually_exclusive_group(required=True)
     selection.add_argument('--session')
     selection.add_argument('--pane')
+    selection.add_argument('--window')
     admit.add_argument('--operation', choices=OPERATIONS, required=True)
     options = parser.parse_args(argv)
     try:
@@ -460,7 +465,7 @@ def main(argv=None):
             else:
                 home = Path(os.environ.get('AGENTSTACK_HOME', str(Path.home() / '.agentstack')))
                 value = legacy_admission(transport, home, session=options.session,
-                                         pane=options.pane, operation=options.operation)
+                                         pane=options.pane, window=options.window, operation=options.operation)
         print_result(value, options.command)
         return 0
     except Exception as exc:

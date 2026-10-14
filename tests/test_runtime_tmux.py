@@ -160,7 +160,7 @@ def test_capability_cli_does_not_select_an_owner_or_echo_secrets(monkeypatch, ca
     assert client['main'](['tmux-capabilities']) == 0
     value = json.loads(capsys.readouterr().out)
     assert value == {'contract': 'orrery-tmux-target-v1',
-                     'capabilities': ['legacy-transport', 'legacy-target-admission', 'legacy-target-diagnostics']}
+                     'capabilities': ['legacy-transport', 'legacy-target-admission', 'legacy-target-diagnostics', 'legacy-window-target-admission']}
     assert 'not-public' not in json.dumps(value)
 
 
@@ -396,3 +396,26 @@ def test_installed_hint_cache_rechecks_file_metadata_and_content(tmp_path,monkey
     path.chmod(0o666)
     with pytest.raises(api['TargetError'],match='GLOBAL_TARGET_OWNERSHIP_UNKNOWN'):
         api['installed_hints'](home,time.monotonic()+5)
+
+
+
+def test_window_selector_checks_every_current_pane_without_session_fallback(endpoint):
+    transport,calls=fake_transport(endpoint,'$7\tMoved\t%1\t100\n$7\tMoved\t%4\t400\n')
+    with pytest.raises(ERROR,match='LEGACY_TARGET_IS_GLOBAL'):
+        API['legacy_admission'](transport,endpoint.parent,window='@8',operation='input',
+            api={'process_start':lambda *a,**kw:'start'},
+            proof_reader=lambda *a,**kw:[{'live':{'pane_id':'%4','pid':400,'process_start':'start'}}])
+    assert calls[0][0][3:6]==['list-panes','-t','@8']
+
+
+def test_window_selector_cli_success_has_literal_current_pane(cli_fixture):
+    start_cli_server(cli_fixture)
+    window=subprocess.check_output([*cli_fixture['command'],'display-message','-p','-t',cli_fixture['pane_id'],'#{window_id}'],
+        env=cli_fixture['env'],text=True).strip()
+    assert window=='@0'
+    result=run_cli(cli_fixture,'tmux-legacy-target','--window',window,'--operation','input')
+    assert result.returncode==0,result.stdout+result.stderr
+    value=json.loads(result.stdout)
+    assert value['allowed'] is True and value['operation']=='input'
+    assert value['panes']==[{'session_id':'$0','session':'Control','pane_id':'%0',
+        'pid':cli_fixture['pid'],'process_start':'fixture-start'}]

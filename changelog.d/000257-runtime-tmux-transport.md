@@ -5,3 +5,4 @@
 - 既定 legacy・activation=false を維持し、専用 global 起動はこの段階では有効にしません。公開 Mail tool と dashboard API の変更はありません。
 - [共有境界の契約](../docs/runtime-tmux.md) と [English contract](../docs/runtime-tmux.en.md) を追加しました。
 - 長時間動く consumer は共有コードを一度だけ読み込み、literal 設定の読取結果を file 属性が同じ間だけ再利用します。配置 snapshot は呼出しごとに読み直します。
+- window 選択でも現在の全 pane を共通の前後照合で確認し、元 session の証明で別の窓を操作しない契約を追加しました。

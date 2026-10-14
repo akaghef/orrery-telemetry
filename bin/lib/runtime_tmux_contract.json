@@ -3,7 +3,8 @@
   "capabilities": [
     "legacy-transport",
     "legacy-target-admission",
-    "legacy-target-diagnostics"
+    "legacy-target-diagnostics",
+    "legacy-window-target-admission"
   ],
   "operations": [
     "capture",
@@ -131,7 +132,8 @@
       "const": [
         "legacy-transport",
         "legacy-target-admission",
-        "legacy-target-diagnostics"
+        "legacy-target-diagnostics",
+        "legacy-window-target-admission"
       ]
     },
     "failure_kind": {

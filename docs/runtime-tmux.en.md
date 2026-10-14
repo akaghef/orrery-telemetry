@@ -8,9 +8,9 @@ The entry is the existing `agentstack-runtime-client`. `bin/lib/runtime_tmux_con
 
 | Command | Input | Output / use |
 |---|---|---|
-| `tmux-capabilities` | None | `contract=orrery-tmux-target-v1` and `legacy-transport` / `legacy-target-admission` / `legacy-target-diagnostics`. Do not infer capabilities from a version string |
+| `tmux-capabilities` | None | `contract=orrery-tmux-target-v1` and `legacy-transport` / `legacy-target-admission` / `legacy-target-diagnostics` / `legacy-window-target-admission`. Do not infer capabilities from a version string |
 | `tmux-legacy-transport` | None | Verified socket, tmux argv prefix, server PID and environment removals, pinned at consumer startup |
-| `tmux-legacy-target` | `--session NAME` or `--pane %N`, and `--operation capture\|attach\|input\|split\|close\|kill-session\|signal` | Admitted panes/PIDs/start times and a digest. Refusals return exit2 and a fixed reason; the consumer performs no side effect on that target |
+| `tmux-legacy-target` | `--session NAME` / `--pane %N` / `--window @N`, and `--operation capture\|attach\|input\|split\|close\|kill-session\|signal` | Admitted panes/PIDs/start times and a digest. Refusals return exit2 and a fixed reason; the consumer performs no side effect on that target |
 | `tmux-diagnostics` | None | Placement completeness and client_name / instance / check identifying repairs, from the same root reader; opens no socket |
 
 A default legacy startup without a server returns only its destination and a null server_pid. It creates no socket, server or mutex; target actions remain unavailable until an actual server is verified.
@@ -69,3 +69,5 @@ Telemetry transport/consumers and public cockpit legacy protection use separate 
 Tests use temporary HOME, short private directories and isolated `-L` servers. The execution boundary pins the verified absolute `-S` socket. Tests never use the live default tmux server, real provider HOME or real Mail DB.
 
 The shared helper loads code namespaces once per consumer process; restart consumers after updating it. Literal settings results are reused only while env.sh and its reader retain the same device/inode/mtime/ctime/size/mode/UID. Context/live placement observations remain fresh per call and are never stored.
+
+The `legacy-window-target-admission` capability checks every current pane of `--window @N` through the same before/after reader. It never substitutes the original session or only the active pane. Consumers also use this boundary for window restoration.

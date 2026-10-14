@@ -8,9 +8,9 @@
 
 | command | 入力 | 出力 / 用途 |
 |---|---|---|
-| `tmux-capabilities` | なし | `contract=orrery-tmux-target-v1` と `legacy-transport` / `legacy-target-admission` / `legacy-target-diagnostics`。版文字列だけで対応を判断しない |
+| `tmux-capabilities` | なし | `contract=orrery-tmux-target-v1` と `legacy-transport` / `legacy-target-admission` / `legacy-target-diagnostics` / `legacy-window-target-admission`。版文字列だけで対応を判断しない |
 | `tmux-legacy-transport` | なし | 照合済み socket・tmux の argv prefix・server PID・消す環境変数。consumer の起動時に固定する |
-| `tmux-legacy-target` | `--session NAME` または `--pane %N`、`--operation capture\|attach\|input\|split\|close\|kill-session\|signal` | 許可した対象の pane/PID/start と digest。拒否は exit2 と固定 reason。consumer は拒否対象に副作用を起こさない |
+| `tmux-legacy-target` | `--session NAME` / `--pane %N` / `--window @N`、`--operation capture\|attach\|input\|split\|close\|kill-session\|signal` | 許可した対象の pane/PID/start と digest。拒否は exit2 と固定 reason。consumer は拒否対象に副作用を起こさない |
 | `tmux-diagnostics` | なし | 同じ root reader による配置の完全性と、修復が必要な client_name / instance / check。socket は開かない |
 
 server がまだ無い既定 legacy 起動は、接続先だけを返し server_pid は null です。socket/server/mutex を作らず、対象への操作は server の実体が確認できるまで拒否します。
@@ -69,3 +69,5 @@ Telemetry の transport/consumer と公開 cockpit の旧対象保護を別 PR �
 試験は一時 HOME、短い一時 directory、隔離した `-L` server を使い、実行境界は照合済みの絶対 `-S` へ固定します。既定の live tmux server、実 provider HOME、実 Mail DB は使いません。
 
 共有 helper のコード namespace は consumer process ごとに一度だけ読みます。更新後は consumer を再起動します。env.sh の literal 読取結果は env.sh と reader の dev/inode/mtime/ctime/size/mode/UID が同じ間だけ再利用します。context/live の配置観測は呼出しごとに読み、保存しません。
+
+`legacy-window-target-admission` は window の現在の全 pane を、共有の前後再照合で確認します。元 session や選択済み active pane への読み替えはしません。consumer の窓の復元も同じ入口を使います。
