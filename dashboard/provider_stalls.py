@@ -14,7 +14,18 @@ import threading
 import uuid
 
 CAPACITY = "■ Selected model is at capacity. Please try a different model."
-_ERROR = re.compile(r"(?m)^\s*■ Selected model is at capacity\.\s+Please try a different model\.[ \t]*$")
+# Codex 0.159.2: compact_remote_v2.rs and session/turn.rs pass this one
+# prefix to CodexErr::to_error_event; local compact and regular turns pass None.
+# Codex PreWrap writes hard newlines that capture-pane -J cannot join. Accept
+# one newline at each word boundary of these fixed literals, never blank lines.
+_ERROR_GAP = r"(?:[ \t]+|[ \t]*\n[ \t]*)"
+_ERROR = re.compile(
+    r"(?m)^[ \t]*■ (?:"
+    + re.escape("Error running remote compact task:").replace(r"\ ", _ERROR_GAP)
+    + _ERROR_GAP + r")?"
+    + re.escape(CAPACITY.removeprefix("■ ")).replace(r"\ ", _ERROR_GAP)
+    + r"[ \t]*$"
+)
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _WORK = re.compile(r"(?im)^\s*[•▌●]\s*(?:Working|Thinking)\b[^\n]*\([^\n]*(?:\d+\s*s|esc to interrupt)")
 _FOOTER = re.compile(r"^(?:gpt-\S+|sol|luna|astra|terra)\s+(?:low|medium|high|xhigh|max|ultra)\b.*$", re.I)
