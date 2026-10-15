@@ -61,7 +61,13 @@ RENEW_SECONDS="${FILE_RESERVATION_RENEW_SECONDS:-900}"
 RETRY_DELAY_SECONDS="${FILE_RESERVATION_RETRY_DELAY_SECONDS:-0.5}"
 
 TOOL_INPUT=$(cat)
-reservation_resolve_tool_context "$TOOL_INPUT" || exit 0
+if reservation_resolve_tool_context "$TOOL_INPUT"; then
+    :
+else
+    context_status=$?
+    [ "$context_status" -eq 1 ] && exit 0
+    exit 2
+fi
 # Asked before anything decides which identity wins: the precedence resolver
 # returns on AGENT_NAME alone, so asking it about conflicts left named sessions
 # unchecked.
@@ -163,7 +169,7 @@ renew_reservation() {
         QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$ABS_PATH" \
         QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" \
         QUERY_EXTEND_SECONDS="$RENEW_SECONDS" \
-        python3 - <<'PY'
+        "${AGENTSTACK_PYTHON:-python3}" - <<'PY'
 import json
 import os
 import socket
@@ -271,7 +277,7 @@ check_reservation_conflicts() {
     conflict_detail="$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" \
         QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$ABS_PATH" \
         QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" \
-        python3 "$(dirname "${BASH_SOURCE[0]}")/check-reservation-conflicts.py" 2>&1)" \
+        "${AGENTSTACK_PYTHON:-python3}" "$(dirname "${BASH_SOURCE[0]}")/check-reservation-conflicts.py" 2>&1)" \
         || block_reservation_write "$conflict_detail"
 }
 

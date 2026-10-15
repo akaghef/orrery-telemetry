@@ -12,22 +12,66 @@ import sys
 import time
 
 
-def patch_paths(command: str) -> list[str]:
-    lines = command.strip().splitlines()
-    if not lines or lines[0].strip() != '*** Begin Patch' or lines[-1].strip() != '*** End Patch':
-        raise ValueError('expected a complete apply_patch document')
-    paths = []
-    for line in lines[1:-1]:
-        for prefix in ('*** Add File: ', '*** Update File: ', '*** Delete File: ', '*** Move to: '):
-            if line.startswith(prefix):
-                path = line[len(prefix):].strip()
+# Match Codex rust-v0.159.2 streaming_parser.rs whitespace and state rules.
+# In particular Add/Delete headers trim both ends; Update context keeps its
+# leading space, and a filename's leading spaces belong to the filename.
+_RUST_WHITESPACE = "\t\n\r\v\f \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+
+
+def patch_targets(command: str) -> list[tuple[str, str]]:
+    lines = command.split('\n')
+    state, targets, update_index, chunks = 'start', [], None, False
+    for index, raw in enumerate(lines):
+        # Native push_delta removes CR only on newline-terminated lines.
+        line = raw.removesuffix('\r') if index < len(lines) - 1 else raw
+        trimmed = line.strip(_RUST_WHITESPACE)
+        if state == 'start':
+            if trimmed != '*** Begin Patch':
+                raise ValueError('expected a complete apply_patch document')
+            state = 'headers'
+            continue
+        if state == 'end':
+            if trimmed:
+                raise ValueError('content after End Patch')
+            continue
+        header = line.rstrip(_RUST_WHITESPACE) if state == 'update' else trimmed
+        # Native finish recognizes an unterminated final End Patch after trim.
+        if header == '*** End Patch' or (index == len(lines) - 1 and trimmed == '*** End Patch'):
+            state = 'end'
+            continue
+        for marker, mode, operation in (
+            ('*** Add File: ', 'add', 'Edit'),
+            ('*** Delete File: ', 'delete', 'Delete'),
+            ('*** Update File: ', 'update', 'Edit'),
+        ):
+            if header.startswith(marker):
+                path = header[len(marker):]
                 if not path or '\x00' in path:
                     raise ValueError('empty or invalid patch path')
-                paths.append(path)
+                targets.append((path, operation))
+                state, update_index, chunks = mode, len(targets) - 1, False
                 break
-    if not paths:
-        raise ValueError('no patch targets found')
-    return list(dict.fromkeys(paths))
+        else:
+            if state == 'update':
+                if not chunks and targets[update_index][1] == 'Edit' and header.startswith('*** Move to: '):
+                    path = header[len('*** Move to: '):]
+                    if not path or '\x00' in path:
+                        raise ValueError('empty or invalid move path')
+                    targets[update_index] = (targets[update_index][0], 'MoveSource')
+                    targets.append((path, 'Edit'))
+                elif line == '' or line.startswith((' ', '+', '-')) or header == '@@' or header.startswith('@@ ') or header == '*** End of File':
+                    chunks = True
+                else:
+                    raise ValueError('unsupported update line')
+            elif state != 'add' or not line.startswith('+'):
+                raise ValueError('unsupported patch line')
+    if state != 'end' or not targets:
+        raise ValueError('expected a complete patch with targets')
+    return list(dict.fromkeys(targets))
+
+
+def patch_paths(command: str) -> list[str]:
+    return list(dict.fromkeys(path for path, _operation in patch_targets(command)))
 
 
 def run_shared_guard(guard: Path, document: dict, cwd: str, timeout: float):
@@ -63,7 +107,7 @@ def main() -> int:
         command = payload['tool_input']['command']
         if not isinstance(command, str):
             raise ValueError('tool_input.command must be patch text')
-        paths = patch_paths(command)
+        targets = patch_targets(command)
         cwd = payload.get('cwd')
         if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
             raise ValueError('absolute, existing payload cwd required')
@@ -72,13 +116,18 @@ def main() -> int:
             raise ValueError('shared reservation guard unavailable')
         deadline = time.monotonic() + 25
         messages = []
-        for path in paths:
+        for path, operation in targets:
             # Resolve symlink aliases and .. before the shared protected-root check.
             candidate = Path(path)
             if not candidate.is_absolute():
                 candidate = Path(cwd) / candidate
-            candidate = candidate.resolve()
-            document = dict(payload, tool_name='Edit', tool_input={'file_path': str(candidate)})
+            # Delete and Move remove the directory entry, even when its final
+            # component is a symlink pointing outside the protected root.
+            if operation in ('Delete', 'MoveSource'):
+                candidate = candidate.parent.resolve() / candidate.name
+            else:
+                candidate = candidate.resolve()
+            document = dict(payload, tool_name=operation, tool_input={'file_path': str(candidate)})
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ValueError('reservation checks exceeded their time budget')
@@ -99,7 +148,7 @@ def main() -> int:
         if messages:
             print(json.dumps({'systemMessage': '\n'.join(messages)}))
         return 0
-    except (ValueError, TypeError, KeyError, AttributeError, OSError, subprocess.TimeoutExpired) as exc:
+    except (ValueError, TypeError, KeyError, AttributeError, OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f'CODEX RESERVATION GUARD: {exc}', file=sys.stderr)
         return 2
 

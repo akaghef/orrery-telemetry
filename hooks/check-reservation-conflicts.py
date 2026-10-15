@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import fnmatch
 import json
+from pathlib import Path
+import runpy
 import os
 import sys
 import unicodedata
 import urllib.parse
 import urllib.request
+
+
+def reservation_matcher():
+    # No service imports or third-party dependencies in the core interpreter.
+    module = runpy.run_path(str(Path(__file__).with_name('reservation-patterns.py')))
+    return module['patterns_overlap']
 
 
 def check() -> None:
@@ -38,6 +45,7 @@ def check() -> None:
     targets = [unicodedata.normalize('NFC', os.environ[key]) for key in ('QUERY_REL_PATH', 'QUERY_ABS_PATH')]
     now = datetime.now(timezone.utc)
     owners = set()
+    overlap = None
     for row in rows:
         if (not isinstance(row, dict) or not isinstance(row.get('agent'), str)
                 or not row['agent'] or not isinstance(row.get('path_pattern'), str)
@@ -54,8 +62,10 @@ def check() -> None:
             continue
         if row['agent'] == os.environ['QUERY_AGENT'] or not row['exclusive']:
             continue
-        pattern = unicodedata.normalize('NFC', row['path_pattern'])
-        if any(fnmatch.fnmatchcase(target, pattern) for target in targets):
+        if overlap is None:
+            overlap = reservation_matcher()
+        pattern = row['path_pattern']
+        if any(overlap(pattern, target) for target in targets):
             owners.add(row['agent'])
     if owners:
         print('Other exclusive reservation holder(s): ' + ', '.join(sorted(owners)))

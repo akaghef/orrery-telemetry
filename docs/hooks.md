@@ -179,7 +179,11 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ## Codex との違い
 
-Codex CLI の optional ORRERY plugin に、`PreToolUse` / `^apply_patch$` の予約 guard があります。Codex の `tool_input.command` に入る patch 本文から、Add / Update / Delete の全 path と Move の移動元・移動先を取り出し、payload の絶対 cwd で解決して [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) に渡します。専用 adapter は path の取り出しだけを行い、identity・保護 root・自己予約の renew-only 確認・zero の1回 retry・unmanaged/outage policy は Claude と同じ実装です。legacy mode では自己予約を確認した後、公開 reservation resource の他者 exclusive も確認し、重なれば予約者を理由に示して拒否します。照会拒否・不正応答・競合照会の通信失敗は fail-closed です。global mode は既存の共通 client と server の coverage / 排他制約を使います。
+Codex CLI の optional ORRERY plugin に、`PreToolUse` / `^apply_patch$` の予約 guard があります。Codex の `tool_input.command` に入る patch 本文から、Add / Update / Delete の全 path と Move の移動元・移動先を取り出し、payload の絶対 cwd で解決して [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) に渡します。header と filename は Codex 0.159.2 の状態別規則に合わせ、先頭空白名を保持し、Add/Delete のインデント付き header と Update の context を区別します。Environment 選択 header は拒否します。Delete と Move 元は親 directory を解決した entry、書き込みは参照先の物理 path を確認します。global mode は server が最終 symlink を参照先に正規化するため、その entry の削除を拒否します。
+
+専用 adapter は path の取り出しだけを行い、identity・保護 root・自己予約の renew-only 確認・zero の1回 retry・unmanaged/outage policy は Claude と同じ実装です。legacy mode では自己予約を確認した後、公開 reservation resource の他者 exclusive も確認し、重なれば予約者を理由に示して拒否します。
+
+core の照合処理は外部依存を増やさず、directory pattern・double star・slash 正規化・文字 class・Unicode の入力 vector で Mail 本体の PathSpec/gitignore 判定との一致を試験します。照会拒否・不正応答・競合照会の通信失敗は fail-closed です。共有 context 解析は指定時の `AGENTSTACK_PYTHON` を使い、起動や解析の失敗を「対象なし」の許可に変えません。global mode は既存の共通 client と server の coverage / 排他制約を使います。
 
 Codex が guard の exit 2 と stderr を編集前の拒否として扱うため、対象のうち1つでも予約が無ければ patch 全体を実行しません。複数 path の照会は25秒で打ち切り、失敗を拒否にします。shell 経由の書き込みは両 CLI ともこの予約 guard の対象外です。Codex での予約 release は従来どおり model が明示的に行い、自動 release は足しません。
 

@@ -25,7 +25,7 @@ def sandbox(tmp_path):
            'CODEX_HOME': str(home / '.codex'), 'AGENTSTACK_HOME': str(ROOT),
            'AGENTSTACK_RUNTIME_DIR': str(runtime), 'AGENTSTACK_PROJECT_KEY': str(project),
            'AGENTSTACK_PROTECTED_ROOTS': str(project), 'AGENT_NAME': 'EditorAlpha',
-           'AGENTSTACK_MAIL_HTTP_BEARER_MODE': 'disabled',
+           'AGENTSTACK_MAIL_HTTP_BEARER_MODE': 'disabled', 'AGENTSTACK_PYTHON': sys.executable,
            'FILE_RESERVATION_RETRY_DELAY_SECONDS': '0'}
     return project, env
 
@@ -296,3 +296,136 @@ def test_interpreter_launch_failure_still_blocks_with_inherited_errexit(sandbox)
                      changes={'AGENTSTACK_PYTHON': str(sandbox[0] / 'missing-python'),
                               'SHELLOPTS': 'errexit'})
     assert result.returncode == 2 and mail.requests == []
+
+
+@pytest.mark.parametrize('command,owned', [
+    ('*** Begin Patch\n*** Add File: owned.md\n+one\n  *** Add File: victim.md\n+two\n*** End Patch', ['owned.md']),
+    ('*** Begin Patch\n*** Add File:  note.md\n+one\n*** End Patch', ['note.md']),
+])
+def test_r1_native_header_and_filename_cannot_hide_unowned_target(sandbox, command, owned):
+    with Mail(owned=owned) as mail:
+        result = run(sandbox, command, mail)
+    assert result.returncode == 2, result.stdout + result.stderr
+
+
+def test_r1_update_context_that_looks_like_header_is_not_a_target(sandbox):
+    command = '*** Begin Patch\n*** Update File: owned.md\n@@\n *** Add File: context.md\n-old\n+new\n*** End Patch'
+    with Mail(owned=['owned.md']) as mail:
+        result = run(sandbox, command, mail)
+    assert result.returncode == 0, result.stderr
+    renews = [r['params']['arguments']['paths'] for r in mail.requests if r['method'] == 'tools/call']
+    assert len(renews) == 1 and renews[0][0] == 'owned.md'
+
+
+@pytest.mark.parametrize('operation', ['delete', 'move'])
+@pytest.mark.parametrize('owned', [False, True])
+def test_r1_outward_symlink_source_checks_entry(sandbox, operation, owned):
+    project = sandbox[0]
+    outside = project.parent / 'outside.md'; outside.write_text('old\n')
+    (project / 'link.md').symlink_to(outside)
+    if operation == 'delete':
+        command = '*** Begin Patch\n*** Delete File: link.md\n*** End Patch'
+        leases = ['link.md'] if owned else []
+    else:
+        command = '*** Begin Patch\n*** Update File: link.md\n*** Move to: moved.md\n@@\n-old\n+new\n*** End Patch'
+        leases = ['link.md', 'moved.md'] if owned else ['moved.md']
+    with Mail(owned=leases) as mail:
+        result = run(sandbox, command, mail)
+    assert result.returncode == (0 if owned else 2), result.stderr
+    checked = [r['params']['arguments']['paths'][0] for r in mail.requests if r['method'] == 'tools/call']
+    assert 'link.md' in checked
+
+
+@pytest.mark.parametrize('selective', [False, True])
+def test_r1_inner_python_failure_cannot_become_noop(sandbox, tmp_path, selective):
+    fake = tmp_path / 'bin'; fake.mkdir()
+    stub = fake / 'python3'
+    stub.write_text('#!' + sys.executable + '\nimport os,sys\n'
+                    + ("if '-c' in sys.argv and 'file_path' in sys.argv[-1]: sys.exit(42)\n" if selective else 'sys.exit(42)\n')
+                    + 'os.execv(' + repr(sys.executable) + ', [' + repr(sys.executable) + '] + sys.argv[1:])\n')
+    stub.chmod(0o755)
+    with Mail() as mail:
+        result = run(sandbox, patch('note.md'), mail,
+                     changes={'AGENTSTACK_PYTHON': sys.executable,
+                              'PATH': str(fake) + ':' + sandbox[1]['PATH']})
+    assert result.returncode == 2, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('pattern,target', [('docs/**/*.md', 'docs/note.md'),
+    ('docs/**/*.md', 'docs/deep/note.md'), ('docs/', 'docs/note.md'),
+    ('**/note.md', 'note.md'), ('/docs/*.md', 'docs/note.md'),
+    ('docs\\*.md', 'docs/note.md'), ('cafe\u0301/**', 'caf\u00e9/note.md')])
+def test_r1_foreign_overlap_uses_mail_pattern_semantics(sandbox, pattern, target):
+    foreign = [dict(agent='EditorBeta', path_pattern=pattern, exclusive=True,
+                    released_ts=None, expires_ts='2999-01-01T00:00:00+00:00')]
+    with Mail(owned=[target], foreign=foreign) as mail:
+        result = run(sandbox, patch(target), mail)
+    assert result.returncode == 2 and 'EditorBeta' in result.stderr, result.stderr
+
+
+def test_r1_changelog_uses_pr_number():
+    assert (ROOT / 'changelog.d/000269-codex-reservation-guard.md').is_file()
+    assert not (ROOT / 'changelog.d/000267-codex-reservation-guard.md').exists()
+
+
+@pytest.mark.parametrize('status', [1, 3, 42])
+def test_r1_shared_interpreter_failure_is_not_a_missing_path(sandbox, tmp_path, status):
+    stub = tmp_path / 'broken-python'
+    stub.write_text('#!/bin/sh\nexit ' + str(status) + '\n')
+    stub.chmod(0o755)
+    project, environment = sandbox
+    result = subprocess.run(['/bin/bash', str(ROOT / 'hooks/check-file-reservation.sh')],
+        input=json.dumps({'tool_input': {'file_path': str(project / 'note.md')}}),
+        text=True, capture_output=True, cwd=project,
+        env=dict(environment, AGENTSTACK_PYTHON=str(stub)), timeout=10)
+    assert result.returncode == 2 and 'CONTEXT INVALID' in result.stderr
+
+
+def test_r1_configured_python_handles_owned_patch_with_broken_path_decoder(sandbox, tmp_path):
+    directory = tmp_path / 'bin'; directory.mkdir()
+    stub = directory / 'python3'
+    stub.write_text('#!' + sys.executable + '\nimport os,sys\n'
+                    + "if '-c' in sys.argv and 'file_path' in sys.argv[-1]: sys.exit(42)\n"
+                    + 'os.execv(' + repr(sys.executable) + ', [' + repr(sys.executable) + '] + sys.argv[1:])\n')
+    stub.chmod(0o755)
+    with Mail(owned=['note.md']) as mail:
+        result = run(sandbox, patch('note.md'), mail,
+                     changes={'PATH': str(directory) + ':' + sandbox[1]['PATH']})
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('command,owned', [
+    ('*** Begin Patch\n*** Add File: owned.md\n+one\n  *** Add File: victim.md\n+two\n*** End Patch', ['owned.md', 'victim.md']),
+    ('*** Begin Patch\n*** Add File:  note.md\n+one\n*** End Patch', [' note.md']),
+])
+def test_r1_native_path_forms_pass_with_the_actual_reservations(sandbox, command, owned):
+    with Mail(owned=owned) as mail:
+        result = run(sandbox, command, mail)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('operation', ['Delete', 'MoveSource', 'Edit'])
+@pytest.mark.parametrize('symlink', [False, True])
+def test_r1_global_guard_does_not_borrow_symlink_target_coverage(sandbox, tmp_path, operation, symlink):
+    import runpy
+    from types import SimpleNamespace
+    api = runpy.run_path(str(ROOT / 'bin/lib/runtime_client.py'))
+    project = sandbox[0]
+    outside = tmp_path / 'outside.md'; outside.write_text('old')
+    path = project / 'link.md'
+    if symlink: path.symlink_to(outside)
+    else: path.write_text('old')
+    calls = []
+    def call(name, arguments):
+        calls.append((name, arguments))
+        return {'covered': True, 'items': [{'reservation_ids': [1]}]}
+    client = SimpleNamespace(outputs={'mutation': tmp_path / 'no-pending-mutation'}, call=call,
+        all_leases=lambda: [[{'id': 1, 'expires_ts': '2999-01-01T00:00:00+00:00'}]])
+    payload = {'tool_name': operation, 'tool_input': {'file_path': str(path)}}
+    if symlink and operation != 'Edit':
+        with pytest.raises(api['ClientError'], match='RESERVATION_ENTRY_UNSUPPORTED'):
+            api['RuntimeClient'].guard_edit(client, payload)
+        assert calls == []
+    else:
+        assert api['RuntimeClient'].guard_edit(client, payload) == {'ok': True, 'renewed': 0}
+        assert calls == [('check_file_reservations', {'paths': [str(path)]})]
