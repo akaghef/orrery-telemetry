@@ -429,3 +429,16 @@ def test_r1_global_guard_does_not_borrow_symlink_target_coverage(sandbox, tmp_pa
     else:
         assert api['RuntimeClient'].guard_edit(client, payload) == {'ok': True, 'renewed': 0}
         assert calls == [('check_file_reservations', {'paths': [str(path)]})]
+
+
+@pytest.mark.parametrize('expression,target', [
+    ('[!x]', 'docs/a/b.md'), ('[^x]', 'docs/a/b.md'),
+    ('[.-0]', 'docs/0/0.md'),
+])
+def test_r2_own_lease_cannot_hide_foreign_class_spanning_slash(sandbox, expression, target):
+    pattern = 'docs/' + expression * 3 + '.md'
+    foreign = [dict(agent='EditorBeta', path_pattern=pattern, exclusive=True,
+                    released_ts=None, expires_ts='2999-01-01T00:00:00+00:00')]
+    with Mail(owned=[target], foreign=foreign) as mail:
+        result = run(sandbox, patch(target), mail)
+    assert result.returncode == 2 and 'EditorBeta' in result.stderr, result.stderr

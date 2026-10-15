@@ -6,7 +6,6 @@ or dependency installation is required by an editing client's Python.
 """
 from __future__ import annotations
 
-import fnmatch
 from functools import lru_cache
 import re
 import unicodedata
@@ -20,19 +19,35 @@ def virtual(value: str) -> bool:
     return value.startswith(('tool://', 'resource://', 'service://'))
 
 
+_CLASS = re.compile(r'\[([!^]?)(\]?[^]]*)\]')
+
+
+def segment_regex(segment: str) -> str:
+    """Render basic gitignore tokens; a class may match a path separator.
+
+    Unlike * and ?, PathSpec's bracket expressions do not exclude slash.
+    Keep their regex ranges intact, including invalid ranges that must fail
+    closed. Backslashes have already become separators in normalize().
+    """
+    result = []
+    position = 0
+    while position < len(segment):
+        token = segment[position]
+        bracket = _CLASS.match(segment, position) if token == '[' else None
+        if bracket is not None and bracket[2]:
+            result.append('[' + ('^' if bracket[1] else '') + bracket[2] + ']')
+            position = bracket.end()
+            continue
+        result.append({'*': '[^/]*', '?': '[^/]'}.get(token, re.escape(token)))
+        position += 1
+    return ''.join(result)
+
+
 @lru_cache(maxsize=1024)
-def segment_matches(pattern: str, name: str) -> bool:
-    # Git also accepts ^ as bracket negation; fnmatch uses ! only.
-    pattern = re.sub(r'\[\^', '[!', pattern)
-    return fnmatch.fnmatchcase(name, pattern)
-
-
-def matches(pattern: str, target: str) -> bool:
-    if target.startswith('./'):
-        target = target[2:]
+def compile_pattern(pattern: str) -> re.Pattern[str] | None:
     pattern = pattern.rstrip()
     if not pattern or pattern.startswith(('#', '!')):
-        return False
+        return None
     parts = pattern.split('/')
     directory = not parts[-1]
     if len(parts) == 1 or (len(parts) == 2 and directory):
@@ -41,35 +56,53 @@ def matches(pattern: str, target: str) -> bool:
     if directory:
         parts[-1] = '**'
     parts = [part for i, part in enumerate(parts) if part != '**' or i == 0 or parts[i - 1] != '**']
-    if parts == ['**'] or parts == ['**', '*']:
-        return '/' in target if directory else bool(target)
-    if parts == ['**', '*', '**']:
-        return '/' in target
-    names = target.split('/')
+    if parts == ['**']:
+        expression = '/' if directory else '.'
+    elif parts == ['**', '*']:
+        expression = '.'
+    elif parts == ['**', '*', '**']:
+        expression = '/'
+    else:
+        expression = ''
+        separator = False
+        for index, part in enumerate(parts):
+            last = index == len(parts) - 1
+            if part == '**':
+                if index == 0:
+                    expression += '^(?:.+/)?'
+                elif last:
+                    expression += '/'
+                else:
+                    expression += '(?:/.+)?'
+                    separator = True
+                continue
+            if index == 0:
+                expression += '^'
+            if separator:
+                expression += '/'
+            expression += '[^/]+' if part == '*' else segment_regex(part)
+            if last:
+                expression += '/?$' if part == '*' else '(?:/|$)'
+            separator = True
+    try:
+        return re.compile(expression)
+    except re.error as exc:
+        raise ValueError('invalid gitignore pattern: ' + str(exc)) from exc
 
-    @lru_cache(maxsize=None)
-    def visit(i: int, j: int) -> bool:
-        if parts[i] == '**':
-            if i == len(parts) - 1:
-                # The preceding slash must exist (dir/** excludes dir itself).
-                return j < len(names)
-            return any((k == j or '/'.join(names[j:k])) and visit(i + 1, k)
-                       for k in range(j, len(names)))
-        if j >= len(names) or not segment_matches(parts[i], names[j]):
-            return False
-        if parts[i] == '*' and not names[j]:
-            return False
-        if i == len(parts) - 1:
-            if parts[i] == '*':
-                return j == len(names) - 1 or (j == len(names) - 2 and names[-1] == '')
-            return True  # A named directory includes its descendants.
-        return visit(i + 1, j + 1)
 
-    return visit(0, 0)
+def matches(pattern: str, target: str) -> bool:
+    if target.startswith('./'):
+        target = target[2:]
+    compiled = compile_pattern(pattern)
+    return compiled is not None and compiled.search(target) is not None
 
 
 def patterns_overlap(a: str, b: str) -> bool:
     if virtual(a) or virtual(b):
         return virtual(a) and virtual(b) and a.strip() == b.strip()
     a, b = normalize(a), normalize(b)
+    # Mail compiles both sides before cross-matching, even if the first
+    # match would succeed. Invalid reverse patterns must not be skipped.
+    compile_pattern(a)
+    compile_pattern(b)
     return matches(a, b) or matches(b, a)
