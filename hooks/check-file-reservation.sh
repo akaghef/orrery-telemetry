@@ -61,7 +61,13 @@ RENEW_SECONDS="${FILE_RESERVATION_RENEW_SECONDS:-900}"
 RETRY_DELAY_SECONDS="${FILE_RESERVATION_RETRY_DELAY_SECONDS:-0.5}"
 
 TOOL_INPUT=$(cat)
-reservation_resolve_tool_context "$TOOL_INPUT" || exit 0
+if reservation_resolve_tool_context "$TOOL_INPUT"; then
+    :
+else
+    context_status=$?
+    [ "$context_status" -eq 1 ] && exit 0
+    exit 2
+fi
 # Asked before anything decides which identity wins: the precedence resolver
 # returns on AGENT_NAME alone, so asking it about conflicts left named sessions
 # unchecked.
@@ -163,7 +169,7 @@ renew_reservation() {
         QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$ABS_PATH" \
         QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" \
         QUERY_EXTEND_SECONDS="$RENEW_SECONDS" \
-        python3 - <<'PY'
+        "${AGENTSTACK_PYTHON:-python3}" - <<'PY'
 import json
 import os
 import socket
@@ -264,6 +270,17 @@ block_reservation_write() {
     exit 2
 }
 
+# Both CLI adapters use this same read-only foreign-exclusive check. A positive
+# self renewal must not hide a conflicting lease, and resource failures block.
+check_reservation_conflicts() {
+    local conflict_detail
+    conflict_detail="$(QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" \
+        QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$ABS_PATH" \
+        QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" \
+        "${AGENTSTACK_PYTHON:-python3}" "$(dirname "${BASH_SOURCE[0]}")/check-reservation-conflicts.py" 2>&1)" \
+        || block_reservation_write "$conflict_detail"
+}
+
 RESPONSE="$(renew_reservation 2>/dev/null || true)"
 RENEWED="$(classify_renew_response "$RESPONSE")"
 if [ "$RENEWED" = "transport" ]; then
@@ -277,6 +294,7 @@ if [ "$RENEWED" = "rejected" ]; then
     block_reservation_write "Reservation service rejected the check: $RESPONSE"
 fi
 if [[ "$RENEWED" =~ ^[1-9][0-9]*$ ]]; then
+    check_reservation_conflicts
     exit 0
 fi
 if [ "$RENEWED" != "0" ]; then
@@ -288,6 +306,7 @@ sleep "$RETRY_DELAY_SECONDS"
 RESPONSE2="$(renew_reservation 2>/dev/null || true)"
 RENEWED2="$(classify_renew_response "$RESPONSE2")"
 if [[ "$RENEWED2" =~ ^[1-9][0-9]*$ ]]; then
+    check_reservation_conflicts
     exit 0
 fi
 if [ "$RENEWED2" = "transport" ]; then
@@ -296,4 +315,5 @@ fi
 if [ "$RENEWED2" = "rejected" ]; then
     block_reservation_write "Reservation service rejected the retry: $RESPONSE2"
 fi
+check_reservation_conflicts
 block_reservation_write "Agent '$AGENT' has no reservation for this protected file."

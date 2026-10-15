@@ -690,14 +690,26 @@ PYPLUGIN
     enabled)
       echo "ok: Codex history binding plugin installed and enabled ($plugin_id)"
       echo "note: Codex lifecycle hook approval is unknown; open /hooks in Codex to review/approve the AgentStack hooks, then start a new Codex process before expecting BOUND history."
+      local reservation_diagnostic="${SCRIPT_DIR:-}/codex-reservation-status.py"
+      [[ -f "$reservation_diagnostic" ]] || reservation_diagnostic="${INSTALL_DIR:-${AGENTSTACK_HOME:-$HOME/.agentstack}}/bin/lib/codex-reservation-status.py"
+      if [[ -f "$reservation_diagnostic" ]]; then
+        "$PYTHON_BIN" "$reservation_diagnostic" \
+          --codex-binary "$codex_bin" --codex-home "$codex_home" \
+          --cwd "${AGENTSTACK_PROJECT_KEY:-$PWD}" --plugin-id "$plugin_id"
+      else
+        echo "warn: Codex apply_patch reservation guard status is unknown; refresh core/plugin and review /hooks before relying on guarded edits."
+      fi
       ;;
     disabled)
+      echo "warn: Codex apply_patch reservation guard is disabled; edits may be unguarded. Enable the plugin and review /hooks."
       echo "note: Codex history binding plugin installed but disabled ($plugin_id); Codex CLI history requires enabling it and reviewing its hooks in /hooks before a new process. Claude-only use is unaffected."
       ;;
     absent)
+      echo "warn: Codex apply_patch reservation guard is not installed; edits may be unguarded. Install the optional plugin and review /hooks."
       echo "note: Codex history binding plugin is not installed in $codex_home; Codex CLI history requires this optional plugin; see docs/codex-app.md for setup and /hooks approval. Claude-only use is unaffected."
       ;;
     *)
+      echo "warn: Codex apply_patch reservation guard status is unknown; inspect the plugin and /hooks before relying on guarded edits."
       echo "note: Codex history binding plugin status is unknown for $codex_bin with CODEX_HOME=$codex_home; inspect 'codex plugin list --json' and /hooks if you use Codex history."
       ;;
   esac

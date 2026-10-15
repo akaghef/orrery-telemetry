@@ -2264,6 +2264,7 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/bin/lib/instruction_contract.json"
   "$REPO_ROOT/bin/lib/instruction_templates.json"
   "$REPO_ROOT/scripts/codex_plugin_trust.py"
+  "$REPO_ROOT/scripts/codex-reservation-status.py"
   "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
   "$REPO_ROOT/bin/lib/runtime_delivery.py"
   "$REPO_ROOT/bin/lib/runtime_operator.py"

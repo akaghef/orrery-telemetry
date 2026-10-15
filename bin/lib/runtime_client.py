@@ -1522,6 +1522,10 @@ class RuntimeClient:
         if self.outputs['mutation'].exists() or self.outputs['mutation'].is_symlink():
             self.replay_pending()
         path = hook_path(payload)
+        if payload.get('tool_name') in ('Delete', 'MoveSource') and Path(path).is_symlink():
+            # The server covers a physical target, not the link entry removed
+            # by these operations. Target coverage cannot authorize deletion.
+            raise ClientError('RESERVATION_ENTRY_UNSUPPORTED: symlink entry deletion')
         try:
             checked = self.call('check_file_reservations', {'paths': [path]})
         except ClientError as exc:

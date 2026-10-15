@@ -36,7 +36,7 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reservation-common.sh"
 
 TOOL_OUTPUT=$(cat)
-TOOL_SUCCESS=$(printf '%s' "$TOOL_OUTPUT" | python3 -c '
+TOOL_SUCCESS=$(printf '%s' "$TOOL_OUTPUT" | "${AGENTSTACK_PYTHON:-python3}" -c '
 import json
 import re
 import sys
@@ -101,7 +101,7 @@ case "$RELEASE_GRACE_SECONDS" in
     ''|*[!0-9]*) RELEASE_GRACE_SECONDS=90 ;;
 esac
 
-PATHS_JSON=$(QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$FILE_PATH" python3 -c '
+PATHS_JSON=$(QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$FILE_PATH" "${AGENTSTACK_PYTHON:-python3}" -c '
 import json
 import os
 import unicodedata
@@ -133,7 +133,7 @@ mkdir -p "$STATE_DIR" 2>/dev/null || {
     release_now
     exit 0
 }
-STATE_KEY=$(QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" python3 -c '
+STATE_KEY=$(QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" "${AGENTSTACK_PYTHON:-python3}" -c '
 import hashlib
 import os
 import unicodedata
@@ -175,6 +175,6 @@ nohup env \
     QUERY_STATE_TOKEN="$STATE_TOKEN" \
     QUERY_GRACE_SECONDS="$RELEASE_GRACE_SECONDS" \
     QUERY_COMMON_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reservation-common.sh" \
-    python3 "$WORKER" >/dev/null 2>&1 &
+    "${AGENTSTACK_PYTHON:-python3}" "$WORKER" >/dev/null 2>&1 &
 
 exit 0

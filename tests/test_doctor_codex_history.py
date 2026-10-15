@@ -110,6 +110,7 @@ def test_doctor_reports_launcher_paths_and_plugin_state(tmp_path, plugin_list, s
     assert f"ok: Codex launcher binary {codex}" in output
     assert f"ok: Codex launcher CODEX_HOME {codex_home}" in output
     assert state_text in output
+    assert "Codex apply_patch reservation guard" in output
     if state_text == "installed and enabled":
         assert "Codex lifecycle hook approval is unknown" in output
         assert "/hooks" in output
@@ -343,3 +344,44 @@ def test_doctor_model_default_reports_fallback_from_selected_cli(tmp_path, versi
     assert ("use gpt-6-sol" in result.stdout) is noted
     if noted:
         assert "0.159.0 or later" in result.stdout
+
+
+@pytest.mark.parametrize('state,expected', [('trusted', 'trusted'), ('untrusted', 'needs_review'),
+                                          ('stale', 'needs_review'), ('disabled', 'disabled'),
+                                          ('missing', 'missing'), ('broken', 'unknown')])
+def test_read_only_reservation_guard_status(tmp_path, monkeypatch, state, expected):
+    import importlib.util
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('reservation_status', ROOT / 'scripts/codex-reservation-status.py')
+    diagnostic = importlib.util.module_from_spec(spec); spec.loader.exec_module(diagnostic)
+    hook = {'key': 'fixture', 'pluginId': PLUGIN_ID, 'eventName': 'preToolUse',
+            'matcher': '^apply_patch$', 'enabled': state != 'disabled',
+            'trustStatus': state, 'source': 'plugin', 'isManaged': False,
+            'sourcePath': str(tmp_path / 'plugin/hooks/hooks.json'), 'handlerType': 'command',
+            'command': '"$PLUGIN_ROOT/scripts/run-reservation-guard.sh"', 'async': False}
+    class Server:
+        def request(self, method, params):
+            assert method == 'hooks/list' and params == {'cwds': [str(tmp_path)]}
+            return {'data': [{'cwd': str(tmp_path), 'hooks': [] if state == 'missing' else [hook],
+                              'errors': ['discovery failed'] if state == 'broken' else []}]}
+    assert diagnostic.status(Server(), tmp_path, PLUGIN_ID) == expected
+
+
+@pytest.mark.parametrize('field,value', [('matcher', '^Bash$'), ('pluginId', 'other@local'),
+                                         ('command', 'echo run-reservation-guard.sh'),
+                                         ('async', True), ('source', 'user')])
+def test_unrelated_or_changed_hook_cannot_claim_protection(tmp_path, monkeypatch, field, value):
+    import importlib.util
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('reservation_status', ROOT / 'scripts/codex-reservation-status.py')
+    diagnostic = importlib.util.module_from_spec(spec); spec.loader.exec_module(diagnostic)
+    hook = dict(pluginId=PLUGIN_ID, eventName='preToolUse', matcher='^apply_patch$', enabled=True,
+                trustStatus='trusted', source='plugin', isManaged=False,
+                sourcePath=str(tmp_path / 'plugin/hooks/hooks.json'), handlerType='command',
+                command='"$PLUGIN_ROOT/scripts/run-reservation-guard.sh"', **{'async': False})
+    hook[field] = value
+    class Server:
+        def request(self, method, params):
+            assert method == 'hooks/list'
+            return {'data': [{'cwd': str(tmp_path), 'hooks': [hook], 'errors': []}]}
+    assert diagnostic.status(Server(), tmp_path, PLUGIN_ID) in {'unknown', 'missing'}
