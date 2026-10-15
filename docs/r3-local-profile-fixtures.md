@@ -84,10 +84,24 @@ profile 全体、resolved auth の固定文脈・runner/依存物、effective_sc
 hash の変更感度用 vector は hash 関数の単体入力であり、変更した timeout/TTL を
 configure/launch で対応済みとする試験ではない（実行時の固定値は5秒/300000msのまま）。
 
-caller binding は同じ隔離 context を毎回再構築し、全 argv/env を capture binary
-から読む。spawn 系は raw argv/env/cwd を比較し、resume は native resume/session ID
-を literal に検査して model・全 `-c` override・env/cwd を比較する（resume を新規
-spawn にして一致させない）。実 model・cwd・HOME と保存 caller fields にも別の
+caller binding は各入口の直前に fixture 内の client ディレクトリを再作成する。
+resume だけは最初の保存 owner を明示的な入力として戻し、adapter が既存の
+session-index/transcript を隔離内に準備する。これは今回の実行証拠とは区別する。
+入口ごとに未作成の capture path と新しい nonce を発行し、nonce は捕捉 binary の
+本文に埋める（argv/env は変えない）。以前の捕捉が残っていても、今回の path と
+nonce の双方が一致しなければ失敗する。prepare-child/dashboard を含む全5入口で
+no-op と古い capture のコピーを負対照として実行する。
+
+spawn 系は raw argv/env/cwd を比較する。resume は **全 argv** を照合し、取り除ける
+差は既知の末尾 startup prompt と、指定位置の正確な resume/session envelope だけ。
+binding は task_delivery=mail・interactive を明示し、mail-only の既知の指示本文と
+既存 Codex 起動の5組の option pairs 後（index 10）の `resume, session ID` を golden
+にする。R3 が配置を変えるなら golden も明示的に講評して変える。adapter の trace
+から削除対象を選ばない。headless の `exec, resume, session ID` も独立した計測器の
+正負 vector で確認するが、実 headless caller の合格を主張するものではない。
+追加 sandbox、欠落/並べ替え/重複 option、誤 session/位置/exec/prompt、env/cwd の
+変更を負対照で拒否する（resume を新規 spawn にして一致させない）。
+実 model・cwd・HOME と保存 caller fields にも別の
 literal assertion を持つ。adapter が未知の flags/UUID を黙って捨てることは不可。
 operator の prepare-only は **製品 API が現時点で受け取るという主張ではない**。
 R3 接続時に既存 prepare/gate の境界を使い、保存済み command を同じ fixture binary
@@ -132,6 +146,15 @@ and isolated child homes. They neither read real user skills nor call cloud APIs
 上の control は測定器に対して誤実装を実行して拒否を確認するもので、未接続の
 製品/native/caller 本体で変異を動かしたという意味ではない。後続 binding は同じ
 入力を実入口へ接続し、negative control の保証を捨てない。
+
+### r2 の再講評と負対照
+
+両講評の capture 持越し P2 は `test_each_caller_requires_its_own_capture_despite_previous_success`
+で全5入口の no-op/古い nonce を拒否し、`test_caller_contract_itself_rejects_no_op_bindings`
+で契約本体の検査順にも接続する。後者は意図的な偽 binding を使う計測器の正負対照であり、
+未実装の実 caller adapter の代用ではない。dashboard の直前の成功は operator とする。
+枠なし P3 の resume 全 argv は `test_resume_full_argv_rejects_every_non_envelope_difference`
+で interactive/headless 各1正例と各12負例を実行する。
 
 Native probes are specifications awaiting their integration adapter. Nothing in
 this patch launches an installed CLI. Before enabling that adapter, use only

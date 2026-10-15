@@ -1,4 +1,4 @@
-"""Executed r1 mutant controls. These are NOT native/caller conformance runs."""
+"""Executed review mutant controls. NOT native/caller conformance runs."""
 from copy import deepcopy
 import json
 import socket
@@ -7,11 +7,12 @@ import urllib.request
 
 import pytest
 
-from .evidence import (assert_auth_matrix, assert_bound_receipt, assert_caller_capture,
+from .evidence import (CALLERS, CALLER_STARTUP_PROMPT, assert_auth_matrix, assert_bound_receipt, assert_caller_capture,
                        assert_intent_digest, assert_single_owner, assert_tree_unchanged,
-                       assert_wire_rotation, capture_provider, credential_source,
+                       assert_resume_capture, assert_wire_rotation, capture_provider, credential_source,
                        existing_mutation_pending, intent_preimage, literal_intent,
-                       owner_paths, snapshot_tree, write_private_json)
+                       owner_paths, prepare_caller_invocation, read_fresh_capture,
+                       snapshot_tree, write_private_json)
 from .support import Canary, canonical_digest, fake_peer, post_fixture
 from .test_instruments import request
 
@@ -158,6 +159,128 @@ def test_single_caller_bypass_is_detected_by_real_capture_binary(workspace):
     subprocess.run([str(binary), "--model", "gpt-fake"], cwd=cwd, env=env, check=True)
     with pytest.raises(AssertionError, match="caller bypass"):
         assert_caller_capture(capture, expected)
+
+
+@pytest.mark.parametrize("entry", CALLERS)
+@pytest.mark.parametrize("mutation", [None, "no-op", "stale-capture"])
+def test_each_caller_requires_its_own_capture_despite_previous_success(workspace, entry, mutation):
+    previous_entry = "operator" if entry == "dashboard" else "shell"
+    owner, binary, previous, nonce = prepare_caller_invocation(workspace, previous_entry)
+    env = {"HOME": str(workspace.tmp / "client"), "PATH": "/usr/bin:/bin"}
+    command = [str(binary), "--model", "fixture-glm-model"]
+    subprocess.run(command, cwd=workspace.scratch.parent, env=env, check=True)
+    first = read_fresh_capture(previous, nonce)
+    write_private_json(owner, {"launch_intent": literal_intent(workspace)})
+    seed = owner.read_bytes()
+
+    owner, binary, current, current_nonce = prepare_caller_invocation(
+        workspace, entry, resume_owner=seed if entry == "resume-child" else None)
+    assert previous.exists(), "control must retain earlier successful capture"
+    assert current != previous and current_nonce != nonce
+    if entry == "resume-child":
+        assert owner.read_bytes() == seed  # old state is input, not execution proof
+    else:
+        assert not owner.exists(), "non-resume caller inherited another caller's owner"
+
+    def probe_mutant():
+        if mutation is None:
+            subprocess.run(command, cwd=workspace.scratch.parent, env=env, check=True)
+        elif mutation == "stale-capture":
+            current.write_bytes(previous.read_bytes())
+        # no-op returns without launching; old capture/seed must not rescue it.
+    probe_mutant()
+    if mutation is None:
+        observed = read_fresh_capture(current, current_nonce)
+        assert observed["argv"] == first["argv"]
+        assert observed["env"] == first["env"]  # nonce never changes launch inputs
+        assert_caller_capture(current, first)
+    else:
+        message = "did not execute" if mutation == "no-op" else "earlier caller"
+        with pytest.raises(AssertionError, match=message):
+            read_fresh_capture(current, current_nonce)
+
+
+@pytest.mark.parametrize("headless", [False, True])
+@pytest.mark.parametrize("mutation", [None, "extra-sandbox", "missing-model", "reorder",
+                                     "duplicate-override", "wrong-session", "moved-envelope",
+                                     "duplicate-envelope", "extra-exec", "startup-prompt",
+                                     "unknown-prompt", "env", "cwd"])
+def test_resume_full_argv_rejects_every_non_envelope_difference(headless, mutation):
+    # Independent golden vectors, not a product-generated trace or a filter of
+    # selected flags. Each branch changes one otherwise valid resume capture.
+    prefix = ["-C", "/fixture", "-c", "update=false", "-c", "mail.command=fixture",
+              "-c", "mail.args=[]", "-c", "plugin=false"]
+    tail = ["--model", "fixture-glm-model", "-c", "provider=fixture", "--sandbox", "workspace-write"]
+    prompt = "exact approved fixture startup instruction"
+    startup = {"argv": prefix + tail + [prompt], "env": {"HOME": "/fixture/home"}, "cwd": "/fixture"}
+    envelope = (["exec"] if headless else []) + ["resume", "fixture-session"]
+    observed = deepcopy(startup)
+    observed["argv"] = prefix + envelope + tail
+    argv = observed["argv"]
+    if mutation == "extra-sandbox":
+        argv += ["--sandbox", "danger-full-access"]
+    elif mutation == "missing-model":
+        argv.remove("fixture-glm-model")
+    elif mutation == "reorder":
+        argv[-2:] = reversed(argv[-2:])
+    elif mutation == "duplicate-override":
+        argv += ["-c", "provider=fixture"]
+    elif mutation == "wrong-session":
+        argv[argv.index("fixture-session")] = "wrong-session"
+    elif mutation == "moved-envelope":
+        observed["argv"] = envelope + prefix + tail
+    elif mutation == "duplicate-envelope":
+        argv += envelope
+    elif mutation == "extra-exec":
+        argv.insert(10, "exec")
+    elif mutation == "startup-prompt":
+        argv.append(prompt)
+    elif mutation == "unknown-prompt":
+        startup["argv"][-1] = "unapproved prompt"
+    elif mutation == "env":
+        observed["env"]["HOME"] = "/wrong"
+    elif mutation == "cwd":
+        observed["cwd"] = "/wrong"
+    def check():
+        assert_resume_capture(observed, startup, startup_prompt=prompt,
+                              envelope_index=10, session_id="fixture-session", headless=headless)
+    if mutation is None:
+        check()
+    else:
+        with pytest.raises(AssertionError):
+            check()
+
+
+@pytest.mark.parametrize("no_op_entry", [None, "prepare-child", "dashboard"])
+def test_caller_contract_itself_rejects_no_op_bindings(workspace, no_op_entry):
+    # Exercise the contract's wiring as well as its measurement helper. This
+    # deliberate fake binding is ONLY an oracle control, never the missing
+    # caller_acceptance adapter or evidence of a production caller succeeding.
+    from .test_caller_contract import test_real_callers_preserve_literal_intent_and_same_executed_argv_env as contract
+    seen = []
+    def controlled_binding(entry, *, provider_binary, owner, **kwargs):
+        seen.append(entry)
+        if entry == no_op_entry:
+            return  # previous successful capture remains on disk
+        intent = deepcopy(workspace.caller)
+        intent["model"] = {"kind": "local-profile", "ref": "local:fixture",
+                           "resolved": {"model": "fixture-glm-model"}}
+        write_private_json(owner, {"launch_intent": intent})
+        prefix = ["-C", str(workspace.scratch.parent), "-c", "update=false",
+                  "-c", "mail.command=fixture", "-c", "mail.args=[]", "-c", "plugin=false"]
+        tail = ["--model", "fixture-glm-model", "-c", "provider=fixture"]
+        argv = (prefix + ["resume", "native-fixture-session"] + tail
+                if entry == "resume-child" else prefix + tail + [CALLER_STARTUP_PROMPT])
+        subprocess.run([str(provider_binary), *argv], cwd=workspace.scratch.parent,
+                       env={"HOME": str(workspace.tmp / "client/runtime/provider-home/codex"),
+                            "PATH": "/usr/bin:/bin"}, check=True)
+    if no_op_entry is None:
+        contract(controlled_binding, workspace)
+        assert seen == list(CALLERS)
+    else:
+        with pytest.raises(AssertionError, match="current caller did not execute"):
+            contract(controlled_binding, workspace)
+        assert seen == list(CALLERS)[:list(CALLERS).index(no_op_entry) + 1]
 
 
 def test_pending_seed_uses_existing_wire_contract():

@@ -10,8 +10,10 @@ import hashlib
 import json
 from pathlib import Path
 import runpy
+import shutil
 import sys
 import threading
+import uuid
 
 from .support import canonical_digest, registered_address
 
@@ -226,12 +228,75 @@ CALLERS = {
 }
 
 
-def capture_provider(path, capture):
+def capture_provider(path, capture, *, nonce=None):
+    if path.exists():
+        assert not path.is_symlink(), "capture binary must not be a symlink"
+        path.chmod(0o600)
     path.write_text("#!" + sys.executable + "\nimport json, os, sys\n"
                     "from pathlib import Path\n"
-                    f"Path({str(capture)!r}).write_text(json.dumps({{\"argv\":sys.argv[1:],\"env\":dict(os.environ),\"cwd\":os.getcwd()}}))\n")
+                    f"Path({str(capture)!r}).write_text(json.dumps({{\"argv\":sys.argv[1:],\"env\":dict(os.environ),\"cwd\":os.getcwd(),\"invocation_nonce\":{nonce!r}}}))\n")
     path.chmod(0o500)
     return path
+
+
+def prepare_caller_invocation(workspace, entry, *, resume_owner=None):
+    """Reset only this fixture's client; prior resume state is explicit INPUT.
+
+    Capture artifacts live outside that client. Keeping the previous capture
+    makes the no-op control prove it cannot stand in for the current execution.
+    The nonce is embedded in the command, never in its argv/environment.
+    """
+    assert entry in CALLERS
+    base = workspace.tmp / "client"
+    assert not base.is_symlink(), "fixture client must not be a symlink"
+    if base.exists():
+        shutil.rmtree(base)
+    base.mkdir(mode=0o700)
+    owner, _, _ = owner_paths(base, "global")
+    assert (resume_owner is not None) == (entry == "resume-child")
+    if resume_owner is not None:
+        owner.write_bytes(resume_owner)
+        owner.chmod(0o600)
+    assert owner.exists() == (entry == "resume-child")
+    nonce = uuid.uuid4().hex
+    captures = workspace.tmp / "captures"
+    captures.mkdir(mode=0o700, exist_ok=True)
+    capture = captures / f"{entry}-{nonce}.json"
+    assert not capture.exists()
+    binary = capture_provider(workspace.tmp / "bin/fixture-provider", capture, nonce=nonce)
+    return owner, binary, capture, nonce
+
+
+def read_fresh_capture(capture, nonce):
+    assert capture.is_file() and not capture.is_symlink(), "current caller did not execute capture binary"
+    observed = json.loads(capture.read_text())
+    assert observed["invocation_nonce"] == nonce, "capture belongs to an earlier caller invocation"
+    return observed
+
+
+# Exact fixture task-delivery/tool instruction, not an adapter-provided trace.
+CALLER_STARTUP_PROMPT = (
+    "Your delegated task is in ORRERY Mail. Fetch your inbox and read the task before beginning work.\n\n"
+    "Tools: this child was started with base mail-only: besides shell/files and authenticated ORRERY Mail "
+    "it was given only nothing else. If a tool you need is missing, report it to your parent agent "
+    "instead of working around it. This is an instruction, not a technical lock."
+)
+
+
+def assert_resume_capture(observed, startup, *, startup_prompt, envelope_index,
+                          session_id, headless=False):
+    """Remove ONLY the declared prompt and exact, position-bound envelope."""
+    start = startup["argv"]
+    assert start and start[-1] == startup_prompt, "unexpected startup prompt"
+    common = start[:-1]
+    envelope = (["exec"] if headless else []) + ["resume", session_id]
+    argv = observed["argv"]
+    assert 0 <= envelope_index <= len(common), "invalid resume envelope position"
+    assert argv[envelope_index:envelope_index + len(envelope)] == envelope, "invalid resume envelope"
+    remaining = argv[:envelope_index] + argv[envelope_index + len(envelope):]
+    assert remaining == common, "resume changed full provider argv"
+    assert observed["env"] == startup["env"], "resume changed provider env"
+    assert observed["cwd"] == startup["cwd"], "resume changed provider cwd"
 
 
 def assert_caller_capture(capture, expected):

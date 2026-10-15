@@ -8,16 +8,17 @@ import json
 
 import pytest
 
-from .evidence import (CALLERS, assert_caller_capture, assert_single_owner,
-                       assert_tree_unchanged, capture_provider, owner_paths, snapshot_tree)
+from .evidence import (CALLERS, CALLER_STARTUP_PROMPT, assert_caller_capture,
+                       assert_resume_capture, assert_single_owner, assert_tree_unchanged,
+                       owner_paths, prepare_caller_invocation, read_fresh_capture, snapshot_tree)
 
 
 def test_real_callers_preserve_literal_intent_and_same_executed_argv_env(caller_probe, workspace):
-    capture = workspace.tmp / "captured-provider.json"
-    binary = capture_provider(workspace.tmp / "bin/fixture-provider", capture)
-    owner, _, _ = owner_paths(workspace.tmp / "client", "global")
     captures, intents = [], []
+    resume_owner = None
     for entry in CALLERS:
+        owner, binary, capture, nonce = prepare_caller_invocation(
+            workspace, entry, resume_owner=resume_owner if entry == "resume-child" else None)
         # Each binding reconstructs the same isolated client/name/context and
         # invokes the real entry. It must NOT synthesize the capture/intent or
         # replace the production entry/parser/resolver. All external commands
@@ -25,13 +26,18 @@ def test_real_callers_preserve_literal_intent_and_same_executed_argv_env(caller_
         caller_probe(entry, workspace=workspace, real_entry=CALLERS[entry],
                      provider_binary=binary, owner=owner,
                      prepare_only=(entry == "operator"), fresh_same_context=True,
-                     provider_session_id="native-fixture-session")
+                     provider_session_id="native-fixture-session", task_delivery="mail",
+                     headless=False)
+        # A return value, an old owner or the previous caller's capture is not
+        # execution evidence. Check the fresh process artifact first.
+        execution = read_fresh_capture(capture, nonce)
         saved = json.loads(owner.read_text())["launch_intent"]
+        if entry == "shell":
+            resume_owner = owner.read_bytes()
         assert saved["model"]["ref"] == "local:fixture"
         assert saved["model"]["resolved"]["model"] == "fixture-glm-model"
         for field in ("cwd", "task", "name", "tools", "base", "resources", "detached"):
             assert saved[field] == workspace.caller[field]
-        execution = json.loads(capture.read_text())
         argv = execution["argv"]
         models = [arg.split("=", 1)[1] for arg in argv if arg.startswith("--model=")]
         models += [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg in ("--model", "-m")]
@@ -40,14 +46,13 @@ def test_real_callers_preserve_literal_intent_and_same_executed_argv_env(caller_
         assert execution["env"]["HOME"] == str(workspace.tmp / "client/runtime/provider-home/codex")
         if captures:
             if entry == "resume-child":
-                # Native resume has an intentionally different command envelope.
-                # Do not demand that resume silently become a fresh spawn.
-                assert "resume" in argv and "native-fixture-session" in argv
-                assert execution["env"] == captures[0]["env"]
-                assert execution["cwd"] == captures[0]["cwd"]
-                def overrides(args):
-                    return [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "-c"]
-                assert overrides(argv) == overrides(captures[0]["argv"])
+                # Existing interactive Codex command: five fixed option pairs,
+                # then resume/session, then all tool/model/provider options.
+                # This reviewed golden must change explicitly if R3 changes
+                # that command layout; never ask the adapter what to discard.
+                assert_resume_capture(execution, captures[0],
+                                      startup_prompt=CALLER_STARTUP_PROMPT,
+                                      envelope_index=10, session_id="native-fixture-session")
             else:
                 assert_caller_capture(capture, captures[0])
             assert saved == intents[0]
