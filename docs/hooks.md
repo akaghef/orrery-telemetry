@@ -67,6 +67,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 
 - **同じ座標系:** [`reservation-common.sh`](../hooks/reservation-common.sh) を `check-file-reservation.sh` と release hook が source し、endpoint、legacy bearer selector、identity、project key、protected root、相対/絶対 path を同じ規則で解決します。HTTP request は常に `Accept: application/json, text/event-stream` を付けます。
 - **grace / debounce:** `release-file-reservation.sh` は `AGENTSTACK_RELEASE_GRACE_SECONDS`（既定90秒、旧 `FILE_RESERVATION_RELEASE_GRACE_SECONDS` も可）だけ待ってから [`release-file-reservation-worker.py`](../hooks/release-file-reservation-worker.py) が解放します。state は `$AGENTSTACK_RUNTIME_DIR/file_release_debounce/` にあり、次の edit は token を更新し、再予約 hook は state file を消して古い worker を no-op にします。
+- **Bash・script での書込み:** Claude の予約 hook は `Edit` / `Write` だけが対象です。予約した file はそれらで編集してください。`Bash`・script・別 tool で書く場合は予約の確認も自動解放も働かないため、書き終えた直後に自分で解放します（bound proxy は `release_reservations`、raw/direct は `release_file_reservations`）。
 - **欠損・障害:** worker が配布されていなければ同期の即時 release に fallback します。HTTP 406、接続不能、JSON-RPC / MCP error などの解放失敗は `$AGENTSTACK_RUNTIME_DIR/release-failures.log` に1行記録します。hook 自体は edit 完了や session 終了を失敗扱いにしません。
 - **SessionEnd の境界:** `release-all-reservations.sh` は reservation だけを解放します。agent を retire しないため、crash / resume でも irreversible な identity 変更を起こしません。
 
