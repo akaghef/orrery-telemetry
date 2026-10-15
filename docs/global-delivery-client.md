@@ -232,7 +232,7 @@ context のない watcher は `agentstack-runtime-client watch-service --server-
 
 人・service・cron の `agentstack-mailctl` と `agentstack-enroll` も同じ選択を使います。global の enrollment は `inspect --agent-id ID`、`claim/recover --agent-id ID --request-id UUID --expected-generation N` で既存管理 socket へ接続します。新 credential は stdin から渡し、argv に含めません。旧 enrollment CLI は legacy 選択時だけ呼びます。新しい controller の配布に共通 loader が欠けていれば `GLOBAL_ENTRY_UNAVAILABLE` で止まり、再配備が必要です。
 
-既定は legacy、activation は false のままです。installer に global を渡して本サービスを切り替える操作は `GLOBAL_INSTALL_REQUIRES_PR7` で拒否します。隔離 server config の実行経路と、利用者の既定切替は別の段階です。tmux の専用 socket・名前の変更はこの段階では実装しません。
+既定は legacy、activation は false のままです。installer に global を渡して本サービスを切り替える操作は `GLOBAL_INSTALL_REQUIRES_PR7` で拒否します。隔離 server config の実行経路と、利用者の既定切替は別の段階です。隔離起動の専用 socket・名前と終了回収は後述の lifecycle 契約に従います。
 
 installer は既存の literal 設定 reader で mode の既定を読み、env.sh の他の代入やコマンド置換を実行しません。空・不正な mode は拒否します。
 
@@ -267,10 +267,24 @@ operator は `--operator --runtime-mode global --server-config /absolute/server-
 
 context 使用率も digest に含めます。提出後の応答不明は exit 3・`effects=unknown`、自動再送と新しい journal はありません。target/capture で確認後に人が選ぶ再送は新しい明示操作で、表示と context 値が元と同じなら重複し得ます。`effects=none` の事前拒否とは区別してください。協調 mutex は人/provider の入力を止めず、最後の観測と送信の間の競合窓も残ります。
 
-旧 consumer の通知・monitor・OPEN・prune は共通の legacy admission を通し、不明な対象では副作用を止め、正常な別の対象は続けます。この段階では専用 socket の起動を有効にしません。new/rename/rollback と終了の lifecycle、launcher/provider の結線は後続で確認してから切り替えます。
+旧 consumer の通知・monitor・OPEN・prune は共通の legacy admission を通し、不明な対象では副作用を止め、正常な別の対象は続けます。隔離 global の新規起動は後述の専用 socket を使い、旧 session の rename/adopt はしません。利用者の既定切替と provider 設定の移行は後続の関門です。
 
 対象の同一性の digest は socket・pane・PID/start・owner/親の証明を結び、capture・attach と terminal open の再照合に使います。通常の画面更新では対象変更としません。compact の target digest はこの証明に入力欄の状態と ctx 値を加え、本文・時計・スピナーの更新は含めません。人の yes 待ちは観測期限に含めず、確認後の短い期限で同じ digest を再照合します。ttyd と terminal の実子も同じ helper で endpoint と対象を再照合し、cleanup は観測不明なら identity を保持します。resume 後に terminal を開けなければ `TERMINAL_OPEN_FAILED` を返しますが、成功した resume を取り消しません。
 
 `send-compact` の確認には `target` が返す `state_sha256` を使います。`capture`・`attach` が返す値は対象の同一性の確認用なので、compact の確認値として流用しません。
 
 不在は直接の `lstat` の ENOENT だけで判断し、EACCES・その他の I/O エラーは不明として保持します。親 directory は owner の rwx も必要です。共有 legacy consumer は、socket 不在または安全な socket で `no server running` を確認した inventory を空とします。cleanup は生存 lease がなければ退役へ進みます。unsafe socket・timeout・その他の読取不能は不明のまま保持し、観測だけで server を作りません。
+
+## 専用起動と終了の回収
+
+隔離 global client の新規 detached 起動は、instance と client HOME から決まる専用 socket と、agent の正確な名前の session を使います。同名・大文字小文字だけ異なる foreign session は `TMUX_SESSION_NAME_CONFLICT` で拒否し、rename・adopt・上書きはしません。旧 UUID session と standalone の証拠は旧形式のまま読めます。既定の旧 mode と PR7 の切替条件は変わりません。
+
+runner の PID/start は既存 launch の `execution.runner`、実 provider の PID/start は既存 live slot に保存します。runner は provider を待ち、終了結果を launch へ確定してから報告と後片付けを行います。SessionEnd は process の終了証明ではなく、SDK の /clear でも早期退役しません。provider の終了・runner の終了・不明は区別し、生存が不明なら予約と identity を保持します。
+
+`target --agent-id ID --print` は、終了済み・SessionStart 前の失敗でも保存された証拠から lifecycle と現在の `state_sha256` を返せます。現在の PID/pane が証明できない回収対象は null を返し、capture・attach・compact・signal の対象には使えません。確認した親 context、または明示 operator の同じ入口から `replay-end --agent-id ID --confirm-state-digest HASH --expected-intent-sha256 HASH` へ進みます。pending が無い場合だけ後者に literal `null` を渡します。unknown は `launch-resolve` に戻り、自動で再起動しません。
+
+親への終端報告は既存の mutation pending に全文を保存し、同じ UUID と bytes で再送します。成功 receipt と終了 phase の確定が pending の消去より先です。結果不明では active のまま保持し、確定後だけ retire/release と local cleanup を完了します。retire commit 後の local 保存失敗も、親/operator の replay が残りだけを処理します。
+
+退役済みで報告 pending が残る場合は、通常送信を再有効化しません。既存 `resolve-mutation` の digest/old-new binding/ID/confirm の照合に加え、`--parent-context` で確認した active な親、または同じ private server config の `--operator` と TTY の yes を要求します。これは未確認報告の明示的な local ack/abandon だけで、launch の既存 resolution に記録してから pending を消します。その後もう一度 target を読み、replay-end で後片付けを完了してください。
+
+CLI `end` は既存 dashboard と同じ終了要求を共用します。通常は検証済み pane へ literal `/exit` と Enter、headless Gemini は検証済み provider PID だけに SIGINT を送ります。送信だけで終了とは見なしません。pane のない通常 provider は送信先を証明できないため拒否し、SIGTERM へ切り替えません。

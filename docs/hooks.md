@@ -70,6 +70,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 - **Bash・script での書込み:** Claude の予約 hook は `Edit` / `Write` だけが対象です。予約した file はそれらで編集してください。`Bash`・script・別 tool で書く場合は予約の確認も自動解放も働かないため、書き終えた直後に自分で解放します（bound proxy は `release_reservations`、raw/direct は `release_file_reservations`）。
 - **欠損・障害:** worker が配布されていなければ同期の即時 release に fallback します。HTTP 406、接続不能、JSON-RPC / MCP error などの解放失敗は `$AGENTSTACK_RUNTIME_DIR/release-failures.log` に1行記録します。hook 自体は edit 完了や session 終了を失敗扱いにしません。
 - **SessionEnd の境界:** `release-all-reservations.sh` は reservation だけを解放します。agent を retire しないため、crash / resume でも irreversible な identity 変更を起こしません。
+- **隔離 global の wait runner:** 新しい launch の SessionEnd は process 終了の証拠にしません。runner の wait 結果を保存し、同じ報告 intent の確定後に後片付けします。既存 standalone の hook は維持します。中断後の `target` / `replay-end` は [global delivery client](global-delivery-client.md#専用起動と終了の回収) を参照してください。
 
 ### service outage と unmanaged session（2つの別々の問い）
 

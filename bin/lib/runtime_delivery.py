@@ -320,6 +320,7 @@ class RuntimeDelivery(RuntimeFiles):
             return False, str(exc)
 
     def ending_incomplete(self, row):
+        if row['phase']=='ended' and (row.get('execution') or row.get('termination')) and (row.get('termination') or {}).get('phase')!='ended':return True
         return (row['phase']=='ended' and (row.get('operator_resolution') or {}).get('action')=='confirmed-ended'
                 and any(not live.get('ended') for _,live in self.live_rows(row['launch_id'])))
 
@@ -332,10 +333,16 @@ class RuntimeDelivery(RuntimeFiles):
             phase = saved['phase']
             live = any(not row.get('ended') for _, row in self.live_rows(launch_id))
             ready = verified and phase == 'running' and live
+            if saved.get('execution'):
+                ready=ready and saved['execution']['outcome']['state']=='pending' and any(self.api['runtime_tmux_api']()['runner_provider'](row,saved,api=self.api) for _,row in self.live_rows(launch_id) if not row.get('ended'))
             unknown = phase in ('exec-unknown', 'abandoned') or self.ending_incomplete(saved)
+            if saved.get('execution') and phase=='running' and not ready:unknown=True
+            ended_execution=(saved.get('execution') or {}).get('outcome',{}).get('state') in ('exited','not-started')
+            recovery=ended_execution and (saved.get('termination') or {}).get('phase')!='ended'
+            if ended_execution:unknown=False
             observation = 'verified-running' if ready else ('verified-ended' if phase == 'ended' and not unknown else ('verified-not-executed' if phase in ('planned','gated','cancelled') else 'unknown'))
             return {'ok':True, 'state_sha256':self.state_digest('launch',launch_id,saved),
-                    'operator_required':unknown, 'next_operations':['launch-resolve'] if unknown else (['launch-retry','launch-cancel'] if phase in ('planned','gated') else []),
+                    'operator_required':unknown or recovery, 'next_operations':['target'] if recovery else ['launch-resolve'] if unknown else (['launch-retry','launch-cancel'] if phase in ('planned','gated') else []),
                     'current':self.status_current(), 'remote_owner_verified':verified, 'reason':reason or saved['error'],
                     'launch_id':launch_id, 'phase':phase, 'runtime_ready':ready, 'observation':observation,
                     'operator_resolution':saved['operator_resolution']}
@@ -393,10 +400,14 @@ class RuntimeDelivery(RuntimeFiles):
             action = resolution['action']
             if action not in ('abandon','confirmed-running','confirmed-ended'):
                 self.fail('ARGUMENTS_UNSUPPORTED')
-            if row['phase'] not in ('exec-unknown','abandoned','ended'):
-                self.fail('LAUNCH_OUTCOME_UNKNOWN')
             lives = self.live_rows(row['launch_id'])
+            proved=bool(row.get('execution')) and any(self.api['runtime_tmux_api']()['runner_provider'](live,row,api=self.api) for _,live in lives if not live.get('ended'))
+            provider_present=any(live.get('process_start') not in (None,'absent')
+                and self.api['process_start'](live.get('pid'))==live['process_start'] for _,live in lives if not live.get('ended'))
+            if row['phase'] not in ('exec-unknown','abandoned','ended') and not (row['phase']=='running' and row.get('execution') and not proved):self.fail('LAUNCH_OUTCOME_UNKNOWN')
+            if action=='confirmed-ended' and (proved or provider_present):self.fail('LAUNCH_OUTCOME_UNKNOWN')
             if action == 'confirmed-running':
+                if row.get('execution') and (not proved or row['execution']['outcome']['state']!='pending'):self.fail('LAUNCH_OUTCOME_UNKNOWN')
                 if not any(not r.get('ended') and r.get('receipt_nonce') == row['receipt_nonce'] for _,r in lives):
                     self.fail('LAUNCH_RECEIPT_MISMATCH')
                 phase = 'running'
@@ -837,32 +848,121 @@ class RuntimeDelivery(RuntimeFiles):
             args.append(prompt + ('\n\n'+tool_prompt if tool_prompt else ''))
         return args
 
-    def start(self, provider, cwd, *, detached=False, launch_kind='startup', provider_session_id=None):
-        c=self.client
-        if provider=='gemini' and (not c.outputs['child'].exists() or not c.outputs['task'].exists()):
-            self.fail('GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED')
-        if provider=='codex':self.codex_trust()
-        row=self.prepare_launch(provider,launch_kind=launch_kind,cwd=cwd)
-        self.provider_command(row,provider_session_id)  # all command/config checks precede window RPC
-        self.bind_window()
-        with c.operation_mutex():
-            row=self.launch()
-            row['phase']='gated'
-            self.save(self.launch_path,row,'launch_intent')
-        args=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(c.path),
+    def launch_command(self, *args):
+        """Creation and admission always use the same private explicit endpoint."""
+        c=self.client;tmux=self.api['runtime_tmux_api']()
+        path=tmux['global_socket'](Path(c.config['agentstack_home']),c.binding['expected_server_instance_id'],create=True)
+        before=tmux['lstat_if_present'](path)
+        if before is not None:tmux['validate_socket'](path)
+        def invoke(command):
+            return subprocess.run(['tmux','-S',str(path),*command],capture_output=True,text=True,
+                timeout=5,env={k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')})
+        stale=False
+        if before is not None and args and args[0]=='new-session':
+            probe=invoke(('list-sessions','-F','#{session_name}'))
+            stale=bool(probe.returncode and tmux['module_api']('legacy_consumer')['server_absent'](probe))
+            if probe.returncode and not stale:self.fail('TMUX_TARGET_UNAVAILABLE')
+            current=tmux['lstat_if_present'](path)
+            if current is None or (before.st_dev,before.st_ino)!=(current.st_dev,current.st_ino):self.fail('TMUX_SOCKET_CHANGED')
+            tmux['validate_socket'](path)
+        result=invoke(args)
+        after=tmux['lstat_if_present'](path)
+        if after is not None:
+            tmux['validate_socket'](path)
+            if before is not None and not stale and (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):self.fail('TMUX_SOCKET_CHANGED')
+        elif before is not None:
+            # tmux removes a stale socket when list-sessions confirms there is
+            # no server. This is absence, not replacement of a live endpoint.
+            absent=(args==('list-sessions','-F','#{session_name}') and result.returncode
+                and tmux['module_api']('legacy_consumer')['server_absent'](result))
+            if not absent:self.fail('TMUX_SOCKET_CHANGED')
+        return result
+
+    def occupied_names(self):
+        reply=self.launch_command('list-sessions','-F','#{session_name}')
+        if reply.returncode:
+            # Only a missing endpoint is absence. Permissions and an existing
+            # unresponsive endpoint never authorize another shell.
+            tmux=self.api['runtime_tmux_api']();c=self.client
+            path=tmux['global_socket'](Path(c.config['agentstack_home']),c.binding['expected_server_instance_id'])
+            if tmux['lstat_if_present'](path) is not None and not tmux['module_api']('legacy_consumer')['server_absent'](reply):self.fail('TMUX_TARGET_UNAVAILABLE')
+            return []
+        return reply.stdout.splitlines()
+
+    def create_wrapper(self,row,provider_session_id=None):
+        args=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(self.client.path),
               'execute-launch',row['launch_id'],row['receipt_nonce']]
         if provider_session_id:args.append(provider_session_id)
-        if detached:
-            # tmux names are derived from the one launch UUID, never a Mail name.
-            name='orrery-'+row['launch_id']
-            result=subprocess.run(['tmux','new-session','-d','-s',name,'-c',row['cwd'],
-                                   __import__('shlex').join(args)],capture_output=True,text=True,timeout=10)
-            if result.returncode:
-                # The shell may have started even if a response was lost. Never
-                # manufacture evidence of absence from a failed transport.
-                self.fail('LAUNCH_OUTCOME_UNKNOWN')
-        else:
-            self.execute(row['launch_id'],row['receipt_nonce'],provider_session_id)
+        try:
+            result=self.launch_command('new-session','-d','-s',self.client.identity['name'],'-c',row['cwd'],'exec '+__import__('shlex').join(args))
+        except (OSError,subprocess.SubprocessError):
+            # Delivery of the command is uncertain. Retain this launch/nonce;
+            # never turn a lost acknowledgement into a fresh launch.
+            self.fail('LAUNCH_OUTCOME_UNKNOWN')
+        if result.returncode:
+            if any(x.casefold()==self.client.identity['name'].casefold() for x in self.occupied_names()):self.fail('TMUX_SESSION_NAME_CONFLICT')
+            self.fail('LAUNCH_OUTCOME_UNKNOWN')
+
+    def retry_launch(self,request):
+        c=self.client
+        with c.operation_mutex():
+            row=self.launch()
+            if row['launch_id']!=request['launch_id'] or self.state_digest('launch',row['launch_id'],row)!=request['expected_state_sha256']:
+                self.fail('RESOLUTION_DIGEST_MISMATCH')
+            if row['phase'] not in ('planned','gated','running'):self.fail('LAUNCH_OUTCOME_UNKNOWN')
+            names=self.occupied_names();name=c.identity['name']
+            if any(x.casefold()==name.casefold() for x in names):
+                if name not in names:self.fail('TMUX_SESSION_NAME_CONFLICT')
+                live_dir=c.runtime_dir/'live-sessions';found=[]
+                if live_dir.exists():
+                    self.api['safe_private_directory'](live_dir)
+                    for path in live_dir.iterdir():
+                        live=self.api['read_json'](path)
+                        if live.get('launch_id')!=row['launch_id']:continue
+                        if live.get('receipt_nonce')!=row['receipt_nonce']:self.fail('LAUNCH_RECEIPT_MISMATCH')
+                        if live.get('agent_id')!=c.identity['agent_id'] or any(live.get(k)!=v for k,v in c.binding.items()):self.fail('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+                        tmux=self.api['runtime_tmux_api']()
+                        path=tmux['global_socket'](Path(c.config['agentstack_home']),c.binding['expected_server_instance_id'])
+                        candidate=tmux['live_target'](live,c.config,row,api=self.api,endpoints=[('global-instance',tmux['Transport'](path,binary='tmux'))])
+                        if candidate is not None:found.append(candidate)
+                if len(found)!=1:
+                    for path in live_dir.iterdir() if live_dir.exists() else ():
+                        live=self.read(path)
+                        if live.get('launch_id')!=row['launch_id']:continue
+                        tmux=self.api['runtime_tmux_api']()
+                        path=tmux['global_socket'](Path(c.config['agentstack_home']),c.binding['expected_server_instance_id'])
+                        for transport in [tmux['Transport'](path,binary='tmux')]:
+                            actual=tmux['panes'](transport,pane=live.get('pane_id'))
+                            if any(x['pid']!=tmux['pane_process'](live,row) for x in actual):self.fail('TMUX_SESSION_NAME_CONFLICT')
+                    self.fail('TMUX_TARGET_CHANGED')
+                return {'ok':True,'launch_id':row['launch_id'],'prepared':True,'runtime_ready':row['phase']=='running','phase':row['phase'],'reason':None}
+            if row['phase']=='running' or row.get('execution'):self.fail('LAUNCH_OUTCOME_UNKNOWN')
+            self.bind_window()
+            row=self.launch();row.update(phase='gated',tmux_transport='global-instance')
+            self.save(self.launch_path,row,'launch_intent')
+            self.create_wrapper(row)
+            return {'ok':True,'launch_id':row['launch_id'],'prepared':True,'runtime_ready':False,'phase':'gated','reason':None}
+
+    def start(self, provider, cwd, *, detached=False, launch_kind='startup', provider_session_id=None):
+        c=self.client
+        if provider=='gemini' and (not c.outputs['child'].exists() or not c.outputs['task'].exists()):self.fail('GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED')
+        if provider=='codex':self.codex_trust()
+        name=c.identity['name']
+        if detached and (not name or any(x in name for x in ('.',':','\r','\n','\0'))):self.fail('TMUX_TARGET_INPUT_INVALID')
+        row=self.prepare_launch(provider,launch_kind=launch_kind,cwd=cwd)
+        self.provider_command(row,provider_session_id)
+        if detached and any(x.casefold()==c.identity['name'].casefold() for x in self.occupied_names()):self.fail('TMUX_SESSION_NAME_CONFLICT')
+        if not detached and os.environ.get('TMUX'):
+            # Never inject a new global identity into an ordinary default pane.
+            path=self.api['runtime_tmux_api']()['global_socket'](Path(c.config['agentstack_home']),c.binding['expected_server_instance_id'])
+            if os.environ['TMUX'].rsplit(',',2)[0]!=str(path):self.fail('GLOBAL_TMUX_REQUIRED')
+        self.bind_window()
+        with c.operation_mutex():
+            row=self.launch();row['phase']='gated'
+            if detached:row['tmux_transport']='global-instance'
+            self.save(self.launch_path,row,'launch_intent')
+        if detached:self.create_wrapper(row,provider_session_id)
+        else:raise SystemExit(self.execute(row['launch_id'],row['receipt_nonce'],provider_session_id))
         return {'ok':True,'launch_id':row['launch_id'],'prepared':True,'runtime_ready':False,'phase':'gated','reason':None}
 
     def execute(self, launch_id, nonce, provider_session_id=None):
@@ -870,6 +970,18 @@ class RuntimeDelivery(RuntimeFiles):
         row=self.launch()
         if row['launch_id']!=launch_id or row['receipt_nonce']!=nonce or row['phase']!='gated':
             self.fail('LAUNCH_RECEIPT_MISMATCH')
+        if row.get('tmux_transport')=='global-instance':
+            tmux=self.api['runtime_tmux_api']()
+            path=tmux['global_socket'](Path(c.config['agentstack_home']),c.binding['expected_server_instance_id'])
+            if os.environ.get('TMUX','').rsplit(',',2)[0]!=str(path):self.fail('GLOBAL_TMUX_REQUIRED')
+            channel=tmux['Transport'](path,binary='tmux')
+            panes=tmux['panes'](channel,pane=os.environ.get('TMUX_PANE'))
+            if len(panes)!=1 or panes[0]['pid']!=os.getpid() or panes[0]['session']!=c.identity['name']:self.fail('TMUX_TARGET_CHANGED')
+            # new-session is atomic only for exact spelling. A case alias can
+            # arrive after the parent preflight, before this wrapper executes.
+            name=c.identity['name']
+            occupied=[value for value in self.occupied_names() if value.casefold()==name.casefold()]
+            if occupied!=[name]:self.fail('TMUX_SESSION_NAME_CONFLICT')
         self.launch_task(row,send_mail=True)
         with c.operation_mutex():
             row=self.launch()
@@ -877,7 +989,9 @@ class RuntimeDelivery(RuntimeFiles):
                 self.fail('LAUNCH_RECEIPT_MISMATCH')
             args=self.provider_command(row,provider_session_id)
             c.observe()
-            row['phase']='exec-unknown'
+            birth=self.api['process_start'](os.getpid())
+            if not birth or birth=='absent':self.fail('SESSION_LIVENESS_UNKNOWN')
+            row.update(phase='exec-unknown',execution={'runner':{'pid':os.getpid(),'process_start':birth},'outcome':{'state':'pending','returncode':None}})
             self.save(self.launch_path,row,'launch_intent')
             env=dict(os.environ)
             for key in ('AGENTSTACK_PROJECT_KEY','PROJECT_KEY','PARENT_AGENT','CHILD_REGISTRATION_TOKEN','MCP_AGENT_MAIL_TOKEN','AGENTSTACK_PROXY_TOKEN_FILE','AGENTSTACK_PROXY_AGENT_NAME'):
@@ -885,7 +999,7 @@ class RuntimeDelivery(RuntimeFiles):
             home=str(c.runtime_dir/'provider-home'/row['provider'])
             env.update(AGENTSTACK_CLIENT_CONFIG=str(c.path),AGENTSTACK_RUNTIME_MODE='global',
                        AGENTSTACK_LAUNCH_ID=launch_id,AGENTSTACK_LAUNCH_NONCE=nonce,
-                       AGENTSTACK_PROVIDER_PID=str(os.getpid()),AGENTSTACK_RUNTIME_DIR=str(c.runtime_dir),
+                       AGENTSTACK_RUNTIME_DIR=str(c.runtime_dir),
                        AGENTSTACK_MCP_URL=c.endpoint,AGENT_NAME=c.identity['name'],
                        AGENTSTACK_HOME=c.config['wrapper_root'],AGENTSTACK_AGENT_ID=str(c.identity['agent_id']))
             env['CODEX_HOME']=home
@@ -898,11 +1012,77 @@ class RuntimeDelivery(RuntimeFiles):
                 if execution['interaction']=='headless':
                     env['AGENTSTACK_PERSISTENT_WAKE_SOCKET']=str(Path(home)/'wake.sock')
                     env['AGENTSTACK_PERSISTENT_BRIDGE_CONTRACT']='orrery-mail-notification-reply-v1'
-        # Exec/wait must never retain C: SessionStart needs that same mutex.
+        # Neither wait nor native provider execution may retain C.
+        env.pop('AGENTSTACK_PROVIDER_PID',None)
         if row['provider']=='gemini':
-            raise SystemExit(self.run_gemini(args,env,row))
-        os.chdir(row['cwd'])
-        os.execvpe(args[0],args,env)
+            code=self.run_gemini(args,env,row)
+        else:
+            # The exec-only child sets its own PID in the inherited hook env;
+            # it becomes the native process, while THIS process remains runner.
+            child=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),
+                '--context',str(c.path),'provider-exec',launch_id,nonce]
+            if provider_session_id:child.append(provider_session_id)
+            try:process=subprocess.Popen(child,cwd=row['cwd'],env=env)
+            except OSError:
+                with c.operation_mutex():
+                    current=self.launch();current['execution']['outcome']={'state':'not-started','returncode':None}
+                    self.save(self.launch_path,current,'launch_intent')
+                self.end_launch({})
+                raise
+            import signal
+            import threading
+            requests=[];handlers={}
+            if threading.current_thread() is threading.main_thread():
+                for sig in (signal.SIGINT,signal.SIGTERM):
+                    handlers[sig]=signal.signal(sig,lambda number,frame:requests.append(number))
+            child_birth=self.api['process_start'](process.pid)
+            try:
+                while True:
+                    if requests:
+                        sig=requests.pop(0)
+                        # TTY Ctrl-C reaches the whole foreground group already.
+                        same_group=False
+                        try:same_group=os.getpgid(process.pid)==os.getpgrp()
+                        except OSError:pass
+                        if not (sig==signal.SIGINT and same_group):
+                            now=self.api['process_start'](process.pid)
+                            if child_birth not in (None,'absent') and now==child_birth:
+                                os.kill(process.pid,sig)
+                    try:code=process.wait(timeout=.25);break
+                    except subprocess.TimeoutExpired:continue
+            finally:
+                for sig,handler in handlers.items():signal.signal(sig,handler)
+        with c.operation_mutex():
+            current=self.launch()
+            if current['launch_id']!=launch_id or current['receipt_nonce']!=nonce:self.fail('LAUNCH_RECEIPT_MISMATCH')
+            if current['execution']['outcome']['state']!='exited':
+                # A shim can finish while its native descendant survives.
+                # Its wait result then proves only the shim's exit.
+                outcome='exited'
+                if row['provider']!='gemini':
+                    for _,live in self.live_rows(launch_id):
+                        if (not live.get('ended') and live.get('pid')!=process.pid
+                                and self.api['process_start'](live.get('pid'))!='absent'):
+                            outcome='unknown'
+                current['execution']['outcome']={'state':outcome,'returncode':code if outcome=='exited' else None}
+                self.save(self.launch_path,current,'launch_intent')
+        lives=self.live_rows(launch_id)
+        session=next((x['session_id'] for _,x in lives if not x.get('ended')),None)
+        self.end_launch({'session_id':session})
+        return code if code>=0 else 128-code
+
+    def exec_provider(self,launch_id,nonce,provider_session_id=None):
+        """Internal exec child: only a direct child of the recorded live runner."""
+        c=self.client
+        with c.operation_mutex():
+            row=self.launch();runner=row.get('execution',{}).get('runner',{})
+            if (row['launch_id']!=launch_id or row['receipt_nonce']!=nonce or row['phase']!='exec-unknown'
+                    or row.get('execution',{}).get('outcome',{}).get('state')!='pending'
+                    or runner.get('pid')!=os.getppid() or self.api['process_start'](os.getppid())!=runner.get('process_start')):
+                self.fail('LAUNCH_RECEIPT_MISMATCH')
+            args=self.provider_command(row,provider_session_id)
+        env=dict(os.environ);env['AGENTSTACK_PROVIDER_PID']=str(os.getpid())
+        os.chdir(row['cwd']);os.execvpe(args[0],args,env)
 
     def run_gemini(self, args, env, row):
         c=self.client
@@ -929,7 +1109,14 @@ class RuntimeDelivery(RuntimeFiles):
                     session=sid
             rendered=renderer['consume'](log,process.stdout,event)
             status=process.wait(timeout=15)
-            if session is None:self.fail('GEMINI_SESSION_RECEIPT_UNAVAILABLE')
+            with c.operation_mutex():
+                current=self.launch()
+                if any(current[k]!=row[k] for k in ('launch_id','receipt_nonce')):self.fail('LAUNCH_RECEIPT_MISMATCH')
+                current['execution']['outcome']={'state':'exited','returncode':status}
+                self.save(self.launch_path,current,'launch_intent')
+            if session is None:
+                self.end_launch({})
+                self.fail('GEMINI_SESSION_RECEIPT_UNAVAILABLE')
             c.end_session({'session_id':session})
             return status or rendered
         finally:
@@ -947,6 +1134,21 @@ class RuntimeDelivery(RuntimeFiles):
             launch_id, nonce = trusted_receipt if trusted_receipt is not None else (os.environ.get('AGENTSTACK_LAUNCH_ID'),os.environ.get('AGENTSTACK_LAUNCH_NONCE'))
             if (row['phase'] not in ('exec-unknown','running') or launch_id!=row['launch_id'] or nonce!=row['receipt_nonce']):
                 self.fail('LAUNCH_RECEIPT_MISMATCH')
+            if row.get('execution'):
+                # A configured launcher may fork the native provider. Prefer
+                # the SDK caller's observed native ancestor to its inherited
+                # exec-child PID, then bind the validated PID into the receipt.
+                pid=payload.get('provider_pid')
+                # An in-process SDK (including daemon bots) is the exec child
+                # itself. A subprocess hook instead observes its native caller;
+                # an inherited launcher PID must not replace that caller.
+                if not pid:
+                    pid=(os.getpid() if os.environ.get('AGENTSTACK_PROVIDER_PID')==str(os.getpid())
+                        else self.api['provider_ancestor'](runner_pid=row['execution']['runner']['pid']))
+                pid=int(pid) if str(pid).isdigit() else None
+                evidence={'pid':pid,'process_start':self.api['process_start'](pid)}
+                if not self.api['runtime_tmux_api']()['runner_provider'](evidence,row,api=self.api):self.fail('SESSION_LIVENESS_UNKNOWN')
+                payload={**payload,'provider_pid':pid}
             if row['provider']=='codex':
                 if self.provider_header(payload.get('transcript_path','')) != payload.get('session_id'):
                     self.fail('PROVIDER_SESSION_REQUIRED')
@@ -960,6 +1162,134 @@ class RuntimeDelivery(RuntimeFiles):
             row['phase']='running'
             self.save(self.launch_path,row,'launch_intent')
             return self.status(row['launch_id'])
+
+    def terminal_uuid(self,row,kind):
+        c=self.client
+        fields=[c.binding['expected_server_instance_id'],c.binding['candidate_generation'],c.binding['authority_epoch'],c.identity['agent_id'],row['launch_id'],row['receipt_nonce'],'terminal',kind]
+        return str(uuid.uuid5(uuid.NAMESPACE_OID,canonical(fields)))
+
+    def terminal_receipt(self,tool,result):
+        if tool!='send_message' or not self.launch_path.exists():return
+        row=self.launch();term=row.get('termination')
+        if not term or term['phase']!='report-pending':return
+        if result.get('request_id')!=self.terminal_uuid(row,term['report_kind']):return
+        term={**term,'phase':'report-confirmed','receipt_ref':{k:result[k] for k in ('request_id','message_id','mutation_revision')}}
+        # Client invokes this AFTER the committed pending receipt is fsynced,
+        # BEFORE clearing that same intent. Failure leaves it replayable.
+        self.save(self.launch_path,{**row,'termination':term},'launch_intent')
+
+    def terminal_rejection(self,tool,request_id,reason):
+        if tool!='send_message' or not self.launch_path.exists():return
+        row=self.launch();term=row.get('termination')
+        if not term or term['phase']!='report-pending' or request_id!=self.terminal_uuid(row,term['report_kind']):return
+        self.save(self.launch_path,{**row,'error':reason,'termination':{**term,'phase':'report-rejected'}},'launch_intent')
+
+    def terminal_kind(self,row,payload):
+        c=self.client
+        path=payload.get('transcript_path')
+        if not path:
+            slot=c.runtime_dir/'session_index/self.json'
+            if slot.exists():path=self.read(slot).get('transcript_path')
+        if row['provider']!='claude' or not path:return 'unverified'
+        try:
+            path=Path(path)
+            if not path.is_absolute() or not path.is_relative_to(c.isolation) or path.resolve()!=path:return 'unverified'
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            with os.fdopen(fd,'r') as stream:
+                info=os.fstat(stream.fileno());current=path.lstat()
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_nlink!=1
+                        or info.st_mode&0o022 or (info.st_dev,info.st_ino)!=(current.st_dev,current.st_ino)):return 'unverified'
+                reader=runpy.run_path(str(Path(c.config['wrapper_root'])/'hooks/claude-initial-task-status.py'))
+                state=self.read(c.outputs['child']);turn=None;total=0
+                for line in stream:
+                    total+=len(line)
+                    if total>16*1024*1024:return 'unverified'
+                    value=json.loads(line)
+                    if turn is None:
+                        if not reader['_is_human_turn'](value):continue
+                        head=self.launch_task(row) or reader['_content_text']((value.get('message') or {}).get('content'))
+                        turn=reader['FirstTurn'](head)
+                        turn.parent_agent_id=state['parent']['agent_id']
+                    turn.feed(value)
+                return turn.status() if turn is not None else 'unverified'
+        except (OSError,ValueError,KeyError,TypeError):return 'unverified'
+
+    def end_launch(self,payload):
+        """The sole report/cleanup transition, called by runner, hook and replay."""
+        c=self.client
+        if os.environ.get('AGENTSTACK_MAIL_DISABLED')=='1':return {'ok':True,'end':'disabled','changed':False}
+        with c.operation_mutex():
+            row=self.launch();term=row.get('termination')
+            if term and term['phase']=='ended':return {'ok':True,'end':'last-session','changed':False}
+            execution=row.get('execution')
+            confirmed=(row.get('operator_resolution') or {}).get('action')=='confirmed-ended'
+            if execution and execution['outcome']['state'] in ('pending','unknown') and not confirmed:
+                return {'ok':True,'end':'unknown','changed':False}
+            session=payload.get('session_id')
+            lives=self.live_rows(row['launch_id'])
+            if any(live.get('receipt_nonce')!=row['receipt_nonce'] for _,live in lives):self.fail('LAUNCH_RECEIPT_MISMATCH')
+            if session is not None and not any(live['session_id']==session for _,live in lives):return {'ok':True,'end':'unknown','changed':False}
+            # Other launches/sessions and ambiguous liveness retain all leases.
+            directory=c.runtime_dir/'live-sessions'
+            if directory.exists():
+                state=c.session_liveness(exclude=session)
+                if state!='absent':return {'ok':True,'end':state,'changed':False}
+            elif not execution:return {'ok':True,'end':'unknown','changed':False}
+            child=self.read(c.outputs['child']) if c.outputs['child'].exists() else None
+            if term is None:
+                kind=self.terminal_kind(row,payload) if child else 'standalone'
+                term={'phase':'report-not-required' if kind in ('reported','working','standalone') else 'report-required',
+                    'report_kind':kind,'receipt_ref':None}
+                row={**row,'termination':term};self.save(self.launch_path,row,'launch_intent')
+            pending=c.outputs['mutation']
+            if term['phase'] in ('report-required','report-pending'):
+                owner=c.inspect_owner()
+                if owner.get('retired_at'):self.fail('MUTATION_PENDING_REQUIRES_RESOLUTION')
+                if not child:self.fail('CHILD_PARENT_MISMATCH')
+                parent=self.api['RuntimeClient'](c.clients_parent/child['parent']['client_name']/self.api['CLIENT_LAYOUT']['context'])
+                if parent.binding!=c.binding or parent.identity['agent_id']!=child['parent']['agent_id']:self.fail('CHILD_PARENT_MISMATCH')
+                term={**term,'phase':'report-pending'};row={**row,'termination':term}
+                self.save(self.launch_path,row,'launch_intent')
+                try:
+                    if pending.exists():
+                        saved=self.read(pending)
+                        if saved.get('tool')!='send_message' or saved.get('request_id')!=self.terminal_uuid(row,term['report_kind']):self.fail('MUTATION_PENDING_CONFLICT')
+                        c.replay_pending()
+                    else:
+                        c.call('send_message',{'to_agent_ids':[child['parent']['agent_id']],
+                            'subject':'Child session ended','body_md':'Child outcome: '+str(term['report_kind']),
+                            'request_id':self.terminal_uuid(row,term['report_kind'])})
+                except self.error as exc:
+                    # The canonical sender clears its intent only for known
+                    # definitive server rejections; unknowns remain pending.
+                    if pending.exists() or not self.api['wire_contract']()['definitive_rejection'](str(exc),existing_pending=False,contract=self.api['wire_contract']()['fixture']):raise
+                    term={**term,'phase':'report-rejected'};row={**self.launch(),'termination':term,'error':str(exc)}
+                    self.save(self.launch_path,row,'launch_intent')
+                row=self.launch();term=row['termination']
+            if term['phase'] in ('report-confirmed','report-not-required','report-rejected','cleanup-pending'):
+                # Interrupted after receipt/phase but before local acknowledgement.
+                if pending.exists():
+                    saved=self.read(pending)
+                    if saved.get('tool')=='send_message' and saved.get('request_id')==self.terminal_uuid(row,term['report_kind']) and saved.get('phase')=='committed':
+                        c.validate_output(pending,'mutation');c.clear_mutation(self.api['read_private'](pending))
+                    elif saved.get('tool')=='retire_agent' and c.inspect_owner().get('retired_at') is not None:
+                        c.validate_output(pending,'mutation');c.clear_mutation(self.api['read_private'](pending))
+                    else:self.fail('MUTATION_PENDING_CONFLICT')
+                if child and c.inspect_owner().get('retired_at') is not None and getattr(c,'_lifecycle_principal',{}).get('kind') not in ('parent','operator'):self.fail('OWNER_REQUIRED')
+                term={**term,'phase':'cleanup-pending'};row={**row,'termination':term}
+                self.save(self.launch_path,row,'launch_intent')
+                if child:c.retain_child(child)
+                else:
+                    for page in c.all_leases():
+                        if page:c.call('release_file_reservations',{'file_reservation_ids':[x['id'] for x in page]})
+                with c.fence():
+                    for name,live in lives:
+                        if live.get('receipt_nonce')!=row['receipt_nonce']:self.fail('LAUNCH_RECEIPT_MISMATCH')
+                        self.api['atomic_json'](c.runtime_dir/'live-sessions'/name,{**live,'ended':True})
+                    term={**term,'phase':'ended'}
+                    self.save(self.launch_path,{**row,'phase':'ended','termination':term},'launch_intent')
+                return {'ok':True,'end':'last-session','changed':True}
+            return {'ok':True,'end':'unknown','changed':False}
 
     def delivery_status(self, mid, *, missing_ok=False):
         with self.message(mid) as path:
@@ -1010,6 +1340,7 @@ class RuntimeDelivery(RuntimeFiles):
         elif operation=='notification-prepare':result=self.prepare(request['message_id'],request['channel'])
         elif operation in ('notification-confirm','notification-failure'):
             result=self.callback(request['message_id'],request['attempt_id'],confirmed=operation=='notification-confirm',known_failure=operation=='notification-failure' and request['outcome']=='known-not-submitted')
+        elif operation=='launch-retry':result=self.retry_launch(request)
         else:
             with self.client.operation_mutex():
                 row=self.launch()
@@ -1026,16 +1357,6 @@ class RuntimeDelivery(RuntimeFiles):
                     row['phase']='gated'
                     self.save(self.launch_path,row,'launch_intent')
                     result={'ok':True,'launch_id':row['launch_id'],'prepared':True,'runtime_ready':False,'phase':'gated','reason':None}
-            if operation=='launch-retry':
-                name='orrery-'+row['launch_id']
-                probe=subprocess.run(['tmux','has-session','-t','='+name],capture_output=True,text=True,timeout=5)
-                if probe.returncode!=0:
-                    args=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(self.client.path),'execute-launch',row['launch_id'],row['receipt_nonce']]
-                    created=subprocess.run(['tmux','new-session','-d','-s',name,'-c',row['cwd'],__import__('shlex').join(args)],capture_output=True,timeout=10)
-                    if created.returncode:
-                        # Another retry may have created this exact UUID session.
-                        verified=subprocess.run(['tmux','has-session','-t','='+name],capture_output=True,timeout=5)
-                        if verified.returncode:self.fail('LAUNCH_OUTCOME_UNKNOWN')
         response=definition.get('response_schema')
         if response is None:
             name,field=definition['response_ref'].split('.')

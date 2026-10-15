@@ -408,9 +408,11 @@ print(json.dumps(hooks('SessionEnd')),flush=True)
         assert api['runtime_delivery'](client).pending_messages(mid)==[]
         process.stdin.write('end\n');process.stdin.flush()
         ended=json.loads(process.stdout.readline())
-        assert ended[0]['end']=='last-session'
+        assert ended[0]['end']=='unknown'  # SDK SessionEnd precedes native exit/wait
+        assert api['runtime_delivery'](client).launch()['phase']=='running'
         out,err=process.communicate(timeout=15)
         assert process.returncode==0,err
+        assert api['runtime_delivery'](client).launch()['phase']=='ended'
     finally:
         if process.poll() is None:
             process.terminate()
@@ -482,7 +484,14 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS','response':'fixt
         assert delivery.launch()['phase']=='ended'
     else:
         assert result.returncode==2 and 'GEMINI_SESSION_RECEIPT_UNAVAILABLE' in result.stderr
-        assert delivery.launch()['phase']=='exec-unknown'
+        # Missing SDK init never proves readiness, but an actual wait result
+        # does prove that this execution ended (and must not be relaunched).
+        launch=delivery.launch()
+        assert launch['phase']=='ended'
+        assert launch['execution']['outcome']=={'state':'exited','returncode':0}
+        assert launch['termination']['phase']=='ended'
+        assert not (child.runtime_dir/'session_index/self.json').exists()
+        assert delivery.status(launch['launch_id'])['runtime_ready'] is False
         assert not delivery.status(delivery.launch()['launch_id'])['runtime_ready']
     assert not (child.runtime_dir/'provider-home/gemini/settings.json').exists()
     assert not (child.runtime_dir/'provider-home/gemini/hooks.json').exists()

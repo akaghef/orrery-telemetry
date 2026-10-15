@@ -69,6 +69,8 @@ class Observations:
             if child is not None:
                 api['wire_contract']()['validate_schema'](child, api['child_schema']())
             read('session', runtime / 'session_index/self.json', True)
+            pending=read('mutation', root / api['CLIENT_LAYOUT']['mutation'], True)
+            values['mutation_sha256']=(hashlib.sha256(api['read_private'](root / api['CLIENT_LAYOUT']['mutation'])).hexdigest() if pending is not None else None)
             lives = runtime / 'live-sessions'
             values['lives'] = []
             if lives.exists() or lives.is_symlink():

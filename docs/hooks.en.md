@@ -195,3 +195,5 @@ The [absolute reservation candidate](absolute-reservations.en.md) supplies expli
 For explicit isolated launch, delivery and operator recovery, see [global delivery client](global-delivery-client.en.md). Legacy remains the default.
 
 SessionStart reports only legacy-block counts. Bare sessions do not register with Mail; editing guards keep their policy. [Details](instruction-migration.en.md#legacy-blocks).
+
+For new isolated-global launches, SessionEnd does not prove provider exit. The wait runner saves the actual outcome and completes the single report intent before cleanup. Existing standalone hooks retain their behavior. See [dedicated launch and termination recovery](global-delivery-client.en.md#dedicated-launch-and-termination-recovery).

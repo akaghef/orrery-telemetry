@@ -532,7 +532,7 @@ def target_result_schema(name):
     if TARGET_SPEC is None:raise TargetError('TMUX_HELPER_FAILED')
     row=TARGET_SPEC['result_tables'][name]
     atoms={**TARGET_SPEC['schema_atoms'],'reason':{'enum':list(TARGET_REASONS)},'failure_kind':{'enum':list(TARGET_SPEC['kind_exit'])}}
-    props={key:atoms[key] for key in row['fields']}
+    props={key:atoms[row.get('atom_overrides',{}).get(key,key)] for key in row['fields']}
     props.update({key:{'const':value} for key,value in row.get('constants',{}).items()})
     result={'type':'object','properties':props,'required':row['fields'],'additionalProperties':False}
     if name=='error.before_effect':
@@ -570,39 +570,67 @@ def endpoint_candidates(home,instance,launch=None):
     return values
 
 
+def launch_for_live(live,launch):
+    """An unlaunched standalone slot never inherits another launch's runner."""
+    if live.get('launch_id') is None:return None
+    if launch is None or any(live.get(k)!=launch.get(k) for k in ('launch_id','receipt_nonce')):
+        raise TargetError('TMUX_TARGET_CHANGED')
+    return launch
+
+
+def runner_provider(live,launch,*,api,deadline=None):
+    """One birth/UID/ancestry proof; runner transport is never provider liveness."""
+    runner=(launch or {}).get('execution',{}).get('runner')
+    if runner is None:return api['process_start'](live.get('pid'),deadline=deadline)==live.get('process_start') and bool(live.get('process_start'))
+    provider=live.get('pid');pid=runner.get('pid')
+    if not all(type(x) is int and x>0 for x in (provider,pid)):return False
+    if provider==pid:return False
+    def births():
+        return (api['process_start'](pid,deadline=deadline)==runner.get('process_start')
+            and api['process_start'](provider,deadline=deadline)==live.get('process_start')
+            and runner.get('process_start') not in (None,'absent') and live.get('process_start') not in (None,'absent'))
+    if not births():return False
+    return module_api('process_observation')['belongs_to'](provider,pid,os.getuid(),deadline=deadline) and births()
+
+
+def pane_process(live,launch=None):
+    return (launch or {}).get('execution',{}).get('runner',{}).get('pid',live.get('pid'))
+
+
 def verify_live_process(live,*,api,deadline=None):
     if api['process_start'](live['pid'],deadline=deadline)!=live['process_start']:
         raise TargetError('TMUX_TARGET_CHANGED')
 
 
-def verify_live_pane(transport,live,actual,*,api,deadline=None):
+def verify_live_pane(transport,live,actual,*,api,deadline=None,launch=None):
     """Issue a proof only after all pane/screen observations have completed."""
     rows=panes(transport,pane=actual['pane_id'],deadline=deadline)
     fields=('pid','pane_id','session_id','session')
     if len(rows)!=1 or any(rows[0][key]!=actual[key] for key in fields):
         raise TargetError('TMUX_TARGET_CHANGED')
-    verify_live_process(live,api=api,deadline=deadline)
+    if not runner_provider(live,launch,api=api,deadline=deadline):raise TargetError('TMUX_TARGET_CHANGED')
 
 
-def live_target(live,context,launch=None,*,api=None,deadline=None):
+def live_target(live,context,launch=None,*,api=None,deadline=None,endpoints=None):
     """Same explicit socket/pane/PID proof for observation and notifications."""
     api=module_api('runtime_client') if api is None else api
     if live.get('ended'):return None
-    if launch and any(live.get(k)!=launch.get(k) for k in ('launch_id','receipt_nonce')):raise TargetError('TMUX_TARGET_CHANGED')
+    launch=launch_for_live(live,launch)
     start=api['process_start'](live.get('pid'),deadline=deadline)
     if not start or start=='absent' or start!=live.get('process_start'):return None
     found=[]
-    for kind,transport in endpoint_candidates(Path(context['agentstack_home']),context['expected_server_instance_id'],launch):
+    for kind,transport in (endpoint_candidates(Path(context['agentstack_home']),context['expected_server_instance_id'],launch) if endpoints is None else endpoints):
         try:rows=panes(transport,pane=live.get('pane_id'),deadline=deadline)
         except TargetError as exc:
             if str(exc)=='TMUX_TARGET_UNAVAILABLE':continue
             raise
         for row in rows:
-            if row['pid']!=live['pid']:continue
+            if row['pid']!=pane_process(live,launch):continue
+            if not runner_provider(live,launch,api=api,deadline=deadline):continue
             if launch:
                 expected=context['identity']['name'] if kind=='global-instance' else 'orrery-'+launch['launch_id']
                 if row['session']!=expected:raise TargetError('TMUX_TARGET_CHANGED')
-            verify_live_pane(transport,live,row,api=api,deadline=deadline)
+            verify_live_pane(transport,live,row,api=api,deadline=deadline,launch=launch)
             found.append((transport,row))
     if len(found)>1:raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
     return found[0] if found else None

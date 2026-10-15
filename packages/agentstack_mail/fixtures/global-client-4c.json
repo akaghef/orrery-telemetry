@@ -109,10 +109,165 @@
           ]
         },
         "tmux_transport": {
-          "enum": [
-            "legacy-default",
-            "global-instance"
-          ]
+          "const": "global-instance"
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "runner": {
+              "type": "object",
+              "properties": {
+                "pid": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "process_start": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "pid",
+                "process_start"
+              ],
+              "additionalProperties": false
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "pending"
+                    },
+                    "returncode": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "exited"
+                    },
+                    "returncode": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "not-started"
+                    },
+                    "returncode": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "unknown"
+                    },
+                    "returncode": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "runner",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        "termination": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "enum": [
+                "report-required",
+                "report-pending",
+                "report-confirmed",
+                "report-not-required",
+                "report-rejected",
+                "cleanup-pending",
+                "ended",
+                "unknown"
+              ]
+            },
+            "report_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "receipt_ref": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "mutation_revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "message_id",
+                    "mutation_revision"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "phase",
+            "report_kind",
+            "receipt_ref"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1916,7 +2071,8 @@
             "confirmed-ended",
             "retry-at-least-once",
             "confirm-external-completed",
-            "abandon-without-consuming"
+            "abandon-without-consuming",
+            "mutation-abandoned"
           ]
         },
         "operator_evidence": {

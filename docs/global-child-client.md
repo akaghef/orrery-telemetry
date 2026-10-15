@@ -67,3 +67,5 @@ Gemini stdio は共通 proxy を使います。Gemini の対話型 root は正�
 [呼び手・中断・受け入れの表](global-child-client-contract.md)は fixture から生成しています。grace worker の失敗は既存の固定 release slot の `last_error` に残します。fence 不正時はこの保存も拒否します。resume・期限後の削除も end と同じ生存確認を使い、live/unknown の session があれば進めません。
 
 resume intent は unretire の前に保存します。応答喪失時は管理 inspect から同じ ID/token で再開します。期限切れは `CHILD_RETENTION_EXPIRED`、purge 済みは `CHILD_PURGED` で拒否します。確定した未実行の `cancel-child-resume --operator` は、live/unknown が無いと確認して共通 retire に戻ります。
+
+新規 global 起動の専用 socket、runner/provider の区別と終了後の `target` / `replay-end` は [配送 client](global-delivery-client.md#専用起動と終了の回収) の契約を使います。SessionEnd だけで実 process の終了を決めず、未確認報告を残したまま退役しません。

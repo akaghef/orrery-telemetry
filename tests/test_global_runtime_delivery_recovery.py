@@ -67,24 +67,40 @@ def test_retry_initial_missing_tmux_server_and_missing_session(server,launch,mon
     import subprocess
     import tempfile
     client,delivery,row=launch
-    socket=Path(tempfile.mkdtemp(prefix='r246tmux-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None))
-    monkeypatch.setenv('TMUX_TMPDIR',str(socket));monkeypatch.delenv('TMUX',raising=False)
-    row['phase']='planned';delivery.save(client.outputs['launch'],row,'launch_intent')
-    run=subprocess.run
-    if server_exists:run(['tmux','new-session','-d','-s','fixture-control','sleep 60'],check=True)
-    calls=[]
-    def fixture_run(args,**kw):
-        if args[:2]==['tmux','new-session']:
-            calls.append(args)
-            args=[*args[:-1],'sleep 60']
-        return run(args,**kw)
-    monkeypatch.setattr(delivery.operator.__globals__['subprocess'],'run',fixture_run)
-    try:
-        status=delivery.status(row['launch_id'])
-        result=delivery.operator('launch-retry',{'launch_id':row['launch_id'],'expected_state_sha256':status['state_sha256']})
-        assert result['phase']=='gated' and len(calls)==1
-        assert run(['tmux','has-session','-t','=orrery-'+row['launch_id']],capture_output=True).returncode==0
-    finally:run(['tmux','kill-server'],capture_output=True)
+    with tempfile.TemporaryDirectory(prefix='r246tmux-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as temporary:
+        monkeypatch.setenv('TMUX_TMPDIR',temporary);monkeypatch.delenv('TMUX',raising=False)
+        row['phase']='planned';delivery.save(client.outputs['launch'],row,'launch_intent')
+        tmux=api['runtime_tmux_api']()
+        dedicated=tmux['global_socket'](Path(client.config['agentstack_home']),client.binding['expected_server_instance_id'],create=True)
+        prefix=['tmux','-S',str(dedicated)]
+        run=subprocess.run;calls=[]
+        def fixture_run(args,**kw):
+            if args[:4]==[*prefix,'new-session']:
+                calls.append(args)
+                args=[*args[:-1],'sleep 60']
+            return run(args,**kw)
+        try:
+            if server_exists:
+                # Both controls belong to this fixture. The new client must
+                # select the dedicated one without disturbing the old one.
+                run(['tmux','new-session','-d','-s','fixture-control','sleep 60'],check=True)
+                run([*prefix,'new-session','-d','-s','fixture-control','sleep 60'],check=True)
+                dedicated.chmod(0o600)
+            monkeypatch.setattr(delivery.operator.__globals__['subprocess'],'run',fixture_run)
+            status=delivery.status(row['launch_id'])
+            result=delivery.operator('launch-retry',{'launch_id':row['launch_id'],'expected_state_sha256':status['state_sha256']})
+            assert result['phase']=='gated' and len(calls)==1
+            assert calls[0][:4]==[*prefix,'new-session']
+            assert calls[0][calls[0].index('-s')+1]==client.identity['name'] and '-A' not in calls[0]
+            assert run([*prefix,'has-session','-t','='+client.identity['name']],capture_output=True).returncode==0
+            if server_exists:
+                assert run(['tmux','has-session','-t','=fixture-control'],capture_output=True).returncode==0
+                assert run([*prefix,'has-session','-t','=fixture-control'],capture_output=True).returncode==0
+        finally:
+            run([*prefix,'kill-session','-t','='+client.identity['name']],capture_output=True)
+            if server_exists:
+                run([*prefix,'kill-session','-t','=fixture-control'],capture_output=True)
+                run(['tmux','kill-session','-t','=fixture-control'],capture_output=True)
 
 
 def test_retry_unknown_socket_failure_does_not_exec(launch,monkeypatch):
