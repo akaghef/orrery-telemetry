@@ -109,8 +109,13 @@ def test_installed_coordination_rules_preserve_personal_metadata(env, provider):
     assert 'the parent chooses the documented recovery.' in installed
     assert 'agentstack-resume <your-name>' not in installed
     normalized = ' '.join(installed.split())
-    assert 'hooks neither check nor release reservations for writes through `Bash`, scripts, or other tools.' in normalized
-    assert 'yourself immediately after writing: bound proxy `release_reservations`, raw/direct `release_file_reservations`.' in normalized
+    if provider == 'claude':
+        assert 'hooks neither check nor release reservations for writes through `Bash`, scripts, or other tools.' in normalized
+        assert 'yourself immediately after writing: bound proxy `release_reservations`, raw/direct `release_file_reservations`.' in normalized
+    else:
+        assert 'In Claude Code, use `Edit`/`Write` for reserved files.' not in normalized
+        assert 'Nothing releases for you after an edit' in normalized
+        assert 'renew long edits and release the reservation when done.' in normalized
     assert e.receipt()['plan']['target']['template_id'] == m.sha(e.template)
     assert e.target.stat().st_mode & 0o777 == 0o640
     assert m.attrs(e.target) == before

@@ -92,7 +92,7 @@ def test_both_blocks_carry_the_operational_rules_learned_in_production():
     assert "Nothing releases for you" in codex
 
 
-def test_both_reservation_sections_require_release_after_bash_or_other_writes():
+def test_claude_bash_release_guidance_and_codex_manual_release_stay_separate():
     expected = """- **In Claude Code, use `Edit`/`Write` for reserved files.** Its reservation
   hooks neither check nor release reservations for writes through `Bash`,
   scripts, or other tools. If you write that way, release the reserved files
@@ -104,7 +104,13 @@ def test_both_reservation_sections_require_release_after_bash_or_other_writes():
         # Restrict the assertion to the reservation section, not another example.
         start = text.lower().index("## file reservations")
         reservations = text[start:].split("\n## ", 1)[0]
-        assert reservations.count(expected) == 1, path
+        if path.startswith("claude/"):
+            assert reservations.count(expected) == 1, path
+        else:
+            assert "In Claude Code, use `Edit`/`Write` for reserved files." not in reservations
+            normalized = " ".join(reservations.split())
+            assert "Nothing releases for you after an edit" in normalized
+            assert "renew long edits and release the reservation when done." in normalized
 
 
 def test_notification_shapes_in_the_blocks_match_the_watcher():
