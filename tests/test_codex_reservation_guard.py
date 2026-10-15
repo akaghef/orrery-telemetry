@@ -23,6 +23,7 @@ def sandbox(tmp_path):
         directory.mkdir()
     env = {'HOME': str(home), 'PATH': os.environ['PATH'], 'LANG': 'C.UTF-8',
            'CODEX_HOME': str(home / '.codex'), 'AGENTSTACK_HOME': str(ROOT),
+           'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-reservation',
            'AGENTSTACK_RUNTIME_DIR': str(runtime), 'AGENTSTACK_PROJECT_KEY': str(project),
            'AGENTSTACK_PROTECTED_ROOTS': str(project), 'AGENT_NAME': 'EditorAlpha',
            'AGENTSTACK_MAIL_HTTP_BEARER_MODE': 'disabled', 'AGENTSTACK_PYTHON': sys.executable,
@@ -163,7 +164,8 @@ def test_shared_mail_rejection_stays_closed(sandbox):
 def test_missing_core_guard_is_visible_and_blocks(sandbox):
     with Mail() as mail:
         result = run(sandbox, patch('note.md'), mail, runner=True,
-                     changes={'AGENTSTACK_HOME': str(sandbox[0] / 'missing-core')})
+                     changes={'AGENTSTACK_HOME': str(sandbox[0] / 'missing-core'),
+                              'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-reservation'})
     assert result.returncode == 2 and 'unavailable' in result.stderr.lower()
 
 
