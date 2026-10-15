@@ -93,3 +93,19 @@ def test_invalid_reverse_class_is_checked_before_a_successful_match(pattern, tar
 def test_unterminated_negated_classes_remain_literal(expression, name):
     pattern, target = 'docs/' + expression + '.md', 'docs/' + name + '.md'
     assert matching_outcome(overlap, pattern, target) == matching_outcome(_patterns_overlap, pattern, target)
+
+
+def negation_validation_vectors():
+    from itertools import product
+    for prefix, body, trailing, target, reverse in product(
+            ('', '!', '!!', '#', '!#'),
+            ('', '[z-a]', 'docs/[z-a].md', '/[z-a]', 'docs/**/[z-a].md',
+             '[b-a][z-a]', 'docs/**', '[ab]'),
+            ('', ' '), ('docs/note.md', '*'), (False, True)):
+        pattern = prefix + body + trailing
+        yield (target, pattern) if reverse else (pattern, target)
+
+
+@pytest.mark.parametrize('pattern,target', list(negation_validation_vectors()))
+def test_negation_validation_matches_mail(pattern, target):
+    assert matching_outcome(overlap, pattern, target) == matching_outcome(_patterns_overlap, pattern, target)

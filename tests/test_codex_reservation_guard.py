@@ -442,3 +442,17 @@ def test_r2_own_lease_cannot_hide_foreign_class_spanning_slash(sandbox, expressi
     with Mail(owned=[target], foreign=foreign) as mail:
         result = run(sandbox, patch(target), mail)
     assert result.returncode == 2 and 'EditorBeta' in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize('pattern,expected', [
+    ('!', 2), ('![z-a]', 2), ('!docs/[z-a].md', 2),
+    ('!docs/**', 0), ('#[z-a]', 0),
+])
+def test_r3_invalid_negated_foreign_pattern_fails_closed(sandbox, pattern, expected):
+    foreign = [dict(agent='EditorBeta', path_pattern=pattern, exclusive=True,
+                    released_ts=None, expires_ts='2999-01-01T00:00:00+00:00')]
+    with Mail(owned=['docs/note.md'], foreign=foreign) as mail:
+        result = run(sandbox, patch('docs/note.md'), mail)
+    assert result.returncode == expected, result.stderr
+    if expected:
+        assert 'conflict check rejected' in result.stderr, result.stderr

@@ -46,14 +46,23 @@ def segment_regex(segment: str) -> str:
 @lru_cache(maxsize=1024)
 def compile_pattern(pattern: str) -> re.Pattern[str] | None:
     pattern = pattern.rstrip()
-    if not pattern or pattern.startswith(('#', '!')):
+    if not pattern or pattern.startswith('#'):
         return None
+    # Negation suppresses a match, but Mail still parses and compiles its
+    # body. Malformed excluded patterns must reach the same fail-closed path.
+    negated = pattern.startswith('!')
+    if negated:
+        pattern = pattern[1:]
     parts = pattern.split('/')
-    directory = not parts[-1]
-    if len(parts) == 1 or (len(parts) == 2 and directory):
+    directory = pattern != '/' and not parts[-1]
+    if not parts[0]:
+        parts.pop(0)
+    elif len(parts) == 1 or (len(parts) == 2 and directory):
         if parts[0] != '**':
             parts.insert(0, '**')
-    if directory:
+    if not parts:
+        raise ValueError('invalid gitignore pattern: empty body')
+    if not parts[-1]:
         parts[-1] = '**'
     parts = [part for i, part in enumerate(parts) if part != '**' or i == 0 or parts[i - 1] != '**']
     if parts == ['**']:
@@ -85,9 +94,10 @@ def compile_pattern(pattern: str) -> re.Pattern[str] | None:
                 expression += '/?$' if part == '*' else '(?:/|$)'
             separator = True
     try:
-        return re.compile(expression)
+        compiled = re.compile(expression)
     except re.error as exc:
         raise ValueError('invalid gitignore pattern: ' + str(exc)) from exc
+    return None if negated else compiled
 
 
 def matches(pattern: str, target: str) -> bool:
