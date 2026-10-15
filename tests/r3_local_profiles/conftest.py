@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from .support import Canary, MAIL, profile_text
+from .support import Canary, FIXTURE_ADDRESSES, MAIL, profile_text
 
 
 @pytest.fixture(autouse=True)
@@ -33,13 +33,20 @@ def isolated_local_profile_home(tmp_path, monkeypatch):
         monkeypatch.setenv(key, str(value))
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path / "bin") + ":/usr/bin:/bin")
-    # In-process product code cannot accidentally reach Mail/cloud/live ports.
+    # Only currently registered fixture sockets, not arbitrary loopback ports.
     connect = socket.socket.connect
-    def loopback_only(sock, address):
-        if not isinstance(address, tuple) or address[0] != "127.0.0.1" or address[1] in (8765, 8770, 8791):
+    connect_ex = socket.socket.connect_ex
+    def check_address(address):
+        if not isinstance(address, tuple) or address not in FIXTURE_ADDRESSES:
             raise AssertionError("fixture attempted non-fixture network access")
+    def loopback_only(sock, address):
+        check_address(address)
         return connect(sock, address)
+    def loopback_only_ex(sock, address):
+        check_address(address)
+        return connect_ex(sock, address)
     monkeypatch.setattr(socket.socket, "connect", loopback_only)
+    monkeypatch.setattr(socket.socket, "connect_ex", loopback_only_ex)
 
 
 @pytest.fixture
@@ -126,3 +133,9 @@ def native_probe():
     # receipt, native permissions and fake Mail transports. Until supplied,
     # these tests are red, not evidence about native authentication/permissions.
     return importlib.import_module(".native_acceptance", package=__package__).probe
+
+
+@pytest.fixture
+def caller_probe():
+    # Actual shell/client/operator/dashboard entry bindings, not source labels.
+    return importlib.import_module(".caller_acceptance", package=__package__).probe

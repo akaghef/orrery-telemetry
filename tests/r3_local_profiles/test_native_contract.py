@@ -6,9 +6,15 @@ make these green by implementing a provider or permission engine in test code.
 The fake-peer instruments themselves have separate green negative controls.
 """
 import pytest
+import json
+import secrets
+import shlex
 
-from .support import (MAIL, MODEL, assert_delegation, assert_denial, assert_failure,
+from .support import (Canary, MAIL, MODEL, assert_delegation, assert_denial, assert_failure,
                       assert_roundtrip, assert_same_launch, fake_peer)
+from .evidence import (assert_auth_matrix, assert_wire_rotation, credential_source,
+                       snapshot_tree, assert_tree_unchanged, owner_paths,
+                       assert_single_owner, assert_bound_receipt)
 from .test_instruments import SURFACES
 
 
@@ -34,45 +40,53 @@ def test_native_function_roundtrip_model_path_and_both_turn_tools(native_probe, 
         assert trace["model_success"]
 
 
-@pytest.mark.parametrize("provider,protocol,header", [
-    ("codex", "responses", "bearer"),
-    ("codex", "responses", "x-api-key"),
-    ("claude", "messages", "bearer"),
-    ("claude", "messages", "x-api-key"),
-])
-def test_native_header_is_observed_not_assumed(native_probe, workspace, canary, provider, protocol, header):
-    with fake_peer(protocol, canary, auth=header, tls_dir=workspace.tmp / "peer-tls") as peer:
-        trace = native_probe("auth-header", workspace=workspace, provider=provider,
-                             peer=peer, canary=canary, fake_credential_only=True)
-        observed_native(trace, provider)
-        assert peer.requests, "native helper never reached fake peer"
-        if provider == "codex":
-            assert peer.requests[0]["auth_form"] == "bearer"
-        # At least the actual native shape must work; an incompatible endpoint
-        # must be rejected, not 'fixed' with a token-valued env or header config.
-        if peer.requests[0]["auth_form"] == header:
-            assert trace["model_success"]
-            assert all(row["auth_ok"] for row in peer.requests)
-            if provider == "codex":
-                assert header == "bearer"
-        else:
-            assert_failure(trace, "LOCAL_MODEL_AUTH_HEADER_UNSUPPORTED", pre_exec=False)
-        assert trace["auth_mechanism"] == ("command-backed-auth" if provider == "codex" else "apiKeyHelper")
-        assert set(SURFACES) <= set(trace["surfaces"]), "canary observation surface omitted"
-        canary.scan(trace["surfaces"])
+@pytest.mark.parametrize("provider,protocol", [("codex", "responses"), ("claude", "messages")])
+def test_native_header_matrix_requires_authenticated_success(native_probe, workspace, canary, provider, protocol):
+    observations = []
+    with credential_source(canary) as source:
+        helper = source.helper_argv(workspace.root / "fixture-credential.py")
+        for header in ("bearer", "x-api-key"):
+            with fake_peer(protocol, canary, auth=header, tls_dir=workspace.tmp / ("tls-" + header)) as peer:
+                trace = native_probe("auth-header", workspace=workspace, provider=provider,
+                                     peer=peer, canary=canary, auth_command=helper)
+                observed_native(trace, provider)
+                observations.append((peer, trace))
+                if provider == "codex":
+                    assert peer.requests and peer.requests[0]["auth_form"] == "bearer"
+                if not trace["model_success"]:
+                    assert_failure(trace, "LOCAL_MODEL_AUTH_HEADER_UNSUPPORTED", pre_exec=False)
+                assert trace["auth_mechanism"] == ("command-backed-auth" if provider == "codex" else "apiKeyHelper")
+                assert set(SURFACES) <= set(trace["surfaces"])
+                canary.scan(trace["surfaces"])
+        # Both Claude cases reporting unsupported, or helper never used, FAIL.
+        assert_auth_matrix(observations, source)
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude"])
 def test_native_refresh_rotation_without_token_in_any_process_env(native_probe, workspace, canary, provider):
-    trace = native_probe("auth-refresh", workspace=workspace, provider=provider,
-                         canary=canary, fake_clock=True, production_ttl_ms=300000)
-    observed_native(trace, provider)
-    assert trace["helper_calls"] >= 2 and trace["rotated_token_accepted"]
-    assert trace["same_intent_digest"]
-    assert trace["production_ttl_ms"] == 300000
-    assert set(SURFACES) <= set(trace["surfaces"])
-    canary.scan(trace["surfaces"])
-    assert trace["rotated_canary_scan_passed"]
+    rotated = Canary()
+    protocol = "responses" if provider == "codex" else "messages"
+    with credential_source(canary) as source, fake_peer(
+            protocol, canary, auth="either", tls_dir=workspace.tmp / "rotation-tls") as peer:
+        helper = source.helper_argv(workspace.root / "fixture-credential.py")
+        saved = workspace.tmp / "saved-auth-intent.json"
+        before_refresh = []
+        def rotate():
+            before_refresh.append(saved.read_bytes())
+            source.rotate(rotated)
+            peer.rotate_credential(rotated)
+        trace = native_probe("auth-refresh", workspace=workspace, provider=provider,
+                             peer=peer, auth_command=helper, before_refresh=rotate,
+                             canary=canary, fake_clock=True, production_ttl_ms=300000,
+                             intent_owner=saved)
+        observed_native(trace, provider)
+        assert_wire_rotation(peer, source)
+        assert trace["production_ttl_ms"] == 300000
+        # Preserve the saved intent, not a claimed same_intent_digest boolean.
+        assert len(before_refresh) == 1 and before_refresh[0] == saved.read_bytes()
+        assert set(SURFACES) <= set(trace["surfaces"])
+        canary.scan(trace["surfaces"])
+        rotated.scan(trace["surfaces"])
 
 
 @pytest.mark.parametrize("fault,reason", [
@@ -114,12 +128,26 @@ def test_claude_scope_denial_has_no_partial_effect_and_reports(native_probe, wor
     outside.mkdir()
     sentinel = outside / "denied.md"
     sentinel.write_text("do not read or edit\n")
+    first_sentinel = workspace.scratch.parent / "approved-first-sentinel.txt"
+    first_sentinel.write_text("first command must not run\n")
+    first_command = f"printf changed >> {shlex.quote(str(first_sentinel))}"
+    workspace.context["effective_scope"]["bash"].append(first_command)
+    workspace.context["effective_scope"]["edit"].append(str(first_sentinel))
+    before_inside = snapshot_tree(workspace.scratch.parent)
+    before_outside = snapshot_tree(outside)
+    first, last = shlex.quote(str(first_sentinel)), shlex.quote(str(sentinel))
+    commands = {"outside-read": None,
+                "approved-first-outside-second": f"{first_command} && printf denied >> {last}",
+                "outside-pipe": f"printf changed >> {first} | tee {last}",
+                "outside-redirect": f"printf changed >> {first} 2>> {last}"}
     trace = native_probe("scope-denial", workspace=workspace, provider="claude",
-                         operation=operation, outside=outside, canary=canary)
+                         operation=operation, outside=outside, canary=canary,
+                         approved_first_sentinel=first_sentinel,
+                         compound_command=commands[operation])
     observed_native(trace, "claude")
     assert_denial(trace)
-    assert sentinel.read_text() == "do not read or edit\n"
-    assert sorted(p.name for p in outside.iterdir()) == ["denied.md"]
+    assert_tree_unchanged(workspace.scratch.parent, before_inside)
+    assert_tree_unchanged(outside, before_outside)
 
 
 @pytest.mark.parametrize("conflict", ["inherited-Bash-allow", "sandbox-auto-allow", "managed-ask-mail", "missing-reservation-tool", "unverifiable-plugin"])
@@ -132,14 +160,18 @@ def test_claude_unapproved_effective_scope_rejected_before_exec(native_probe, wo
 
 
 def test_native_replay_interruption_and_no_shadow_intent(native_probe, workspace, canary):
+    base = workspace.tmp / "client"
+    owner, receipt, _ = owner_paths(base, "global")
     trace = native_probe("lifecycle", workspace=workspace, provider="codex", canary=canary,
                          operations=["spawn", "end", "resume", "headless-wake"],
+                         client_root=base,
                          interrupt_at=["intent-saved", "launch-planned", "exec-observed", "receipt-pending"])
     observed_native(trace, "codex")
     assert_same_launch(trace["launches"])
-    assert trace["intent_owner_count"] == 1
+    assert_single_owner(base, owner)
+    saved = json.loads(owner.read_text())["launch_intent"]
+    assert_bound_receipt(saved, json.loads(receipt.read_text()))
     assert trace["unknown_outcome_requires_operator"]
-    assert trace["pending_intent_overwritten"] is False
     assert trace["caller_fields_dropped"] == []
     canary.scan(trace["surfaces"])
 
@@ -160,4 +192,48 @@ def test_auth_lookalike_in_caller_cwd_is_never_executed(native_probe, workspace,
     assert trace["lookalike_executions"] == 0
     assert trace["auth_contexts"] == [workspace.context["auth_context"]] * 3
     assert set(SURFACES) <= set(trace["surfaces"])
+    canary.scan(trace["surfaces"])
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_local_child_preserves_normal_child_skills_and_uses_one(native_probe, workspace, canary, provider):
+    home = workspace.tmp / "home"
+    roots = ([home / ".claude/skills"] if provider == "claude" else
+             [home / ".codex/skills", home / ".agentstack/skills"])
+    nonce = "fixture-skill-body-" + secrets.token_hex(8)
+    skill = roots[0] / "fixture-skill/SKILL.md"
+    skill.parent.mkdir(parents=True, mode=0o700)
+    skill.write_text("---\nname: fixture-skill\ndescription: Fixture skill acceptance\n---\n\n" + nonce + "\n")
+    for root in roots:
+        root.mkdir(parents=True, exist_ok=True)
+    expected_skills = ["fixture-skill"]
+    if provider == "codex":
+        shared = roots[1] / "fixture-shared-skill/SKILL.md"
+        shared.parent.mkdir(mode=0o700)
+        shared.write_text("---\nname: fixture-shared-skill\ndescription: Shared fixture source sentinel\n---\n\nShared fixture body.\n")
+        expected_skills.append("fixture-shared-skill")
+    workspace.context["effective_scope"]["read"].append(str(skill))
+    workspace.context["effective_scope"]["skill_tools"] = ["Skill" if provider == "claude" else "exec_command"]
+    workspace.context["skill_source_roots"] = [str(root) for root in roots]
+    before = snapshot_tree(home)
+    output = workspace.tmp / "skill-observations.json"
+    transcript = workspace.tmp / "skill-native-transcript.jsonl"
+    trace = native_probe("skills", workspace=workspace, provider=provider, canary=canary,
+                         skill_roots=roots, skill_name="fixture-skill", skill_path=skill,
+                         output=output, transcript=transcript,
+                         ordinary_child_control=True, cloud_network_forbidden=True)
+    observed_native(trace, provider)
+    observation = json.loads(output.read_text())
+    assert observation["local_skills"] == observation["ordinary_child_skills"]
+    assert set(expected_skills) <= set(observation["local_skills"])
+    assert observation["local_sources"] == observation["ordinary_child_sources"] == [str(root) for root in roots]
+    # Read the observed native tool event/output, not a 'skill_loaded' boolean.
+    events = [json.loads(line) for line in transcript.read_text().splitlines()]
+    tools = {"Skill"} if provider == "claude" else {"Read", "exec_command", "functions.exec_command", "shell_command"}
+    assert any(row["tool"] in tools and row["ok"] and nonce in row["output"] and
+               (provider == "claude" or row["path"] == str(skill)) for row in events)
+    after = snapshot_tree(home)
+    for name, digest in before.items():
+        assert after[name] == digest, "provider configuration or skill source overwritten"
+    assert trace["human_prompts"] == 0
     canary.scan(trace["surfaces"])

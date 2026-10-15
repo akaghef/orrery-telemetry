@@ -2,10 +2,14 @@
 from copy import deepcopy
 import json
 import sys
+import tomllib
 
 import pytest
 
-from .support import MODEL, assert_same_launch
+from .support import MODEL, assert_same_launch, canonical_digest
+from .evidence import (assert_bound_receipt, assert_intent_digest, assert_single_owner,
+                       assert_tree_unchanged, existing_mutation_pending, literal_intent,
+                       owner_paths, snapshot_tree, write_private_json)
 
 
 def resolve(api, workspace, **kwargs):
@@ -13,7 +17,7 @@ def resolve(api, workspace, **kwargs):
 
 
 @pytest.mark.parametrize("mode", ["global", "legacy"])
-def test_all_callers_share_literal_intent_and_one_owner(launch_intent, workspace, mode):
+def test_resolver_source_label_invariance_and_single_persisted_owner(launch_intent, workspace, mode):
     workspace.context["mode"] = mode
     intents = [resolve(launch_intent, workspace, source=source)
                for source in ("cli", "prepare-child", "operator", "form")]
@@ -22,17 +26,22 @@ def test_all_callers_share_literal_intent_and_one_owner(launch_intent, workspace
     assert intent["model"]["kind"] == "local-profile"
     assert intent["model"]["ref"] == "local:fixture"
     assert intent["model"]["resolved"]["model"] == MODEL
-    assert len(intent["model"]["profile_sha256"]) == 64
+    assert intent["model"]["profile_sha256"] == canonical_digest(tomllib.loads(workspace.profile.read_text()))
+    assert_intent_digest(intent, launch_intent.intent_digest(intent))
     for field in ("cwd", "task", "name", "parent", "tools", "base", "clear_tools", "detached", "resources", "worktree", "chrome"):
         assert intent[field] == workspace.caller[field], field
-    owner = workspace.tmp / "runtime" / ("profile.json" if mode == "global" else "child-state.json")
+    base = workspace.tmp / "client"
+    owner, receipt_path, _ = owner_paths(base, mode)
     launch_intent.save_launch_intent(owner, intent, mode=mode)
     assert launch_intent.load_launch_intent(owner, mode=mode) == intent
     saved = json.loads(owner.read_text())
     assert saved["launch_intent"] == intent
     receipt = launch_intent.make_launch_receipt(intent, phase="planned")
-    assert receipt["intent_digest"] == launch_intent.intent_digest(intent)
+    assert_bound_receipt(intent, receipt)
     assert not any(field in receipt for field in ("model", "resolved", "auth_plan", "effective_scope"))
+    if receipt_path:
+        write_private_json(receipt_path, receipt)
+    assert_single_owner(base, owner)
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude"])
@@ -62,12 +71,16 @@ def test_spawn_resume_wake_use_saved_execution_not_caller_environment(launch_int
         if provider == "codex":
             assert plan["provider_config"]["wire_api"] == "responses"
             assert plan["provider_config"]["model_auto_compact_token_limit"] == 114688
+            assert plan["provider_config"]["model_context_window"] == 131072
             assert "model_max_output_tokens" not in plan["provider_config"]
             assert "xhigh" not in plan["execution"]["argv"]
         else:
             for key in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
                 assert env[key] == MODEL
             assert env["CLAUDE_CODE_API_KEY_HELPER_TTL_MS"] == "300000"
+            assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "131072"
+            assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "16384"
+            assert env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] == "1"
             assert plan["permission_mode"] == "dontAsk"
 
 
@@ -142,7 +155,7 @@ def test_catalog_does_not_execute_auth_or_publish_endpoint(launch_intent, worksp
     assert "env" not in row
 
 
-def test_explicit_revision_does_not_overwrite_pending_intent(launch_intent, workspace):
+def test_explicit_revision_without_pending_creates_new_revision(launch_intent, workspace):
     old = resolve(launch_intent, workspace)
     pending = deepcopy(old)
     workspace.profile.write_text(workspace.profile.read_text().replace(MODEL, "new-model"))
@@ -152,11 +165,94 @@ def test_explicit_revision_does_not_overwrite_pending_intent(launch_intent, work
     assert new["model"]["profile_sha256"] != old["model"]["profile_sha256"]
 
 
-def test_normal_launch_does_not_reconfigure_settings_or_trust(launch_intent, workspace):
-    before = workspace.settings.read_bytes()
+@pytest.mark.parametrize("phase", ["planned", "exec-unknown"])
+def test_revision_preserves_actual_pending_owner_and_receipt(launch_intent, workspace, phase):
+    base = workspace.tmp / "client"
+    workspace.context.update(client_root=str(base), runtime=str(base / "runtime"))
+    old = resolve(launch_intent, workspace)
+    owner, receipt, pending = owner_paths(base, "global")
+    launch_intent.save_launch_intent(owner, old, mode="global")
+    write_private_json(receipt, launch_intent.make_launch_receipt(old, phase=phase))
+    # Existing global mutation slot/schema, no local-model-specific ledger.
+    pending_row = existing_mutation_pending()
+    request_id = pending_row["request_id"]
+    write_private_json(pending, pending_row)
+    (base / "runtime/child.lock").touch()
+    (base / "runtime/mutation.lock").touch()
+    (base / "runtime/child.lock").chmod(0o600)
+    (base / "runtime/mutation.lock").chmod(0o600)
+    before = snapshot_tree(base)
+    workspace.profile.write_text(workspace.profile.read_text().replace(MODEL, "new-model"))
+    with pytest.raises(launch_intent.LocalModelError, match="PENDING|UNKNOWN|RESOLUTION"):
+        launch_intent.revise_launch_intent(old, workspace.caller, workspace.context, confirm=True)
+    assert_tree_unchanged(base, before)
+    assert json.loads(pending.read_text())["request_id"] == request_id
+    # Reconstruct from disk, not from the old live Python dict.
+    reloaded = launch_intent.load_launch_intent(owner, mode="global")
+    assert reloaded == old
+    assert_bound_receipt(reloaded, json.loads(receipt.read_text()))
+    assert_single_owner(base, owner)
+
+
+@pytest.mark.parametrize("field", ["profile", "auth-cwd", "auth-env", "auth-timeout", "auth-ttl",
+                                  "runner-digest", "runner-version", "dependency", "scope-read", "scope-bash"])
+def test_launch_digest_binds_full_auth_and_scope_independently(launch_intent, workspace, field):
+    original = literal_intent(workspace)
+    changed = deepcopy(original)
+    auth = changed["model"]["resolved"]["auth"]
+    if field == "profile":
+        changed["model"]["profile_sha256"] = "b" * 64
+    elif field == "auth-cwd":
+        auth["context"]["cwd"] = "/approved/reconfigured-models"
+    elif field == "auth-env":
+        auth["context"]["env"]["LANG"] = "C.UTF-8"
+    elif field == "auth-timeout":
+        auth["context"]["timeout_ms"] = 4000
+    elif field == "auth-ttl":
+        auth["context"]["refresh_interval_ms"] = 600000
+    elif field == "runner-digest":
+        auth["runner"]["sha256"] = "b" * 64
+    elif field == "runner-version":
+        auth["runner"]["contract_version"] = 2
+    elif field == "dependency":
+        auth["runner"]["dependency_digests"][str(workspace.dependency)] = "b" * 64
+    elif field == "scope-read":
+        changed["effective_scope"]["read"].append("/approved/new-task.md")
+    else:
+        changed["effective_scope"]["bash"].append("fixture-new-command")
+    for intent in (original, changed):
+        actual = launch_intent.intent_digest(intent)
+        assert_intent_digest(intent, actual)
+        assert_bound_receipt(intent, launch_intent.make_launch_receipt(intent, phase="planned"))
+    assert launch_intent.intent_digest(original) != launch_intent.intent_digest(changed)
+
+
+def test_resolver_includes_approved_auth_and_scope_before_hashing(launch_intent, workspace):
+    workspace.caller["provider"] = "claude"
+    command = json.dumps([sys.executable, str(workspace.runner)])
+    workspace.profile.write_text(workspace.profile.read_text().replace(
+        'wire_api = "anthropic-messages"', 'wire_api = "anthropic-messages"\nauth_command = ' + command))
     intent = resolve(launch_intent, workspace)
+    auth = intent["model"]["resolved"]["auth"]
+    assert auth["context"] == workspace.context["auth_context"]
+    assert auth["runner"] == workspace.context["auth_runner"]
+    assert intent["effective_scope"] == workspace.context["effective_scope"]
+    assert intent["model"]["profile_sha256"] == canonical_digest(tomllib.loads(workspace.profile.read_text()))
+    assert_intent_digest(intent, launch_intent.intent_digest(intent))
+    assert_bound_receipt(intent, launch_intent.make_launch_receipt(intent, phase="planned"))
+
+
+def test_normal_launch_does_not_reconfigure_settings_or_trust(launch_intent, workspace):
+    home = workspace.tmp / "home"
+    before = snapshot_tree(home)
+    intent = resolve(launch_intent, workspace)
+    owner, _, _ = owner_paths(workspace.tmp / "client", "global")
+    launch_intent.save_launch_intent(owner, intent, mode="global")
+    # Chain existing save_profile ownership through the caller binding test;
+    # this unit case additionally protects all configured input resources.
     launch_intent.materialize_launch_intent(intent, workspace.context, operation="spawn", caller_env={})
-    assert workspace.settings.read_bytes() == before
+    assert_tree_unchanged(home, before)
+    assert launch_intent.load_launch_intent(owner, mode="global") == intent
 
 
 def test_claude_missing_effective_scope_is_not_interactive_default(launch_intent, workspace):
@@ -179,3 +275,17 @@ def test_name_owner_mismatch_has_zero_network_and_no_rebinding(launch_intent, wo
     with pytest.raises(launch_intent.LocalModelError):
         resolve(launch_intent, workspace)
     assert workspace.context["effects"] == []
+
+
+def test_selected_adapter_absence_is_not_cloud_fallback(launch_intent, workspace):
+    common, rest = workspace.profile.read_text().split("[codex]", 1)
+    workspace.profile.write_text(common + "[claude]" + rest.split("[claude]", 1)[1])
+    with pytest.raises(launch_intent.LocalModelError, match="LOCAL_MODEL_ADAPTER_UNSUPPORTED"):
+        resolve(launch_intent, workspace)
+    assert workspace.context["effects"] == []
+
+
+def test_codex_strict_output_cap_request_is_explicitly_unsupported(launch_intent, workspace):
+    workspace.caller["strict_output_cap"] = True
+    with pytest.raises(launch_intent.LocalModelError, match="LOCAL_MODEL_ADAPTER_UNSUPPORTED"):
+        resolve(launch_intent, workspace)

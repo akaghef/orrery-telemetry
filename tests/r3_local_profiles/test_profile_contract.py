@@ -126,3 +126,41 @@ def test_digest_ignores_toml_presentation_but_keeps_argv_order(profiles, workspa
     a = {**first, "codex": {**first["codex"], "auth_command": ["/fixture/helper", "a", "b"]}}
     b = {**first, "codex": {**first["codex"], "auth_command": ["/fixture/helper", "b", "a"]}}
     assert profiles.profile_digest(a) != profiles.profile_digest(b)
+
+
+@pytest.mark.parametrize("value", ['"bad\\u0000model"', '"bad\\nmodel"', '"bad\\u001fmodel"'])
+def test_model_control_characters_are_invalid(profiles, workspace, value):
+    workspace.profile.write_text(profile_text().replace('"' + MODEL + '"', value))
+    with pytest.raises(profiles.LocalModelError, match="LOCAL_MODEL_PROFILE_INVALID"):
+        load(profiles, workspace)
+
+
+@pytest.mark.parametrize("field", ["schema_version", "name", "model", "context_window", "max_output_tokens"])
+def test_required_common_fields_cannot_be_missing(profiles, workspace, field):
+    workspace.profile.write_text("\n".join(line for line in profile_text().splitlines() if not line.startswith(field + " =")))
+    with pytest.raises(profiles.LocalModelError, match="LOCAL_MODEL_PROFILE_INVALID"):
+        load(profiles, workspace)
+
+
+@pytest.mark.parametrize("adapter", ["codex", "claude"])
+def test_one_adapter_profile_is_valid(profiles, workspace, adapter):
+    common, rest = profile_text().split("[codex]", 1)
+    codex, claude = rest.split("[claude]", 1)
+    selected = common + ("[codex]" + codex if adapter == "codex" else "[claude]" + claude)
+    workspace.profile.write_text(selected)
+    value = load(profiles, workspace)
+    assert adapter in value and ("claude" if adapter == "codex" else "codex") not in value
+
+
+@pytest.mark.parametrize("old,new", [
+    ('wire_api = "anthropic-messages"', 'wire_api = "chat"'),
+    ('base_url = "https://inference.example.invalid"', 'base_url = "http://remote.invalid"'),
+    ('base_url = "https://inference.example.invalid"', 'base_url = "https://user:secret@fixture.invalid"'),
+    ('base_url = "https://inference.example.invalid"', 'base_url = "https://fixture.invalid?key=forbidden"'),
+    ('env = { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = "85" }', 'env = { ANTHROPIC_AUTH_TOKEN = "forbidden" }'),
+    ('env = { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = "85" }', 'env = { CLAUDE_CONFIG_DIR = "/caller" }'),
+])
+def test_claude_adapter_negatives_are_not_inferred_from_codex(profiles, workspace, old, new):
+    workspace.profile.write_text(profile_text().replace(old, new))
+    with pytest.raises(profiles.LocalModelError, match="LOCAL_MODEL_PROFILE_INVALID"):
+        load(profiles, workspace)

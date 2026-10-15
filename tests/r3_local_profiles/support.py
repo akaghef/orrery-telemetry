@@ -30,6 +30,17 @@ RESPONSE_TOOL = {"type": "function", "name": TOOL_NAME,
                  "description": "Echo the fixture text", "parameters": PARAMETERS}
 MESSAGE_TOOL = {"name": TOOL_NAME, "description": "Echo the fixture text",
                 "input_schema": PARAMETERS}
+FIXTURE_ADDRESSES = set()
+
+
+@contextmanager
+def registered_address(address):
+    assert address not in FIXTURE_ADDRESSES
+    FIXTURE_ADDRESSES.add(address)
+    try:
+        yield
+    finally:
+        FIXTURE_ADDRESSES.remove(address)
 
 
 class Canary:
@@ -90,6 +101,11 @@ class FakePeer:
     _server: object = None
     tool_name: str = TOOL_NAME
     ca_file: Path | None = None
+    credential_epoch: int = 0
+
+    def rotate_credential(self, canary):
+        self.canary = canary
+        self.credential_epoch += 1
 
     def __repr__(self):
         return f"<FakePeer {self.protocol} requests={len(self.requests)}>"
@@ -114,11 +130,12 @@ class FakePeer:
         if self.auth == "none":
             auth_ok = not auth_headers
         else:
-            auth_ok = auth_ok and form == self.auth and len(auth_headers) == 1
+            auth_ok = auth_ok and (form == self.auth or self.auth == "either") and len(auth_headers) == 1
         # Do not keep raw headers, including unexpected secret-bearing headers.
         self.canary.scan({"request-body": body})
         self.requests.append({"path": path, "body": body, "auth_form": form,
-                              "auth_header_names": auth_headers, "auth_ok": auth_ok})
+                              "auth_header_names": auth_headers, "auth_ok": auth_ok,
+                              "credential_epoch": self.credential_epoch if auth_ok and form else None})
         if path != expected_path:
             self.violations.append("unexpected-path")
             return 404
@@ -208,7 +225,7 @@ class FakePeer:
         return rows + [{"type": "message_delta", "delta": {"stop_reason": payload["stop_reason"], "stop_sequence": None}, "usage": payload["usage"]}, {"type": "message_stop"}]
 
 
-def fixture_tls(directory):
+def fixture_tls(directory, cert_ip="127.0.0.1"):
     """Ephemeral fixture CA/key, unrelated to credential canaries or real keys."""
     from datetime import datetime, timedelta, timezone
     from ipaddress import ip_address
@@ -223,7 +240,7 @@ def fixture_tls(directory):
     cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
             .public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(hours=1))
-            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ip_address("127.0.0.1"))]), critical=False)
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ip_address(cert_ip))]), critical=False)
             .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
             .sign(key, hashes.SHA256()))
     ca_file, key_file = directory / "ca.pem", directory / "key.pem"
@@ -235,7 +252,7 @@ def fixture_tls(directory):
 
 
 @contextmanager
-def fake_peer(protocol, canary, auth="none", fault=None, tls_dir=None):
+def fake_peer(protocol, canary, auth="none", fault=None, tls_dir=None, cert_ip="127.0.0.1"):
     peer = FakePeer(protocol, canary, auth, fault)
 
     class Handler(BaseHTTPRequestHandler):
@@ -247,12 +264,15 @@ def fake_peer(protocol, canary, auth="none", fault=None, tls_dir=None):
             status = peer.inspect(self.path, self.headers, body)
             if status == 200 and peer.fault in ("401", "500"):
                 status = int(peer.fault)
+            peer.requests[-1]["http_status"] = status
             if status == 200 and peer.fault == "redirect":
+                peer.requests[-1]["http_status"] = 307
                 self.send_response(307)
                 self.send_header("Location", peer.redirect_url)
                 self.end_headers()
                 return
             if status == 200 and peer.fault == "disconnect":
+                peer.requests[-1]["http_status"] = None
                 self.close_connection = True
                 return
             self.send_response(status)
@@ -271,21 +291,22 @@ def fake_peer(protocol, canary, auth="none", fault=None, tls_dir=None):
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     if tls_dir is not None:
-        peer.ca_file, key_file = fixture_tls(tls_dir)
+        peer.ca_file, key_file = fixture_tls(tls_dir, cert_ip)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(peer.ca_file, key_file)
         server.socket = context.wrap_socket(server.socket, server_side=True)
     server.daemon_threads = True
     peer._server = server
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield peer
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-        assert not thread.is_alive(), "fixture HTTP server did not stop"
+    with registered_address(("127.0.0.1", server.server_port)):
+        thread.start()
+        try:
+            yield peer
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            assert not thread.is_alive(), "fixture HTTP server did not stop"
 
 
 def post_fixture(peer, body, auth=None, path=None):

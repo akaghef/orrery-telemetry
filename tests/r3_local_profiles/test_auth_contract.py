@@ -1,6 +1,7 @@
 """Design v3 §4: one fixed auth context; never use token-valued env."""
 from copy import deepcopy
 import subprocess
+import sys
 
 import pytest
 
@@ -29,6 +30,8 @@ class CredentialCommand:
         if self.fault == "exit":
             return subprocess.CompletedProcess(argv, 1, stdout=raw, stderr=raw)
         stdout = {"empty": b"", "multiline": b"one\ntwo\n", "control": b"bad\x00value",
+                  "extra-newline": raw + b"\n\n", "no-newline": raw,
+                  "boundary-no-newline": b"x" * 8192, "boundary-with-newline": b"x" * 8191 + b"\n",
                   "oversize": b"x" * 8193, "invalid-utf8": b"\xff"}.get(self.fault, raw + b"\n")
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr=raw)
 
@@ -63,7 +66,7 @@ def test_auth_fixed_cwd_minimal_env_and_no_shell(auth_runner, workspace, canary,
     canary.scan({"executor-input": call})
 
 
-@pytest.mark.parametrize("fault", ["timeout", "exit", "empty", "multiline", "control", "oversize", "invalid-utf8"])
+@pytest.mark.parametrize("fault", ["timeout", "exit", "empty", "multiline", "control", "oversize", "invalid-utf8", "extra-newline"])
 def test_auth_failure_is_fixed_reason_not_secret_stderr(auth_runner, workspace, canary, fault, capsys, caplog):
     with pytest.raises(auth_runner.LocalModelError) as caught:
         auth_runner.run_auth(plan(workspace), executor=CredentialCommand(canary, fault))
@@ -90,3 +93,25 @@ def test_runner_drift_does_not_execute_or_redeploy(auth_runner, workspace, monke
     with pytest.raises(auth_runner.LocalModelError):
         auth_runner.validate_runner(plan(workspace), observed_digest="changed", observed_contract_version=2)
     assert workspace.runner.read_bytes() == before
+
+
+@pytest.mark.parametrize("form", ["no-newline", "boundary-no-newline", "boundary-with-newline"])
+def test_auth_stdout_limit_and_ending_positive_boundaries(auth_runner, workspace, canary, form, capsys, caplog):
+    token = auth_runner.run_auth(plan(workspace), executor=CredentialCommand(canary, form))
+    canary.scan(drain_logs(capsys, caplog))
+    expected_size = 8192 if form == "boundary-no-newline" else 8191
+    if form == "no-newline":
+        if not canary.matches(token.decode(), "x-api-key"):
+            pytest.fail("zero-newline credential mismatch", pytrace=False)
+    else:
+        assert len(token.rstrip(b"\n")) == expected_size
+
+
+def test_real_fake_credential_process_oversize_is_rejected(auth_runner, workspace, capsys, caplog):
+    script = workspace.root / "oversize-credential.py"
+    script.write_text('import sys\nsys.stdout.buffer.write(b"x" * 8193)\n')
+    current = plan(workspace)
+    current["argv"] = [sys.executable, str(script)]
+    with pytest.raises(auth_runner.LocalModelError, match="LOCAL_MODEL_AUTH_FAILED"):
+        auth_runner.run_auth(current)
+    drain_logs(capsys, caplog)
