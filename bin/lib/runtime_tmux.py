@@ -405,10 +405,8 @@ def global_inventory(client_home, *, api=None, deadline=None):
                 value,digest = snapshot.snapshot(root,identity['agent_id'])
                 launch = value['launch']
                 for live in value['lives']:
-                    if live.get('launch_id') is not None and (not launch or any(
-                            launch.get(k)!=live.get(k) for k in ('launch_id','receipt_nonce'))):
-                        raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
-                    proofs.append({'live':live,'digest':digest,'agent_id':identity['agent_id']})
+                    bound=launch_for_live(live,launch)
+                    proofs.append({'live':live,'launch':bound,'digest':digest,'agent_id':identity['agent_id']})
             except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
                 read_failure(exc,name,instance,check)
     return {'proofs':proofs,'diagnostics':diagnostics,'global_complete':not diagnostics}
@@ -440,9 +438,12 @@ def legacy_admission(transport, client_home, *, session=None, pane=None, window=
             raise TargetError('TMUX_TARGET_UNAVAILABLE')
         target['process_start'] = start
         for proof in proofs:
-            live = proof['live']
-            if (live.get('pane_id') == target['pane_id'] and live.get('pid') == target['pid']
-                    and live.get('process_start') == start):
+            live = proof['live'];launch=launch_for_live(live,proof.get('launch'))
+            # The runner still owns its pane after the provider exits. Read its
+            # birth from the same launch, without copying a PID into live state.
+            runner=(launch or {}).get('execution',{}).get('runner') or live
+            if (live.get('pane_id') == target['pane_id'] and pane_process(live,launch) == target['pid']
+                    and runner.get('process_start') == start):
                 raise TargetError('LEGACY_TARGET_IS_GLOBAL')
     # Re-read socket and actual pane membership after the root snapshots.
     after = panes(transport, session=session, pane=pane, window=window, deadline=deadline)

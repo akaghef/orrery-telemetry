@@ -1458,6 +1458,12 @@
     "TMUX_SESSION_NAME_CONFLICT": {
       "kind": "target",
       "reader_inputs": []
+    },
+    "MUTATION_PENDING_CONFLICT": {
+      "kind": "target",
+      "reader_inputs": [
+        "MUTATION_PENDING_CONFLICT"
+      ]
     }
   },
   "inherited_reader_inputs": {

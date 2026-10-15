@@ -155,7 +155,7 @@ class FirstTurn:
                     else:
                         try:
                             import json
-                            value=json.loads(block.get('content',''))
+                            value=json.loads(_content_text(block.get('content','')))
                             # Reuse the same canonical response validator as the client.
                             from pathlib import Path
                             import runpy

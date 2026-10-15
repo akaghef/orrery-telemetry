@@ -281,10 +281,14 @@ context 使用率も digest に含めます。提出後の応答不明は exit 3
 
 runner の PID/start は既存 launch の `execution.runner`、実 provider の PID/start は既存 live slot に保存します。runner は provider を待ち、終了結果を launch へ確定してから報告と後片付けを行います。SessionEnd は process の終了証明ではなく、SDK の /clear でも早期退役しません。provider の終了・runner の終了・不明は区別し、生存が不明なら予約と identity を保持します。
 
-`target --agent-id ID --print` は、終了済み・SessionStart 前の失敗でも保存された証拠から lifecycle と現在の `state_sha256` を返せます。現在の PID/pane が証明できない回収対象は null を返し、capture・attach・compact・signal の対象には使えません。確認した親 context、または明示 operator の同じ入口から `replay-end --agent-id ID --confirm-state-digest HASH --expected-intent-sha256 HASH` へ進みます。pending が無い場合だけ後者に literal `null` を渡します。unknown は `launch-resolve` に戻り、自動で再起動しません。
+`target --agent-id ID --print` は、終了済み・SessionStart 前の失敗でも保存された証拠から lifecycle と現在の `state_sha256` を返せます。現在の PID/pane が証明できない回収対象は null を返し、capture・attach・compact・signal の対象には使えません。確認した親 context、または明示 operator の同じ入口から `replay-end --agent-id ID --confirm-state-digest HASH --expected-intent-sha256 HASH` へ進みます。pending が無い場合だけ後者に literal `null` を渡します。launch の実行が unknown のときは `launch-resolve` に戻り、自動で再起動しません。
 
 親への終端報告は既存の mutation pending に全文を保存し、同じ UUID と bytes で再送します。成功 receipt と終了 phase の確定が pending の消去より先です。結果不明では active のまま保持し、確定後だけ retire/release と local cleanup を完了します。retire commit 後の local 保存失敗も、親/operator の replay が残りだけを処理します。
 
 退役済みで報告 pending が残る場合は、通常送信を再有効化しません。既存 `resolve-mutation` の digest/old-new binding/ID/confirm の照合に加え、`--parent-context` で確認した active な親、または同じ private server config の `--operator` と TTY の yes を要求します。これは未確認報告の明示的な local ack/abandon だけで、launch の既存 resolution に記録してから pending を消します。その後もう一度 target を読み、replay-end で後片付けを完了してください。
 
 CLI `end` は既存 dashboard と同じ終了要求を共用します。通常は検証済み pane へ literal `/exit` と Enter、headless Gemini は検証済み provider PID だけに SIGINT を送ります。送信だけで終了とは見なしません。pane のない通常 provider は送信先を証明できないため拒否し、SIGTERM へ切り替えません。
+
+launch を持たない standalone の終了回収も `target --print` → 同 digest の `replay-end` を使います。終了済み launch が残っていても standalone の保存済み session を区別し、自分の ACTIVE 予約だけを解放して owner は退役しません。解放の応答喪失は既存 pending を同じ UUID で再送します。別 session の生存・観測不明・別種類の pending は保持し、誤った pending hash は `MUTATION_PENDING_CONFLICT` で拒否します。
+
+専用 socket を legacy bootstrap が拒否する境界は維持します。共通 legacy target admission 自身も、既存 launch の runner PID/start と live の nonce を読み、provider が終了していてもその runner の pane を global と判定して拒否します。PID の写しは増やしません。

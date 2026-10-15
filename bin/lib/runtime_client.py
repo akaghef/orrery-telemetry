@@ -1733,6 +1733,10 @@ class RuntimeClient:
             if self.outputs['child'].exists():
                 self.retain_child(read_json(self.outputs['child']))
             else:
+                pending=self.outputs['mutation']
+                if pending.exists():
+                    if read_json(pending).get('tool')!='release_file_reservations':raise ClientError('MUTATION_PENDING_CONFLICT')
+                    self.replay_pending()
                 for page in self.all_leases():
                     if page:
                         self.call('release_file_reservations', {'file_reservation_ids': [row['id'] for row in page]})

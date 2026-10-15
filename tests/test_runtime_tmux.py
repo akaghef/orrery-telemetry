@@ -423,3 +423,15 @@ def test_window_selector_cli_success_has_literal_current_pane(cli_fixture):
     assert value['allowed'] is True and value['operation']=='input'
     assert value['panes']==[{'session_id':'$0','session':'Control','pane_id':'%0',
         'pid':cli_fixture['pid'],'process_start':'fixture-start'}]
+
+
+@pytest.mark.parametrize('provider_state',['start-provider','absent'])
+def test_legacy_admission_rejects_the_global_runner_even_after_provider_exit(endpoint,provider_state):
+    transport,calls=fake_transport(endpoint,'$1\tAlpha\t%4\t310\n')
+    proof={'live':{'pane_id':'%4','pid':400,'process_start':'start-provider','launch_id':'launch','receipt_nonce':'nonce'},
+           'launch':{'launch_id':'launch','receipt_nonce':'nonce','execution':{'runner':{'pid':310,'process_start':'start-runner'}}}}
+    with pytest.raises(ERROR,match='^LEGACY_TARGET_IS_GLOBAL$'):
+        API['legacy_admission'](transport,endpoint.parent,session='Alpha',operation='input',
+            api={'process_start':lambda pid,**kw:'start-runner' if pid==310 else provider_state},
+            proof_reader=lambda *a,**kw:[proof])
+    assert len(calls)==1

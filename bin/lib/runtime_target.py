@@ -63,33 +63,60 @@ class Targets:
     def endpoints(self,root,launch):
         return self.tmux['endpoint_candidates'](root.parent.parent,self.operator.binding['expected_server_instance_id'],launch)
 
+    def standalone_sessions(self,value):
+        """Ignore completed launch history, but never bypass pending cleanup."""
+        launch=value['launch']
+        if value.get('child'):return []
+        if launch:
+            if launch.get('phase') not in ('ended','cancelled'):return []
+            if (launch.get('execution') or launch.get('termination')) and (launch.get('termination') or {}).get('phase')!='ended':return []
+            if any(not x.get('ended') and x.get('launch_id')==launch['launch_id'] for x in value['lives']):return []
+        return [x for x in value['lives'] if x.get('launch_id') is None]
+
     def lifecycle(self,root,value,digest,row,principal,parent_digest):
-        launch=value['launch'];term=(launch or {}).get('termination') or {}
-        phase=term.get('phase','unknown')
-        outcome=(launch or {}).get('execution',{}).get('outcome',{}).get('state','unknown')
-        if not launch:self.fail('TMUX_TARGET_UNAVAILABLE')
-        other=[x for x in value['lives'] if not x.get('ended') and x.get('launch_id')!=launch['launch_id']]
-        if any(x.get('receipt_nonce')!=launch['receipt_nonce'] for x in value['lives'] if x.get('launch_id')==launch['launch_id']):self.fail('LAUNCH_RECEIPT_MISMATCH')
-        if other:phase='unknown'
-        pending=value.get('mutation');retired=bool(row.get('retired_at'))
-        if retired and pending is not None and phase in ('report-pending','report-required'):operations=['target','resolve-mutation']
-        elif not other and (outcome in ('exited','not-started') or (launch.get('operator_resolution') or {}).get('action')=='confirmed-ended'):
-            operations=['target']+([] if phase=='ended' else ['replay-end'])
-        else:operations=['target','launch-resolve']
+        launch=value['launch'];pending=value.get('mutation');retired=bool(row.get('retired_at'))
+        standalone=self.standalone_sessions(value)
+        session=None
+        if standalone:
+            # Saved slots identify the owner/session, never a current PID.
+            # Every other live or unreadable process keeps cleanup unavailable.
+            absent=all(self.api['process_start'](x.get('pid'),deadline=self.deadline)=='absent'
+                for x in value['lives'] if not x.get('ended') or x in standalone)
+            session=next((x['session_id'] for x in standalone if not x.get('ended')),standalone[0]['session_id'])
+            phase='ended' if all(x.get('ended') for x in standalone) and pending is None else 'cleanup-pending'
+            outcome='exited' if absent else 'unknown'
+            operations=['target']
+            if pending is not None and pending.get('tool')!='release_file_reservations':operations.append('resolve-mutation')
+            elif absent and phase!='ended':operations.append('replay-end')
+            if not absent:phase='unknown'
+            kind='standalone-lifecycle';reference=None
+        else:
+            if not launch:self.fail('TMUX_TARGET_UNAVAILABLE')
+            term=launch.get('termination') or {};phase=term.get('phase','unknown')
+            outcome=launch.get('execution',{}).get('outcome',{}).get('state','unknown')
+            other=[x for x in value['lives'] if not x.get('ended') and x.get('launch_id')!=launch['launch_id']]
+            if any(x.get('receipt_nonce')!=launch['receipt_nonce'] for x in value['lives'] if x.get('launch_id')==launch['launch_id']):self.fail('LAUNCH_RECEIPT_MISMATCH')
+            if other:phase='unknown'
+            if retired and pending is not None and phase in ('report-pending','report-required'):operations=['target','resolve-mutation']
+            elif not other and (outcome in ('exited','not-started') or (launch.get('operator_resolution') or {}).get('action')=='confirmed-ended'):
+                operations=['target']+([] if phase=='ended' else ['replay-end'])
+            else:operations=['target','launch-resolve']
+            kind='launch-lifecycle';reference={k:launch[k] for k in ('launch_id','receipt_nonce')}
         target=dict(agent_id=row['agent_id'],agent_name=row['name'],credential_generation=row['credential_generation'],binding=dict(self.operator.binding),
             pid=None,process_start=None,transport=None,socket_path=None,server_pid=None,session_id=None,session_name=None,window_id=None,pane_id=None,
-            argv=[],environment_unset=['TMUX','TMUX_PANE'],kind='launch-lifecycle',launch={k:launch[k] for k in ('launch_id','receipt_nonce')})
+            argv=[],environment_unset=['TMUX','TMUX_PANE'],kind=kind,launch=reference)
         readiness=dict(state='unknown',input_empty=None,context_used_percent=None)
         state=self.tmux['target_digest'](target,principal,{'target':digest,'parent':parent_digest},readiness)
         return dict(root=root,target=target,principal=principal,identity_sha256=state,state_sha256=state,
             compact_readiness=readiness,next_operations=operations,transport=None,retired=retired,
-            lifecycle={'phase':phase,'provider_outcome':outcome,'pending_sha256':value.get('mutation_sha256')},snapshot=value)
+            lifecycle={'phase':phase,'provider_outcome':outcome,'pending_sha256':value.get('mutation_sha256')},snapshot=value,lifecycle_session=session)
 
     def resolve(self,aid,*,context=None,operator=False,held_root=None):
         root,value,digest,row=self.snapshot(aid,held_root=held_root)
         principal,parent_digest=self.principal(aid,value,context,operator,held_root)
         launch=value['launch'];matches=[];uncertain=False;observed_live=False
-        standalone=any(not live.get('ended') and live.get('launch_id') is None for live in value['lives'])
+        standalone=(any(not live.get('ended') and live.get('launch_id') is None for live in value['lives'])
+            or bool(self.standalone_sessions(value)))
         if launch and not standalone and ((launch.get('execution') or {}).get('outcome',{}).get('state') in ('exited','not-started','unknown') or (launch.get('termination') or {}).get('phase') in ('cleanup-pending','ended')):
             return self.lifecycle(root,value,digest,row,principal,parent_digest)
         metadata_path=root/self.api['CLIENT_LAYOUT']['metadata']
@@ -239,7 +266,7 @@ class Targets:
                 if 'lifecycle' not in current or operation not in current['next_operations']:self.fail('TMUX_TARGET_UNAVAILABLE')
                 if current['lifecycle']['pending_sha256']!=expected_intent:self.fail('MUTATION_PENDING_CONFLICT')
                 lives=current['snapshot']['lives']
-                session=next((x['session_id'] for x in lives if not x.get('ended')),None)
+                session=current.get('lifecycle_session') or next((x['session_id'] for x in lives if not x.get('ended')),None)
                 client._lifecycle_principal=current['principal']
                 try:client.end_session({'session_id':session})
                 except (RuntimeError,OSError):self.fail('TMUX_OPERATION_OUTCOME_UNKNOWN')
