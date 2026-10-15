@@ -253,3 +253,24 @@ Mail を無効にした global hook は owner の context/credential を読む�
 Codex/Gemini launcher は新しい tmux pane に選択済みの mode/config/context を渡します。project がある直接 bootstrap は env.sh でその project/MCP URL を上書きせず、mode が未固定の場合だけ共通 selector で installed default を補います。watcher wrapper は環境と `--server-config PATH` / `--server-config=PATH` のどれでも同じ選択結果で config-only / owner watch を分岐します。古い helper の select 未対応は、共通の partial admission に戻し固定理由で拒否します。
 
 mode 未固定の継続で配置済み env.sh を selector が確認できない場合は `RUNTIME_DEFAULT_UNAVAILABLE` で停止します。helper を再配備してから同じ起動を再実行してください。env.sh が legacy でも未確認の設定を成功扱いせず、固定済み legacy と設定ファイルのない既定 legacy は維持します。installer の `--literal` は1つの引数としてだけ扱い、説明文中の同じ文字列には反応しません。
+
+<a id="explicit-tmux-target"></a>
+## 明示した対象の読取・attach・compact
+
+`agentstack-runtime-client target --context /absolute/runtime-client.json --agent-id 2 --print` は、既存の資格・live 証拠から実際の socket、session/pane、PID/start を照合し、`state_sha256` と次に使える操作を返します。名前の prefix や大文字小文字の alias、別 server の同じ pane 番号へ fallback しません。非 tmux の standalone は process の読取だけです。`capture --agent-id 2 --lines 40` は同じ context を指定して使います（1–1000行、超過は truncated）。読取は既存 mutex を作らず、取れなければ helper unavailable で止まります。
+
+operator は `--operator --runtime-mode global --server-config /absolute/server-config.json` を指定できます。同じ UID の private config と現 binding を使い、別の owner を登録しません。`attach --agent-id 2 --read-only --print` は完全な argv を返し、実 attach は exec 前の admission を stderr に出して terminal stream へ移ります。owner/parent には attach を許可せず、子への指示は Mail を使います。
+
+証明済みの親は `send-compact --context /absolute/parent/runtime-client.json --agent-id 2 --confirm-state-digest <targetで得た64桁hash>` を使えます。operator はさらに TTY で yes を確認します。固定 `/compact` だけを送り、送信直前の入力欄が空で待機中の場合だけ許可します。自分の tool call 中、作業中、承認待ち、判断不能なら `TMUX_TARGET_NOT_IDLE`、待機中でも文字があれば `TMUX_TARGET_INPUT_NOT_EMPTY` です。`submitted` は tmux への提出で、provider の処理完了ではありません。
+
+**Known limitation:** Claude の自動 suggestion と placeholder も文字として扱うため、compact は拒否されやすくなります。色から帰属を推測しません。拒否された親は次に入力欄が空になる待機状態を待つか、provider の自動 compact に任せてください。入力欄を消すための `send-keys` や、拒否を避ける別の launcher を使ってはいけません。
+
+context 使用率も digest に含めます。提出後の応答不明は exit 3・`effects=unknown`、自動再送と新しい journal はありません。target/capture で確認後に人が選ぶ再送は新しい明示操作で、表示と context 値が元と同じなら重複し得ます。`effects=none` の事前拒否とは区別してください。協調 mutex は人/provider の入力を止めず、最後の観測と送信の間の競合窓も残ります。
+
+旧 consumer の通知・monitor・OPEN・prune は共通の legacy admission を通し、不明な対象では副作用を止め、正常な別の対象は続けます。この段階では専用 socket の起動を有効にしません。new/rename/rollback と終了の lifecycle、launcher/provider の結線は後続で確認してから切り替えます。
+
+対象の同一性の digest は socket・pane・PID/start・owner/親の証明を結び、capture・attach と terminal open の再照合に使います。通常の画面更新では対象変更としません。compact の target digest はこの証明に入力欄の状態と ctx 値を加え、本文・時計・スピナーの更新は含めません。人の yes 待ちは観測期限に含めず、確認後の短い期限で同じ digest を再照合します。ttyd と terminal の実子も同じ helper で endpoint と対象を再照合し、cleanup は観測不明なら identity を保持します。resume 後に terminal を開けなければ `TERMINAL_OPEN_FAILED` を返しますが、成功した resume を取り消しません。
+
+`send-compact` の確認には `target` が返す `state_sha256` を使います。`capture`・`attach` が返す値は対象の同一性の確認用なので、compact の確認値として流用しません。
+
+不在は直接の `lstat` の ENOENT だけで判断し、EACCES・その他の I/O エラーは不明として保持します。親 directory は owner の rwx も必要です。共有 legacy consumer は、socket 不在または安全な socket で `no server running` を確認した inventory を空とします。cleanup は生存 lease がなければ退役へ進みます。unsafe socket・timeout・その他の読取不能は不明のまま保持し、観測だけで server を作りません。

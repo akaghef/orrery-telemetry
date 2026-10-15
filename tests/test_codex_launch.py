@@ -73,6 +73,7 @@ def _worktree_base_assignment() -> str:
 def _run_bash(script: str, env: dict[str, str] | None = None,
               check: bool = False) -> subprocess.CompletedProcess[str]:
     run_env = os.environ.copy()
+    run_env["_ags_global_loader"] = str(_ROOT / "bin/lib/global-client-loader.sh")
     if env:
         run_env.update(env)
     result = subprocess.run(
@@ -681,7 +682,7 @@ def test_required_mcp_initialization_failure_is_a_failed_start():
     # No native Codex or live tmux: replay a required-server startup failure.
     script = (
         'sleep() { :; }\n'
-        'tmux() { echo "Error: required MCP server chosen failed to initialize"; }\n'
+        'tmux() { echo "Error: required MCP server chosen failed to initialize"; return 1; }\n'
         'codex_session_alive() { return 1; }\n'
         + _extract("codex_watch_initial_task")
         + '\nSECONDS=0; codex_watch_initial_task Child task test /l id\n'
@@ -1281,7 +1282,7 @@ def test_codex_polls_capture_the_visible_screen_only():
     assert 'capture-pane -t "$CHILD_NAME" -p -S -30' not in text
     # The shared Claude wait plus the shared Codex watch.
     assert 'pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)' in _extract("wait_for_claude_ready")
-    assert 'pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"' in _extract("codex_watch_initial_task")
+    assert 'if pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null)"; then' in _extract("codex_watch_initial_task")
 
 
 def test_child_shell_never_sources_a_user_bootstrap():
@@ -1503,13 +1504,13 @@ def test_the_dashboard_never_kills_a_codex_updating_itself(monkeypatch):
 
     screens = {"updating": "Updating Codex via `npm install -g @openai/codex`...\n", "idle": "› Ask Codex\n"}
     for name, screen in screens.items():
-        monkeypatch.setattr(server.subprocess, "run",
+        monkeypatch.setattr(server, "_tmux_run",
                             lambda argv, s=screen, **_kw: server.subprocess.CompletedProcess(argv, 0, s, ""))
         assert server._codex_self_update_on_screen("Child") is (name == "updating")
     source = (_ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
     body = source[source.index("    def kill_spawn_session() -> None:"):]
     body = body[:body.index("\n\n")]
-    assert body.index("_codex_self_update_on_screen") < body.index('"kill-session"')
+    assert body.index("_codex_self_update_on_screen") < body.index("'kill-session'")
 
 
 @pytest.mark.parametrize("parent, started", [("", False), ("ParentAgent", True)])

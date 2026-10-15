@@ -300,7 +300,7 @@ def test_capacity_in_real_pane_after_codex_wrap(tmp_path, monkeypatch, width, re
         assert fixture.read_text().startswith(wrapped + "\n")
     env = {**os.environ, "HOME": str(tmp_path), "TMUX": ""}
     run = subprocess.run
-    with tempfile.TemporaryDirectory(prefix="stall-wrap-", dir="/private/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="stall-wrap-", dir="/private/tmp" if Path("/private/tmp").is_dir() else None) as directory:
         socket = directory + "/s"
 
         def tmux(*args):
@@ -322,12 +322,15 @@ def test_capacity_in_real_pane_after_codex_wrap(tmp_path, monkeypatch, width, re
             assert wrapped in captured
             assert len(wrapped.splitlines()) == (2 if len(error) > width else 1)
 
-            def capture_from_isolated_socket(args, **kwargs):
-                assert args[:2] == ["tmux", "capture-pane"]
-                assert "-J" in args
-                return run([args[0], "-S", socket, *args[1:]], **{**kwargs, "env": env})
-
-            monkeypatch.setattr(server.subprocess, "run", capture_from_isolated_socket)
+            # Bind the owned real endpoint to the normal shared consumer.
+            # Capture/admission/PID-start checks must use the same server;
+            # a capture-only subprocess mock would skip its transport proof.
+            server_pid = tmux("display-message", "-p", "#{pid}").stdout.strip()
+            monkeypatch.setenv("HOME", str(tmp_path))
+            monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / ".agentstack"))
+            monkeypatch.setenv("AGENTSTACK_LABEL_PREFIX", "org.agentstack.test.stall-wrap")
+            monkeypatch.setenv("TMUX", socket + "," + server_pid + ",0")
+            monkeypatch.delenv("TMUX_PANE", raising=False)
             monkeypatch.setattr(server, "_rt_cache", {})
             monkeypatch.setattr(server, "_provider_captures", {})
             server._agent_runtime("FixtureWrap", 101, "$1")

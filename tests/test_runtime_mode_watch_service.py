@@ -256,10 +256,12 @@ def test_watcher_auto_dispatch_uses_selected_config(server,monkeypatch,source):
 @pytest.mark.parametrize('source',['env','argument','equals'])
 def test_actual_watcher_wrapper_forwards_one_auto_entry(server,tmp_path,monkeypatch,source):
     import shutil,subprocess,sys
+    from _installed_client_payload import copy_client_library
     from test_global_runtime_delivery import ROOT
     root=tmp_path/'install';(root/'hooks').mkdir(parents=True);(root/'bin/lib').mkdir(parents=True)
     for name in ('runtime_client.py','global-client-loader.sh','agentstack-register.sh'):
         shutil.copyfile(ROOT/'bin/lib'/name,root/'bin/lib'/name)
+    copy_client_library(root)
     wrapper=root/'hooks/watch_agent_mail_signals.sh'
     shutil.copyfile(ROOT/'hooks/watch_agent_mail_signals.sh',wrapper)
     fake=tmp_path/'fake';fake.mkdir();python=fake/'python3'

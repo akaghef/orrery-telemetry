@@ -2,7 +2,9 @@
 
 # Decide explicit global context before loading any legacy environment/state.
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
-. "$_ags_global_loader" || exit 2
+. "$_ags_global_loader"
+_ags_legacy_consumer="$(dirname "$_ags_global_loader")/legacy-tmux-consumer.sh"
+if [[ -f "$_ags_legacy_consumer" ]]; then . "$_ags_legacy_consumer"; fi || exit 2
 if declare -F ags_client_entry >/dev/null; then
   if ags_client_entry spawn-child "$@"; then exit 0; else _ags_global_rc=$?; fi
   if [[ "$_ags_global_rc" != 125 ]]; then
@@ -190,12 +192,13 @@ terminal_adapter() {
 
 _open_child_terminal() {
     local child_name="$1"
-    local adapter shell_child shell_cmd
+    local adapter shell_child shell_cmd shell_helper
     adapter="$(terminal_adapter)"
     [[ "$adapter" == "none" ]] && return 0
 
     printf -v shell_child '%q' "$child_name"
-    shell_cmd="env -u TMUX -u TMUX_PANE tmux attach -t $shell_child"
+    printf -v shell_helper '%q' "$(dirname "$_ags_global_loader")/runtime_tmux_consumer.py"
+    shell_cmd="env -u TMUX -u TMUX_PANE python3 $shell_helper attach-session -t $shell_child"
     # Spawning a child is a background event: the window is opened so the user
     # CAN watch it, not so it steals what they are doing. `open -g` keeps it
     # behind the current app. Set AGENTSTACK_FOCUS_CHILD=1 to bring it forward.
@@ -203,7 +206,7 @@ _open_child_terminal() {
     [[ "${AGENTSTACK_FOCUS_CHILD:-}" == "1" ]] && open_bg=()
     case "$adapter" in
         ghostty)
-            if env -u TMUX -u TMUX_PANE open ${open_bg[@]+"${open_bg[@]}"} -na Ghostty.app --args --title="$child_name" -e tmux attach -t "$child_name" 2>/dev/null; then
+            if env -u TMUX -u TMUX_PANE open ${open_bg[@]+"${open_bg[@]}"} -na Ghostty.app --args --title="$child_name" -e python3 "$(dirname "$_ags_global_loader")/runtime_tmux_consumer.py" attach-session -t "$child_name" 2>/dev/null; then
                 echo "[spawn_child] Opened terminal window (${child_name}, adapter: ghostty)" >&2
             fi
             ;;
@@ -1476,17 +1479,11 @@ pane_normalize_nbsp() {
 }
 
 claude_pane_ready() {
-    local pane_text="$1" last_lines
+    local pane_text="$1" reader
     claude_trust_dialog_present "$pane_text" && return 1
-    last_lines="$(printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 8)"
-    printf '%s' "$last_lines" | grep -qE 'for shortcuts' && return 0
-    # Only an empty input row counts. A selected dialog row also starts with
-    # the cursor glyph ("❯ No, exit") and must not read as ready.
-    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*$' && return 0
-    # Claude Code 2.1.282 shows a placeholder in the empty input row
-    # ('❯ Try "fix lint errors"') and no "for shortcuts" footer.
-    printf '%s' "$last_lines" | grep -qE '^[[:space:]]*❯[[:space:]]*Try "' && return 0
-    return 1
+    reader="$(dirname "$_ags_global_loader")/terminal_state.py"
+    if [[ ! -f "$reader" ]]; then reader="$(dirname "$_ags_global_loader")/../../dashboard/terminal_state.py"; fi
+    printf '%s' "$pane_text" | python3 "$reader" spawn-ready
 }
 
 # Classifies the bottom-most active choice on the screen, by structure rather
@@ -2214,8 +2211,14 @@ codex_watch_initial_task() {
     while (( waited < wait_max && SECONDS < deadline )); do
         sleep 3
         waited=$((waited + 3))
-        pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"
-        if ! codex_session_alive "$session_name"; then
+        # A successful admitted capture already proves this exact session is
+        # present. Reuse that read within this poll; a second has-session
+        # would repeat the same socket/PID/root proof without adding an effect.
+        local captured_alive=false
+        if pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null)"; then
+            captured_alive=true
+        fi
+        if [[ "$captured_alive" != true ]] && ! codex_session_alive "$session_name"; then
             echo "[$log_prefix] Codex session '$session_name' died after ${waited}s; last pane output:" >&2
             printf '%s\n' "$pane_text" | tail -15 >&2
             return 2

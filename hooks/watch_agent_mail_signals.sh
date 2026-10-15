@@ -16,6 +16,8 @@ set -euo pipefail
 # Global delivery has one coordinator and never enters legacy notify-state.
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
 . "$_ags_global_loader"
+_ags_legacy_consumer="$(dirname "$_ags_global_loader")/legacy-tmux-consumer.sh"
+if [[ -f "$_ags_legacy_consumer" ]]; then . "$_ags_legacy_consumer"; fi
 ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
 if [[ "$_ags_selected_rc" == 0 ]]; then
     exec python3 "$(dirname "$_ags_global_loader")/runtime_client.py" watch-auto "$@"

@@ -26,8 +26,22 @@ def module_api(name):
     """Load code once per consumer process; placement/live data stays fresh."""
     with _CACHE_LOCK:
         if name not in _MODULES:
-            _MODULES[name] = runpy.run_path(str(Path(__file__).with_name(name + ".py")))
+            path = Path(__file__).with_name(name + ".py")
+            if name == "terminal_state" and not path.is_file():
+                path = Path(__file__).resolve().parents[2]/"dashboard/terminal_state.py"
+            _MODULES[name] = runpy.run_path(str(path))
         return _MODULES[name]
+
+class RuntimeAPIView:
+    """Load the same client functions only when the observation needs them."""
+    def __getitem__(self,name):
+        module='process_observation' if name in ('process_start','integer','remaining','ClientError') else 'runtime_client'
+        return module_api(module)[name]
+
+
+def runtime_api_view():
+    return RuntimeAPIView()
+
 
 SPEC = json.loads(Path(__file__).with_name('runtime_tmux_contract.json').read_text())
 CONTRACT = SPEC['contract']
@@ -43,6 +57,8 @@ class TargetError(RuntimeError):
 def result_schema(name):
     fields = SPEC['result_fields'][name]
     properties = {key: SPEC['result_properties'][key] for key in fields}
+    if 'reason' in properties:properties['reason']={'enum':list(REASONS)}
+    if 'capabilities' in properties:properties['capabilities']={'const':CAPABILITIES}
     if 'ok' in properties:
         properties['ok'] = {'const': name != 'error'}
     if 'allowed' in properties:
@@ -75,6 +91,10 @@ def check_pinned_transport(pinned, reply):
     return {**pinned,'server_pid':reply['server_pid']}
 
 
+def lstat_if_present(path):
+    return module_api('legacy_consumer')['lstat_if_present'](path)
+
+
 def private_directory(path, *, create=False):
     path = Path(path)
     if create:
@@ -84,7 +104,8 @@ def private_directory(path, *, create=False):
             pass
     info = path.lstat()
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-            or info.st_mode & 0o077 or path.resolve() != path):
+            or info.st_mode & 0o077 or info.st_mode & 0o700 != 0o700
+            or path.resolve() != path):
         raise TargetError('TMUX_DIRECTORY_UNSAFE')
     return path
 
@@ -104,9 +125,9 @@ def global_socket(client_home, mail_instance_id, *, base=None, create=False):
     # macOS sockaddr_un is the narrower supported boundary (104 bytes incl NUL).
     if len(os.fsencode(path)) >= 104:
         raise TargetError('TMUX_SOCKET_PATH_TOO_LONG')
-    if create or directory.exists() or directory.is_symlink():
+    if create or lstat_if_present(directory) is not None:
         private_directory(directory, create=create)
-    if path.exists() or path.is_symlink():
+    if lstat_if_present(path) is not None:
         validate_socket(path)
     return path
 
@@ -135,10 +156,10 @@ class Transport:
         if not self.binary:
             raise TargetError('TMUX_UNAVAILABLE')
         self.run = subprocess.run if run is None else run
-        if allow_absent and not self.path.exists() and not self.path.is_symlink():
+        if allow_absent and lstat_if_present(self.path) is None:
             if not self.path.is_absolute() or self.path.resolve() != self.path:
                 raise TargetError('TMUX_SOCKET_UNSAFE')
-            if self.path.parent.exists() or self.path.parent.is_symlink():
+            if lstat_if_present(self.path.parent) is not None:
                 private_directory(self.path.parent)
             self.identity = None
         else:
@@ -148,7 +169,7 @@ class Transport:
     def argv(self):
         return [self.binary, '-S', str(self.path)]
 
-    def command(self, *args, deadline=None):
+    def command(self, *args, deadline=None, input=None):
         if self.identity is None:
             raise TargetError('TMUX_TARGET_UNAVAILABLE')
         if validate_socket(self.path) != self.identity:
@@ -159,7 +180,7 @@ class Transport:
         env = {k: v for k, v in os.environ.items() if k not in ('TMUX', 'TMUX_PANE')}
         try:
             result = self.run([*self.argv, *args], capture_output=True, text=True,
-                              timeout=timeout, env=env)
+                              timeout=timeout, env=env, **({'input':input} if input is not None else {}))
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise TargetError('TMUX_TARGET_UNAVAILABLE') from exc
         if validate_socket(self.path) != self.identity:
@@ -198,12 +219,15 @@ def legacy_transport(*, run=None, binary=None, environ=None):
     global_parent = Path('/tmp').resolve() / ('orrery-tmux-' + str(os.getuid()))
     if path.parent == global_parent:
         raise TargetError('GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED')
-    if not inherited and not path.exists() and not path.is_symlink():
-        # A fresh legacy cockpit can display an empty roster before any tmux
-        # server exists. Pin its destination without creating a server.
-        return Transport(path, binary=binary, run=run, allow_absent=True)
-    transport = Transport(path, binary=binary, run=run)
+    transport = Transport(path, binary=binary, run=run, allow_absent=not inherited)
+    if transport.identity is None:
+        # Read-only bootstrap of an actually absent default endpoint.
+        return transport
     result = transport.command('display-message', '-p', '#{socket_path}\t#{pid}')
+    if module_api('legacy_consumer')['server_absent'](result):
+        # A safe stale socket is an empty server, not an unknown transport.
+        # Only inventory reads consume this result; targets still need proof.
+        return transport
     fields = result.stdout.strip().split('\t')
     if (result.returncode or len(fields) != 2 or not fields[1].isdigit()
             or Path(fields[0]) != path or (server_pid and fields[1] != server_pid)):
@@ -218,7 +242,7 @@ def panes(transport, *, session=None, pane=None, window=None, deadline=None):
     if session is not None:
         if not isinstance(session, str) or not session or any(c in session for c in '\r\n\0:'):
             raise TargetError('TMUX_TARGET_INPUT_INVALID')
-        args = ['list-panes', '-s', '-t', '=' + session]
+        args = ['list-panes', '-s', '-t', session if re.fullmatch(r'\$[0-9]+',session) else '=' + session]
     elif window is not None:
         if not isinstance(window,str) or re.fullmatch(r'@[0-9]+',window) is None:
             raise TargetError('TMUX_TARGET_INPUT_INVALID')
@@ -237,7 +261,7 @@ def panes(transport, *, session=None, pane=None, window=None, deadline=None):
         if (len(fields) != 4 or re.fullmatch(r'\$[0-9]+', fields[0]) is None
                 or re.fullmatch(r'%[0-9]+', fields[2]) is None
                 or not fields[3].isdigit() or int(fields[3]) < 1
-                or (session is not None and fields[1] != session)
+                or (session is not None and (fields[0] if re.fullmatch(r'\$[0-9]+',session) else fields[1]) != session)
                 or (pane is not None and fields[2] != pane)):
             raise TargetError('TMUX_TARGET_UNAVAILABLE')
         rows.append(dict(session_id=fields[0], session=fields[1], pane_id=fields[2], pid=int(fields[3])))
@@ -296,11 +320,9 @@ def installed_hints(home, deadline):
 def global_inventory(client_home, *, api=None, deadline=None):
     """One root reader for admission and repair diagnostics; no new state."""
     if api is None:
-        api = module_api('runtime_client')
+        api = runtime_api_view()
     deadline = time.monotonic()+5 if deadline is None else deadline
     home = Path(client_home)
-    operator_api = module_api('runtime_operator')
-    observation_api = module_api('runtime_observation')
     proofs, diagnostics = [], []
     homes = {home: None}
     def issue(name=None, instance=None, check='placement'):
@@ -331,7 +353,7 @@ def global_inventory(client_home, *, api=None, deadline=None):
             runtime = api['absolute'](context.get('runtime_root'))
             configs.add(runtime/'server-config.json')
         for path in configs:
-            operator = operator_api['RuntimeOperator'](path, api=api)
+            operator = module_api('runtime_operator')['RuntimeOperator'](path, api=api)
             homes[operator.clients_parent.parent] = operator.binding['expected_server_instance_id']
         if any(values.get('AGENTSTACK_RUNTIME_MODE','legacy') not in ('','legacy')
                for values in (installed,os.environ)) and not configs and not contexts:
@@ -375,11 +397,11 @@ def global_inventory(client_home, *, api=None, deadline=None):
                 if not isinstance(identity,dict) or not api['integer'](identity.get('agent_id'),1):
                     raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
                 runtime = api['absolute'](context.get('runtime_root'))
-                operator = operator_api['RuntimeOperator'](runtime/'server-config.json',api=api)
+                operator = module_api('runtime_operator')['RuntimeOperator'](runtime/'server-config.json',api=api)
                 if operator.clients_parent != parent:
                     raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
                 check = 'snapshot'
-                snapshot = observation_api['Observations'](operator,lambda _:None,deadline=deadline)
+                snapshot = module_api('runtime_observation')['Observations'](operator,lambda _:None,deadline=deadline)
                 value,digest = snapshot.snapshot(root,identity['agent_id'])
                 launch = value['launch']
                 for live in value['lives']:
@@ -474,6 +496,116 @@ def main(argv=None):
                       'failure_kind':REASONS[reason]},'error')
         return 70 if reason=='TMUX_HELPER_FAILED' else 2
 
+
+
+
+_TARGET_PATH = Path(__file__).with_name('runtime_tmux_target_contract.json')
+try:
+    TARGET_SPEC = json.loads(_TARGET_PATH.read_text())
+except (OSError, ValueError):
+    TARGET_SPEC = None
+if TARGET_SPEC is None:
+    CAPABILITIES = [name for name in CAPABILITIES if not name.startswith('global-target-')]
+TARGET_REASONS = {**REASONS, **({key:row['kind'] for key,row in TARGET_SPEC['reasons'].items()} if TARGET_SPEC else {})}
+
+def compact_readiness(text,provider):
+    return module_api('terminal_state')['compact_readiness'](text,provider)
+
+def compact_refusal(readiness):
+    return module_api('terminal_state')['compact_refusal'](readiness)
+
+def identity_digest(target,principal,proof):
+    return module_api('runtime_delivery')['digest'](
+        dict(version=1,target=target,principal=principal,proof=proof))
+
+
+def target_digest(target,principal,proof,readiness,screen=None,provider=None):
+    """Compact binds input/context evidence, never unrelated terminal prose."""
+    suffix = (module_api('terminal_state')['prompt_suffix'](screen,provider)
+              if screen is not None else None)
+    return module_api('runtime_delivery')['digest'](dict(
+        version=1,identity_sha256=identity_digest(target,principal,proof),
+        readiness=readiness,input_suffix=suffix))
+
+
+def target_result_schema(name):
+    if TARGET_SPEC is None:raise TargetError('TMUX_HELPER_FAILED')
+    row=TARGET_SPEC['result_tables'][name]
+    atoms={**TARGET_SPEC['schema_atoms'],'reason':{'enum':list(TARGET_REASONS)},'failure_kind':{'enum':list(TARGET_SPEC['kind_exit'])}}
+    props={key:atoms[key] for key in row['fields']}
+    props.update({key:{'const':value} for key,value in row.get('constants',{}).items()})
+    result={'type':'object','properties':props,'required':row['fields'],'additionalProperties':False}
+    if name=='error.before_effect':
+        return {'anyOf':[{**result,'properties':{**props,'failure_kind':{'const':kind},'reason':{'enum':[key for key,val in TARGET_REASONS.items() if val==kind]}}} for kind in TARGET_SPEC['kind_exit'] if kind!='outcome']}
+    return result
+
+def target_reason(exc):
+    if TARGET_SPEC is None:return 'TMUX_HELPER_FAILED'
+    inputs={source:key for key,row in TARGET_SPEC['reasons'].items() for source in row['reader_inputs']}
+    inputs.update({source:key for key,row in TARGET_SPEC['inherited_reader_inputs'].items() for source in row['reader_inputs']})
+    if isinstance(exc, (KeyError,TypeError,subprocess.SubprocessError)):return 'TMUX_HELPER_FAILED'
+    reason=str(exc)
+    return inputs.get(reason,reason if reason in TARGET_REASONS else 'TMUX_HELPER_FAILED')
+
+
+def LegacyConsumer(*args,**kwargs):
+    return module_api('legacy_consumer')['LegacyConsumer'](*args,transport_api=globals(),**kwargs)
+
+
+def endpoint_candidates(home,instance,launch=None):
+    dedicated=global_socket(home,instance)
+    if launch and launch.get('tmux_transport')=='global-instance':
+        return [('global-instance',Transport(dedicated))]
+    values=[]
+    environments=[os.environ,{k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')}]
+    seen=set()
+    for environment in environments:
+        try:legacy=legacy_transport(environ=environment)
+        except TargetError as exc:
+            if str(exc)=='GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED':continue
+            raise
+        if legacy.path not in seen:
+            seen.add(legacy.path);values.append(('legacy-default',legacy))
+    if launch is None and lstat_if_present(dedicated) is not None:values.append(('global-instance',Transport(dedicated)))
+    return values
+
+
+def verify_live_process(live,*,api,deadline=None):
+    if api['process_start'](live['pid'],deadline=deadline)!=live['process_start']:
+        raise TargetError('TMUX_TARGET_CHANGED')
+
+
+def verify_live_pane(transport,live,actual,*,api,deadline=None):
+    """Issue a proof only after all pane/screen observations have completed."""
+    rows=panes(transport,pane=actual['pane_id'],deadline=deadline)
+    fields=('pid','pane_id','session_id','session')
+    if len(rows)!=1 or any(rows[0][key]!=actual[key] for key in fields):
+        raise TargetError('TMUX_TARGET_CHANGED')
+    verify_live_process(live,api=api,deadline=deadline)
+
+
+def live_target(live,context,launch=None,*,api=None,deadline=None):
+    """Same explicit socket/pane/PID proof for observation and notifications."""
+    api=module_api('runtime_client') if api is None else api
+    if live.get('ended'):return None
+    if launch and any(live.get(k)!=launch.get(k) for k in ('launch_id','receipt_nonce')):raise TargetError('TMUX_TARGET_CHANGED')
+    start=api['process_start'](live.get('pid'),deadline=deadline)
+    if not start or start=='absent' or start!=live.get('process_start'):return None
+    found=[]
+    for kind,transport in endpoint_candidates(Path(context['agentstack_home']),context['expected_server_instance_id'],launch):
+        try:rows=panes(transport,pane=live.get('pane_id'),deadline=deadline)
+        except TargetError as exc:
+            if str(exc)=='TMUX_TARGET_UNAVAILABLE':continue
+            raise
+        for row in rows:
+            if row['pid']!=live['pid']:continue
+            if launch:
+                expected=context['identity']['name'] if kind=='global-instance' else 'orrery-'+launch['launch_id']
+                if row['session']!=expected:raise TargetError('TMUX_TARGET_CHANGED')
+            verify_live_pane(transport,live,row,api=api,deadline=deadline)
+            found.append((transport,row))
+    if len(found)>1:raise TargetError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+    return found[0] if found else None
 
 if __name__ == '__main__':
     raise SystemExit(main())

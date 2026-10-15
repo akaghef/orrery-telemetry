@@ -827,6 +827,8 @@ def test_new_agent_strips_the_cli_env_defaults_from_the_launcher(monkeypatch, tm
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: subprocess.CompletedProcess([], 1, "", ""))
     monkeypatch.setattr(server.subprocess, "Popen", popen)
     spec = server.SpawnLaunchSpec(
         provider="claude", program="claude-code", model="claude-opus-5-5",

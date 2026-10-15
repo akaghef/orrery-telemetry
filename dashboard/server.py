@@ -565,10 +565,35 @@ WARMUP_NAMES = {"warm-opus", "warm-sonnet"}
 # --------------------------------------------------------------------------- #
 # tmux
 # --------------------------------------------------------------------------- #
+
+def _legacy_tmux_consumer():
+    path=Path(HOOKS_DIR).parent/'bin/lib/runtime_tmux.py'
+    if not path.is_file():
+        # Mode admission above already rejected an unresolved global install.
+        if GLOBAL_MODE or _MODE_API['unproven_client_placement'](Path(HOOKS_DIR).parent):raise RuntimeError('GLOBAL_TARGET_HELPER_UNAVAILABLE')
+        return None
+    api=(_MODE_API['runtime_tmux_api']() if 'runtime_tmux_api' in _MODE_API else _runtime_runpy.run_path(str(path)))
+    home=Path(os.environ.get('AGENTSTACK_HOME',str(Path(HOOKS_DIR).parent)))
+    if 'LegacyConsumer' in api:return api['LegacyConsumer'](home)
+    factory=path.with_name('legacy_consumer.py')
+    if factory.is_file():
+        return _runtime_runpy.run_path(str(factory))['LegacyConsumer'](home,transport_api=api)
+    # An older complete transport may prove a pure legacy placement; otherwise
+    # absence of the adapter is not permission to type into an unknown pane.
+    if 'global_inventory' in api:
+        inventory=api['global_inventory'](home)
+        if inventory['global_complete'] and not inventory['proofs']:return None
+    raise RuntimeError('GLOBAL_TARGET_HELPER_UNAVAILABLE')
+
+def _tmux_run(args,**kwargs):
+    consumer=_legacy_tmux_consumer()
+    if consumer is None:return subprocess.run(['tmux',*args],**kwargs)
+    return consumer.command(args,**kwargs)
+
 def _tmux(args: list[str]) -> str:
     try:
-        out = subprocess.run(
-            ["tmux", *args],
+        out = _tmux_run(
+            args,
             capture_output=True,
             text=True,
             timeout=5,
@@ -2354,9 +2379,7 @@ def _valid(session: str) -> bool:
 
 
 def _has_session(session: str) -> bool:
-    return subprocess.run(
-        ["tmux", "has-session", "-t", f"={session}"], capture_output=True
-    ).returncode == 0
+    return _tmux_run(['has-session', '-t', f'={session}'], capture_output=True).returncode == 0
 
 
 ITERM_OSA = """
@@ -2479,11 +2502,29 @@ def _write_wt_launcher(tmux_args: list[str], title: str) -> str:
     return path
 
 
+def _legacy_terminal_argv(tmux_args: list[str]) -> list[str]:
+    """Admit now and re-admit inside the actual terminal/ttyd child."""
+    if not tmux_args or tmux_args[0] != 'tmux':
+        return tmux_args
+    consumer = _legacy_tmux_consumer()
+    if consumer is None:
+        return tmux_args
+    consumer.admitted_argv(tmux_args[1:])
+    helper = Path(HOOKS_DIR).parent / 'bin/lib/runtime_tmux_consumer.py'
+    transport = consumer.transport
+    fixed = ['env', 'AGENTSTACK_HOME='+str(consumer.home)]
+    if transport.identity is not None:
+        fixed.append('TMUX='+str(transport.path)+','+str(transport.server_pid)+',0')
+    else:
+        fixed = ['env', '-u', 'TMUX', 'AGENTSTACK_HOME='+str(consumer.home), 'TMUX_TMPDIR='+str(transport.path.parent.parent)]
+    return [*fixed, sys.executable, str(helper), *tmux_args[1:]]
+
+
 def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
     adapter = _terminal_adapter()
-    if adapter == "none":
-        return _terminal_unsupported()
+    if adapter == "none":return _terminal_unsupported()
     try:
+        tmux_args = _legacy_terminal_argv(tmux_args)
         if adapter == "ghostty":
             cmd = [
                 "env", "-u", "TMUX", "-u", "TMUX_PANE",
@@ -2533,8 +2574,11 @@ def _launch_resume_tmux(tmux_args: list[str], title: str, open_terminal: bool | 
     # -A would attach to an existing session and block the HTTP request.
     detached = ["-d" if arg == "-A" else arg for arg in tmux_args]
     try:
-        result = subprocess.run(["env", "-u", "TMUX", "-u", "TMUX_PANE", *detached],
-                                capture_output=True, text=True, timeout=8)
+        if detached and detached[0]=='tmux':
+            result = _tmux_run(detached[1:],capture_output=True,text=True,timeout=8)
+        else:
+            result = subprocess.run(["env", "-u", "TMUX", "-u", "TMUX_PANE", *detached],
+                                    capture_output=True,text=True,timeout=8)
     except Exception as exc:
         return {"ok": False, "error": f"detached tmux launch failed: {exc}"}
     if result.returncode:
@@ -2555,7 +2599,7 @@ def _launch_claude_resume_tmux(tmux_args: list[str], title: str,
     control_env = {key: value for key, value in os.environ.items() if key not in {"TMUX", "TMUX_PANE"}}
 
     def tmux(*args):
-        result = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=8, env=control_env)
+        result = _tmux_run([*args], capture_output=True, text=True, timeout=8, env=control_env)
         if result.returncode:
             raise RuntimeError("tmux resume preparation failed")
         return result.stdout.strip()
@@ -2605,8 +2649,7 @@ def _launch_claude_resume_tmux(tmux_args: list[str], title: str,
             # The tmux request can time out after creating the gated session.
             # Its unique name is safe to clean even when no receipt was returned.
             try:
-                subprocess.run(["tmux", "kill-session", "-t", f"={staging}"],
-                               capture_output=True, text=True, timeout=8, env=control_env)
+                _tmux_run(['kill-session', '-t', f'={staging}'], capture_output=True, text=True, timeout=8, env=control_env)
             except Exception:
                 errors.append("Prepared Claude session cleanup could not be confirmed")
         if old_renamed:
@@ -2923,11 +2966,7 @@ def _transcript_path(session: str) -> str | None:
     chosen_score = 0
 
     # 1) 稼働中: tmux ペイン cwd 由来
-    out = subprocess.run(
-        ["tmux", "display-message", "-p", "-t", session,
-         "#{pane_current_path}"],
-        capture_output=True, text=True, timeout=4,
-    )
+    out = _tmux_run(['display-message', '-p', '-t', session, '#{pane_current_path}'], capture_output=True, text=True, timeout=4)
     cwd = (out.stdout or "").strip()
     if out.returncode == 0 and cwd:
         d = os.path.join(CLAUDE_PROJECTS, re.sub(r"[^A-Za-z0-9]", "-", cwd))
@@ -5817,6 +5856,10 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
     return payload
 
 
+try:
+    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE)
+except ModuleNotFoundError:
+    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE)
 # --------------------------------------------------------------------------- #
 # Agent runtime probe — コンテキスト残量(HP) + 動作状態を tmux ペインから読む
 #   Claude Code / Codex の TUI 表示を read-only パース。新データ源は持たない。
@@ -5828,18 +5871,10 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
 #     N% left" は Codex のみ）なので両方 try しても誤マッチしない。各 Codex
 #     書式は実ペインで確証済み（cxprobe 観測 2026-06-02）。
 # --------------------------------------------------------------------------- #
-_CTX_RE = re.compile(r"ctx:\s*(\d+)%\s*used")
 # Codex ステータスライン: "gpt-5.5 medium · Context 70% left · ~/path"。
 #   "left"=残量(→used=100-N) / "used"=使用率。Claude の _CTX_RE と排他。
-_CTX_CODEX_LEFT_RE = re.compile(r"Context\s+(\d+)%\s*left", re.IGNORECASE)
-_CTX_CODEX_USED_RE = re.compile(r"Context\s+(\d+)%\s*used", re.IGNORECASE)
 # 生成中: 入力ロック中ヒント or 経過時間+トークンカウンタの作業ステータス行
 #   実測例: "✽ Stewing… (2m 46s · ↓ 8.5k tokens · thought for 1s)"
-_WORK_RE = re.compile(
-    r"esc to interrupt"
-    r"|·\s*[↑↓]?\s*[\d.]+k?\s*tokens"
-    r"|\(\s*\d+m\s+\d+s\s*·"
-)
 # Claude Code 新TUI (2026-08 実測): タスクwidget 稼働時のスピナー行は
 #   "✽ <進行中タスク名>…" だけになり、esc to interrupt・経過時間・token 数が
 #   一切出ない → _WORK_RE 全滅で work が wait に化ける。グリフ行＋折返し2行以内の
@@ -5854,33 +5889,19 @@ _WORK_RE = re.compile(
 #         スピナーは末尾が duration でないので巻き添えにならない）
 #   全 tmux 37 セッションで現行版と比較し、落ちるのは誤検知1体のみ・正しい
 #   work 判定は不変であることを実測済み。
-_WORK_CLAUDE_TASK_RE = re.compile(
-    r"(?m)"
-    r"^[ \t\xa0]*[✢✳✶✻✽✺·][ \t\xa0]+"
-    r"(?![^\n]*\bfor\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*$)"
-    r"\S(?:[^\n]*\S[^\n]*\n){0,2}[^\n]*…"
-    r"|^[ \t\xa0]*[✢✳✶✻✽✺][ \t\xa0]*$")
 # Codex 生成中スピナー行: "• Working (1s • esc to interrupt)" / "• Thinking (…"。
 #   "esc to interrupt" は _WORK_RE でも拾えるが、文言変更に備え spinner+経過尺
 #   (… (Ns) という形)も正本にする。prose 誤マッチを避けるため経過尺を必須化。
-_WORK_CODEX_RE = re.compile(
-    r"(?m)^\s*[•▌●]\s*(?:Working|Thinking)\b[^\n]*\(\s*\d+\s*s\b")
 # 承認待ち: 権限プロンプト "Do you want to …?" + 番号付き選択(❯ 1. …)。
 #   旧 y/n 系もフォールバック。※実プロンプトで書式確定させること。
-_ASK_Q_RE = re.compile(r"Do you want to .+\?|Would you like to proceed")
-_ASK_OPT_RE = re.compile(r"(?m)^\s*[❯>›]?\s*1\.\s")
-_ASK_YN_RE = re.compile(r"\?\s*[\[(]y/n[\])]", re.IGNORECASE)
 # Codex 承認待ちモーダルの確定フッター。番号付き選択のセレクタが › (U+203A)
 #   で Claude と別字形なので、常時出るこのフッター行を正本にする。
 #   実ペイン: "Press enter to confirm or esc to cancel"。
-_ASK_CODEX_RE = re.compile(
-    r"Press\s+enter\s+to\s+confirm\s+or\s+esc\s+to\s+cancel", re.IGNORECASE)
 # AskUserQuestion ウィジェット: フッターに "Enter to select" + "Esc to cancel" が
 # 同じ 1 行に並ぶ（中黒 · や Tab/Arrow keys を挟む）。DOTALL にすると過去スク
 # ロールに残った報告本文等にも誤マッチするため敢えて単一行にする。
 # 2026-05-20 FrostyEinstein が完了報告本文に regex 文字列を書いた瞬間、自分自身が
 # question 判定される自己マッチ事故が発生。
-_QUESTION_RE = re.compile(r"Enter to select.{0,80}Esc to cancel")
 # コンテキスト窓: ステータスラインの "Opus 4.7 (1M context)" を直読み。
 #   登録モデル文字列より確実（実セッションが報告する値そのもの）。
 _WIN_RE = re.compile(r"\(\s*([\d.]+\s*[MK])\s*context\s*\)", re.IGNORECASE)
@@ -6183,11 +6204,7 @@ def _agent_runtime(
            "pane_model": None}
     if _valid(session):
         try:
-            r = subprocess.run(
-                ["tmux", "capture-pane", "-p", "-J",
-                 "-t", session, "-S", "-45"],
-                capture_output=True, text=True, timeout=3,
-            )
+            r = _tmux_run(['capture-pane', '-p', '-J', '-t', session, '-S', '-45'], capture_output=True, text=True, timeout=3)
             if r.returncode == 0:
                 out = _parse_runtime(r.stdout)
                 with _rt_lock:
@@ -6220,11 +6237,7 @@ def term_capture(session: str, lines: int) -> dict:
     lines = max(40, min(4000, lines))
     # capture-pane の -t はペイン指定。= 接頭辞は不可なのでセッション名を
     # そのまま渡す(存在は上で has-session -t =session で厳密確認済み)。
-    out = subprocess.run(
-        ["tmux", "capture-pane", "-e", "-p", "-J",
-         "-t", session, "-S", f"-{lines}"],
-        capture_output=True, text=True, timeout=6,
-    )
+    out = _tmux_run(['capture-pane', '-e', '-p', '-J', '-t', session, '-S', f'-{lines}'], capture_output=True, text=True, timeout=6)
     if out.returncode != 0:
         return {"ok": False, "error": "capture-pane 失敗"}
     return {"ok": True, "session": session, "content": out.stdout}
@@ -6261,7 +6274,15 @@ def ttyd_ensure(session: str) -> dict:
     if not os.path.exists(TTYD_BIN):
         return {"ok": False, "error": "ttyd が見つかりません"}
     with _TTYD_LOCK:
+        try:
+            attach_args = _legacy_terminal_argv(['tmux', 'attach', '-t', f'={session}'])
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            return {'ok': False, 'error': str(exc)}
         rec = _TTYD.get(session)
+        if rec and _ttyd_alive(rec) and rec.get('attach_args') != attach_args:
+            _ttyd_kill(rec)
+            _TTYD.pop(session, None)
+            rec = None
         if rec and _ttyd_alive(rec):
             rec["last"] = time.time()
             return {"ok": True, "url": f"http://127.0.0.1:{rec['port']}/",
@@ -6274,11 +6295,11 @@ def ttyd_ensure(session: str) -> dict:
              "-m", "3", "-t", "fontSize=13",
              "-t", "titleFixed=" + session,
              "-t", "disableLeaveAlert=true",
-             "tmux", "attach", "-t", f"={session}"],
+             *attach_args],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        _TTYD[session] = {"proc": proc, "port": port, "last": time.time()}
+        _TTYD[session] = {"proc": proc, "port": port, "last": time.time(), "attach_args": attach_args}
     time.sleep(0.5)  # ttyd の listen 開始を待つ
     if proc.poll() is not None:
         return {"ok": False, "error": "ttyd 起動失敗"}
@@ -6487,10 +6508,7 @@ def _do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
             return _resume_unavailable(capability)
         if program.startswith("claude"):
             return do_resume(session, replace_husk=True, **preference)
-        subprocess.run(
-            ["tmux", "kill-session", "-t", f"={session}"],
-            capture_output=True,
-        )
+        _tmux_run(['kill-session', '-t', f'={session}'], capture_output=True)
         return do_resume(session, **preference)
 
     if open_terminal is False:
@@ -6616,10 +6634,7 @@ def do_kill(session: str, mode: str = "both") -> dict:
     # 2) tmux kill (husk shell があれば)
     if mode in ("both", "tmux"):
         if _has_session(session):
-            r = subprocess.run(
-                ["tmux", "kill-session", "-t", f"={session}"],
-                capture_output=True, text=True,
-            )
+            r = _tmux_run(['kill-session', '-t', f'={session}'], capture_output=True, text=True)
             actions.append("tmux-killed" if r.returncode == 0
                            else f"tmux-fail:{r.stderr.strip()}")
         else:
@@ -7715,8 +7730,7 @@ def _codex_self_update_on_screen(session: str) -> bool:
     left neither the old nor the new codex usable on the machine (#60).
     """
     try:
-        result = subprocess.run(["tmux", "capture-pane", "-t", f"={session}", "-p"],
-                                capture_output=True, text=True, timeout=5)
+        result = _tmux_run(['capture-pane', '-t', f'={session}', '-p'], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return False
     pane = getattr(result, "stdout", "")
@@ -7998,9 +8012,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
             return
         try:
-            subprocess.run(
-                ["tmux", "kill-session", "-t", f"={child_name}"],
-                capture_output=True, text=True)
+            _tmux_run(['kill-session', '-t', f'={child_name}'], capture_output=True, text=True)
         except OSError:
             pass
 
@@ -8154,9 +8166,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                         f"{reason} ({error})" if reason else error,
                         detail=tail)
 
-            probe = subprocess.run(
-                ["tmux", "has-session", "-t", f"={child_name}"],
-                capture_output=True, text=True)
+            probe = _tmux_run(['has-session', '-t', f'={child_name}'], capture_output=True, text=True)
             if probe.returncode:
                 kill_spawn_session()
                 remove_spawn_credentials()
@@ -8242,10 +8252,7 @@ def _tmux_session_env(session: str, key: str) -> str:
     """Read one tmux session environment value without executing shell text."""
     if not _valid(session) or re.fullmatch(r"[A-Z0-9_]+", key or "") is None:
         return ""
-    result = subprocess.run(
-        ["tmux", "show-environment", "-t", f"={session}", key],
-        capture_output=True, text=True, timeout=3,
-    )
+    result = _tmux_run(['show-environment', '-t', f'={session}', key], capture_output=True, text=True, timeout=3)
     if result.returncode != 0:
         return ""
     line = (result.stdout or "").strip()
@@ -8257,10 +8264,7 @@ def _fresh_agent_process_pid(session: str, program: str | None) -> int | None:
     """Re-read tmux + ps immediately before a destructive provider signal."""
     if not _valid(session) or not _supports_agent_process_liveness(program):
         return None
-    pane = subprocess.run(
-        ["tmux", "display-message", "-t", session, "-p", "#{pane_pid}"],
-        capture_output=True, text=True, timeout=3,
-    )
+    pane = _tmux_run(['display-message', '-t', session, '-p', '#{pane_pid}'], capture_output=True, text=True, timeout=3)
     try:
         pane_pid = int((pane.stdout or "").strip()) if pane.returncode == 0 else 0
     except ValueError:
@@ -8290,10 +8294,7 @@ def _pane_agent_process(session: str, ps_output: str | None = None) -> str:
     instead of trusting the leader's name.
     """
     if ps_output is None:
-        pid_r = subprocess.run(
-            ["tmux", "display-message", "-t", session, "-p", "#{pane_pid}"],
-            capture_output=True, text=True,
-        )
+        pid_r = _tmux_run(['display-message', '-t', session, '-p', '#{pane_pid}'], capture_output=True, text=True)
         try:
             pane_pid = int(pid_r.stdout.strip())
         except ValueError:
@@ -8396,10 +8397,7 @@ def do_exit(session: str) -> dict:
     # pane で動いているプロセスを確認
     # Claude Code は Python プロセス → "Python" / シェルゾンビは "zsh"/"bash" 等
     _SHELL_PROCS = {"zsh", "bash", "sh", "fish", "csh", "tcsh", "dash"}
-    pane_cmd_r = subprocess.run(
-        ["tmux", "display-message", "-t", session, "-p", "#{pane_current_command}"],
-        capture_output=True, text=True,
-    )
+    pane_cmd_r = _tmux_run(['display-message', '-t', session, '-p', '#{pane_current_command}'], capture_output=True, text=True)
     pane_cmd = pane_cmd_r.stdout.strip().lower()
 
     # build_agents() resolves Codex liveness from the shared process snapshot
@@ -8416,26 +8414,17 @@ def do_exit(session: str) -> dict:
             actions.append(f"wrapper-shell:{pane_cmd}>{agent_proc}")
 
     if pane_cmd in _SHELL_PROCS and target["category"] == "finished" and not agent_proc:
-        r = subprocess.run(
-            ["tmux", "send-keys", "-t", session, "exit", "Enter"],
-            capture_output=True, text=True,
-        )
+        r = _tmux_run(['send-keys', '-t', session, 'exit', 'Enter'], capture_output=True, text=True)
         if r.returncode != 0:
             return {"ok": False, "error": f"tmux send-keys failed: {r.stderr.strip()}"}
         actions.append("shell-exit-sent")
         actions.append(f"zombie-pane:{pane_cmd}")
     else:
-        r = subprocess.run(
-            ["tmux", "send-keys", "-t", session, "-l", "/exit"],
-            capture_output=True, text=True,
-        )
+        r = _tmux_run(['send-keys', '-t', session, '-l', '/exit'], capture_output=True, text=True)
         if r.returncode != 0:
             return {"ok": False, "error": f"tmux send-keys failed: {r.stderr.strip()}"}
         time.sleep(0.3)
-        r = subprocess.run(
-            ["tmux", "send-keys", "-t", session, "C-m"],
-            capture_output=True, text=True,
-        )
+        r = _tmux_run(['send-keys', '-t', session, 'C-m'], capture_output=True, text=True)
         if r.returncode != 0:
             return {"ok": False, "error": f"tmux send-keys failed: {r.stderr.strip()}"}
         actions.append("exit-sent")
@@ -9280,9 +9269,8 @@ def _child_session_live(name: str, boot: float | None) -> bool | None:
     """
     try:
         # Under the lease lock: keep it shorter than a lease writer waits (10 s).
-        done = subprocess.run(["tmux", "has-session", "-t", f"={name}"],
-                              capture_output=True, text=True, timeout=2)
-    except (OSError, subprocess.SubprocessError):
+        done = _tmux_run(['has-session', '-t', f'={name}'], capture_output=True, text=True, timeout=2)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
         return None
     if done.returncode == 0:
         return True

@@ -10,6 +10,8 @@ import subprocess
 import threading
 import time
 import uuid
+import tempfile
+import socket as socket_module
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -28,14 +30,17 @@ def retired_signals(tmp_path, monkeypatch):
     agents = signals / 'projects/probe/agents'
     retired = agents / 'RetiredRecipient'
     retired.mkdir(parents=True)
-    socket = 'mail-health-226-' + uuid.uuid4().hex
     tmux = shutil.which('tmux')
     if tmux is None:
         pytest.skip('tmux is required')
+    private_tmux = tempfile.TemporaryDirectory(prefix='r2mh-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None)
+    monkeypatch.setenv('TMUX_TMPDIR',str(Path(private_tmux.name).resolve()))
+    monkeypatch.delenv('TMUX',raising=False)
+    monkeypatch.delenv('TMUX_PANE',raising=False)
     commands = tmp_path / 'bin'
     commands.mkdir()
     wrapper = commands / 'tmux'
-    wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(tmux) + ' -L ' + shlex.quote(socket) + ' "$@"\n')
+    wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(tmux) + ' "$@"\n')
     wrapper.chmod(0o755)
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setenv('PATH', str(commands) + ':' + os.environ['PATH'])
@@ -88,6 +93,7 @@ def retired_signals(tmp_path, monkeypatch):
         yield home, runtime, signals, agents, write_signal
     finally:
         subprocess.run([str(wrapper), 'kill-server'], capture_output=True, timeout=10)
+        private_tmux.cleanup()
 
 
 def test_retired_signal_backlog_does_not_make_healthy_delivery_red(retired_signals):
@@ -183,8 +189,18 @@ def test_session_measurement_failures_are_not_absence(monkeypatch, failure):
         if failure == 'missing-tool':
             raise FileNotFoundError('tmux')
         return subprocess.CompletedProcess(args[0], 1, '', 'permission denied')
-    monkeypatch.setattr(mail_signals.subprocess, 'run', fail)
-    assert mail_signals.session_names() is None
+    # A tool failure is distinct from the positively absent default socket.
+    # Own a short-lived fixture socket; never borrow the runner's/live server.
+    with tempfile.TemporaryDirectory(prefix='r2mf-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as name:
+        base=Path(name).resolve()
+        parent=base/('tmux-'+str(os.getuid()));parent.mkdir(mode=0o700)
+        with socket_module.socket(socket_module.AF_UNIX) as stream:
+            stream.bind(str(parent/'default'));(parent/'default').chmod(0o600)
+            monkeypatch.setenv('TMUX_TMPDIR',str(base))
+            monkeypatch.delenv('TMUX',raising=False)
+            monkeypatch.delenv('TMUX_PANE',raising=False)
+            monkeypatch.setattr(mail_signals.subprocess, 'run', fail)
+            assert mail_signals.session_names() is None
 
 
 def test_prune_is_opt_in_and_rechecks_sessions_and_signal_identity(tmp_path, monkeypatch):
@@ -256,8 +272,21 @@ def test_prune_cannot_follow_symlinked_signal_ancestors(tmp_path, monkeypatch):
 @pytest.mark.parametrize('diagnostic', ['no server running on /tmp/fixture-socket', 'no sessions', 'error connecting to /tmp/fixture-socket (No such file or directory)'])
 def test_known_absent_server_means_no_sessions(monkeypatch, diagnostic):
     from dashboard import mail_signals
-    monkeypatch.setattr(mail_signals.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a[0], 1, '', diagnostic))
-    assert mail_signals.session_names() == set()
+    # Exercise the shared consumer rather than duplicating its classification
+    # in an HTTP/dashboard double.
+    with tempfile.TemporaryDirectory(prefix='absent-health-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as name:
+        base = Path(name).resolve()
+        parent = base / ('tmux-' + str(os.getuid()))
+        parent.mkdir(mode=0o700)
+        with socket_module.socket(socket_module.AF_UNIX) as stream:
+            stream.bind(str(parent / 'default'))
+            (parent / 'default').chmod(0o600)
+            monkeypatch.setenv('TMUX_TMPDIR', str(base))
+            monkeypatch.delenv('TMUX', raising=False)
+            monkeypatch.delenv('TMUX_PANE', raising=False)
+            monkeypatch.setattr(mail_signals.subprocess, 'run', lambda argv, **kw:
+                                subprocess.CompletedProcess(argv, 1, '', diagnostic))
+            assert mail_signals.session_names() == set()
 
 
 def test_legacy_signals_and_exact_session_names(tmp_path, monkeypatch):
@@ -301,6 +330,7 @@ def test_cleanup_cli_uses_installed_environment_and_defaults_to_preview(tmp_path
     helper = home / '.agentstack/dashboard/mail_signals.py'
     helper.parent.mkdir(parents=True)
     shutil.copyfile(ROOT / 'dashboard/mail_signals.py', helper)
+    copy_client_library(home / '.agentstack')
     signals = home / 'configured-signals'
     folder = signals / 'projects/probe/agents/Absent'
     folder.mkdir(parents=True)
@@ -313,7 +343,9 @@ def test_cleanup_cli_uses_installed_environment_and_defaults_to_preview(tmp_path
     tmux = commands / 'tmux'
     tmux.write_text('#!/bin/sh\necho "no server running on fixture" >&2\nexit 1\n')
     tmux.chmod(0o755)
+    private_tmux = home / 'private-tmux'; private_tmux.mkdir(mode=0o700)
     env = {'HOME': str(home), 'PATH': str(commands) + ':' + os.environ['PATH'],
+           'TMUX_TMPDIR': str(private_tmux),
            'AGENTSTACK_SIGNALS_DIR': '~/configured-signals', 'AGENTSTACK_RUNTIME_DIR': '~/runtime'}
     preview = subprocess.run([sys.executable, str(helper)], env=env, capture_output=True, text=True, timeout=10)
     assert preview.returncode == 0, preview.stderr

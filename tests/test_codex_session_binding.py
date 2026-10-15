@@ -557,6 +557,8 @@ def _fake_codex_launch_env(
             "FAKE_TMUX_ALIVE": str(tmux_alive),
         }
     )
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(fake_bin, env)
     return env, workdir
 
 
@@ -1913,6 +1915,8 @@ def test_deck_new_agent_handoff_reaches_recorder_and_reader(
     # This handoff/recorder test isolates launch policy, which has real-process
     # integration coverage in test_spawn_child_codex_bin.py.
     monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy())
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", ""))
     with monkeypatch.context() as process_patch:
         process_patch.setattr(
             server.subprocess, "Popen", lambda args, **_kwargs: launched.append(args)

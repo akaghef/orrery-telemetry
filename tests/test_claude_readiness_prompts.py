@@ -169,6 +169,8 @@ def _launch(tmp_path, screens, *, die_after=0):
         "FAKE_DIE_AFTER": str(die_after),
     })
     env.pop("AGENTSTACK_SPAWN_INCIDENT_LOG", None)
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(bindir, env)
     pathlib.Path(env["HOME"]).mkdir()
     result = subprocess.run(
         ["/bin/bash", str(SPAWN), "--pre-registered", "Probe-Curie",
@@ -182,9 +184,9 @@ def _launch(tmp_path, screens, *, die_after=0):
 
 
 def _keys_with_screens(tmp_path):
-    """Each key the launcher sent, with the index of the screen then shown."""
+    """Keys by logical session; the raw file retains the guarded pane ID."""
     keys = tmp_path / "keys"
-    return keys.read_text(encoding="utf-8").splitlines() if keys.exists() else []
+    return [line.replace('-t %1', '-t Probe-Curie') for line in keys.read_text(encoding="utf-8").splitlines()] if keys.exists() else []
 
 
 def _keys(calls):

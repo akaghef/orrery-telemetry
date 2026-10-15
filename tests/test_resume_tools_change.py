@@ -487,6 +487,8 @@ def test_tmux_probe_unknown_refuses_before_staging(stopped, monkeypatch, failure
         return subprocess.CompletedProcess(args[0], 0 if failure == "finished" else 1,
             stdout="", stderr="can't find session" if failure == "absent" else "Permission denied")
     monkeypatch.setattr(server.subprocess, "run", run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, runtime.parent, server, run)
     monkeypatch.setattr(server, "_has_session", lambda name: failure == "finished")
     monkeypatch.setattr(server, "lookup_agent", lambda name: {"category": "finished"})
     monkeypatch.setattr(server, "do_resume", lambda *a, **k: {"ok": True, "action": "resumed"})

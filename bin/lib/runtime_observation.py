@@ -1,4 +1,5 @@
 """Read existing client truth without constructing clients, creating files or SQLite handles."""
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,10 @@ _CACHE = {}
 _CACHE_LOCK = threading.Lock()
 
 
+def unproven_app(snapshot,row=None):
+    return (row or {}).get('program')=='codex-app' or any('app_state' in x for x in snapshot['lives'])
+
+
 class Observations:
     def __init__(self, operator, parser, *, deadline=None):
         self.operator = operator
@@ -21,7 +26,7 @@ class Observations:
     def budget(self):
         return self.api['remaining'](self.deadline)
 
-    def snapshot(self, root, agent_id):
+    def snapshot(self, root, agent_id, *, lock_held=False):
         """A single noncreating shared-lock entry, also used for revalidation."""
         self.budget()
         api = self.api
@@ -31,7 +36,7 @@ class Observations:
         lock = runtime / 'child.lock'
         if not lock.exists() and not lock.is_symlink():
             raise api['ClientError']('OBSERVATION_MUTEX_UNAVAILABLE')
-        with api['observation_inode'](lock):
+        with (nullcontext() if lock_held else api['observation_inode'](lock)):
             values = {}
             def read(name, path, optional=False):
                 self.budget()
@@ -148,7 +153,7 @@ class Observations:
             if hit and time.monotonic() - hit[0] < 4.5:
                 state, sample = hit[1:]
             else:
-                state, _, text = self.api['pane_evidence'](live, deadline=self.deadline, lines=45)
+                state, _, text = self.api['pane_evidence'](live, deadline=self.deadline, lines=45, snapshot=snapshot)
                 sample = self.parser(text) if state == 'live' else None
                 with _CACHE_LOCK:
                     now = time.monotonic()
@@ -206,7 +211,7 @@ class Observations:
                 generation = row.get('credential_generation')
                 if generation is not None and generation != identity.get('credential_generation'):
                     raise self.api['ClientError']('CREDENTIAL_BINDING_MISMATCH')
-                if row.get('program') == 'codex-app' or any('app_state' in x for x in snapshot['lives']):
+                if unproven_app(snapshot,row):
                     item['reason'] = 'APP_ACTIVITY_UNPROVEN'
                 else:
                     item.update(self.activity(snapshot, digest, row))

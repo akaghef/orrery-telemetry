@@ -1141,8 +1141,10 @@ class RuntimeDelivery(RuntimeFiles):
         for _,live in reversed(self.live_rows(row['launch_id'])):
             pane=live.get('pane_id')
             if not pane or live.get('ended'):continue
-            state, target, _ = self.api['pane_evidence'](live)
-            if state == 'live':return target
+            state, target, _ = self.api['pane_evidence'](live,snapshot={'context':self.client.config,'launch':row})
+            if state == 'live':
+                found=self.api['runtime_tmux_api']()['live_target'](live,self.client.config,row,api=self.api)
+                if found:return found
         return None
 
     def deliver_persistent(self, mid):
@@ -1176,21 +1178,27 @@ class RuntimeDelivery(RuntimeFiles):
             return self.callback(mid,prepared['attempt_id'])
 
     def deliver_tmux(self, mid):
-        target=self.tmux_target()
+        matched=self.tmux_target()
+        target=matched[1]['pane_id'] if matched else None
         prepared=self.prepare(mid,'tmux',admissible=target is not None)
         if prepared['state']!='handoff':return prepared
         # No local mutex is held while invoking tmux or waiting for it.
         buffer='orrery-'+prepared['attempt_id']
         try:
-            loaded=subprocess.run(['tmux','load-buffer','-b',buffer,'-'],input=prepared['notification'],text=True,capture_output=True,timeout=5)
+            transport=matched[0]
+            loaded=transport.command('load-buffer','-b',buffer,'-',input=prepared['notification'])
             if loaded.returncode:
                 return self.callback(mid,prepared['attempt_id'],known_failure=True)
-            pasted=subprocess.run(['tmux','paste-buffer','-d','-p','-b',buffer,'-t',target],capture_output=True,timeout=5)
+            current=self.tmux_target()
+            if not current or current[0].path!=transport.path or current[1]!=matched[1]:return self.callback(mid,prepared['attempt_id'])
+            pasted=transport.command('paste-buffer','-d','-p','-b',buffer,'-t',target)
             if pasted.returncode:
                 return self.callback(mid,prepared['attempt_id'])
-            submitted=subprocess.run(['tmux','send-keys','-t',target,'C-m'],capture_output=True,timeout=5)
+            current=self.tmux_target()
+            if not current or current[0].path!=transport.path or current[1]!=matched[1]:return self.callback(mid,prepared['attempt_id'])
+            submitted=transport.command('send-keys','-t',target,'C-m')
             return self.callback(mid,prepared['attempt_id'],confirmed=submitted.returncode==0)
-        except (OSError,subprocess.TimeoutExpired):
+        except (OSError,RuntimeError,subprocess.TimeoutExpired):
             return self.callback(mid,prepared['attempt_id'])
 
     def intent_ids(self):

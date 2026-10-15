@@ -1186,15 +1186,58 @@ def test_reregister_observe_only_has_distinct_output_and_status(prepared):
 
 
 def test_waiting_client_survives_another_process_metadata_update(prepared, monkeypatch):
+    import inspect
+    import time
     module = runpy.run_path(str(ROOT / 'bin/agentstack-await-reply'))
     context_before = prepared['client_path'].read_bytes()
+    diagnostics = {'rpc_errors': [], 'registration_seconds': None}
     def waiting(fetch, **kwargs):
-        assert isinstance(fetch(), list)
+        deadline = inspect.getclosurevars(fetch).nonlocals['global_deadline']
+        def fetch_checked(phase):
+            def trace_exception(frame, event, arg):
+                if frame.f_code is not fetch.__code__:
+                    return None
+                if event == 'exception':
+                    kind, exc, _ = arg
+                    chain = []
+                    current = exc
+                    seen = set()
+                    while isinstance(current, BaseException) and id(current) not in seen:
+                        seen.add(id(current))
+                        chain.append({'type': type(current).__name__,
+                                      'errno': getattr(current, 'errno', None)})
+                        current = current.__cause__ or getattr(current, 'reason', None)
+                    # Record exception classes/errno, never request arguments,
+                    # credentials, URLs, or filesystem paths.
+                    diagnostics['rpc_errors'].append({
+                        'type': kind.__name__, 'chain': chain,
+                        'reason': str(exc) if kind.__name__ == 'ClientError' else None,
+                    })
+                return trace_exception
+            started = time.monotonic()
+            previous_trace = sys.gettrace()
+            try:
+                sys.settrace(trace_exception)
+                rows = fetch()
+            finally:
+                sys.settrace(previous_trace)
+            finished = time.monotonic()
+            assert isinstance(rows, list), json.dumps({
+                'phase': phase, 'fetch_seconds': finished - started,
+                'elapsed_since_main': finished - main_started,
+                'deadline_remaining_before': deadline - started,
+                'deadline_remaining_after': deadline - finished,
+                **diagnostics,
+            }, indent=2, sort_keys=True)
+        fetch_checked('before-metadata-update')
+        registration_started = time.monotonic()
         result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', 'claude-code', 'changed-model', bash=True)
+        diagnostics['registration_seconds'] = time.monotonic() - registration_started
         assert result.returncode == 0, result.stderr
-        assert isinstance(fetch(), list)
+        fetch_checked('after-metadata-update')
         return 124, None
     monkeypatch.setitem(module['main'].__globals__, 'wait_for_reply', waiting)
+    main_started = time.monotonic()
     assert module['main'](['--agent-name', 'obsolete-name', '--timeout', '5']) == 124
     assert prepared['client_path'].read_bytes() == context_before
     assert metadata_row(prepared) == ('claude-code', 'changed-model')

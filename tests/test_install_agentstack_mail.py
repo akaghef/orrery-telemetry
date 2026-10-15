@@ -958,7 +958,7 @@ def test_bundled_watcher_reads_agentstack_per_message_signal(tmp_path):
     _write_command(
         fake_bin,
         "tmux",
-        """#!/bin/sh
+        """#!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
 case "$1" in
   has-session) exit 0 ;;
@@ -1000,7 +1000,7 @@ esac
     env = os.environ.copy()
     env.update(
         {
-            "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": f"{fake_bin}:{pathlib.Path(sys.executable).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
             "FAKE_TMUX_LOG": str(tmux_log),
             "AGENTSTACK_MAIL_HOME": str(tmp_path / "mail-home"),
             "AGENTSTACK_SIGNALS_DIR": str(signals),
@@ -1009,6 +1009,9 @@ esac
             "TMUX_TIMEOUT": "2",
         }
     )
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(fake_bin, env)
+    pathlib.Path(env['FAKE_TMUX_SESSION_FILE']).write_text(json.loads(signal_file.read_text())['agent'])
     watcher = subprocess.Popen(
         ["/bin/bash", str(ROOT / "hooks" / "watch_agent_mail_signals.sh")],
         env=env,
@@ -1034,8 +1037,8 @@ esac
         assert state.get("BreezyMaxwell:42", {}).get("last_result") == "success"
         assert not signal_file.exists()
         calls = tmux_log.read_text(encoding="utf-8")
-        assert "has-session -t BreezyMaxwell" in calls
-        assert "capture-pane -t BreezyMaxwell" in calls
+        assert "has-session -t $1" in calls  # admitted session ID from the fixture
+        assert "capture-pane -t %1" in calls  # admitted pane ID from the fixture
         assert "message from ProOpus [high]: per-message verification" in calls
     finally:
         watcher.terminate()

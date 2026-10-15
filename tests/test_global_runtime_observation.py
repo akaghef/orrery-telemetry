@@ -262,7 +262,8 @@ def test_actual_tmux_projection_uses_provider_process_start_and_own_socket(ui,mo
     client=context(ui[0],window=False)
     worker=client.isolation/'observation-provider.py'
     worker.write_text('import time\nprint("ctx: 42% used",flush=True)\nprint("✻ Working…",flush=True)\ntime.sleep(30)\n')
-    name='RainyHopper-6r-'+uuid.uuid4().hex[:10]
+    name='fixture-6r-'+uuid.uuid4().hex[:10]
+    monkeypatch.setenv('TMUX_TMPDIR',str(client.isolation))
     def tmux(*args):
         return subprocess.run(['tmux','-L',name,*args],capture_output=True,text=True,check=True,timeout=10)
     tmux('new-session','-d','-s','fixture',shlex.join([sys.executable,str(worker)]))

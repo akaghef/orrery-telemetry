@@ -419,22 +419,32 @@ print(json.dumps(hooks('SessionEnd')),flush=True)
 
 
 def test_tmux_route_requires_same_provider_process_start_and_pane(launch,monkeypatch):
-    from types import SimpleNamespace
+    import socket,tempfile
+    import subprocess
     client,delivery,row=launch
-    live={'kind':'orrery-global-live-session-v1','launch_id':row['launch_id'],'ended':False,
+    live={'kind':'orrery-global-live-session-v1','launch_id':row['launch_id'],'receipt_nonce':row['receipt_nonce'],'ended':False,
           'pane_id':'%4','pid':123,'process_start':'provider-start'}
     monkeypatch.setattr(delivery,'live_rows',lambda launch_id:[['session.json',live]])
-    monkeypatch.setitem(delivery.api,'process_start',lambda pid:'provider-start')
-    monkeypatch.setattr(sys.modules['subprocess'],'run',lambda args,**kw:SimpleNamespace(returncode=0,
-        stdout='123' if args[-1]=='#{pane_pid}' else 'python'))
-    assert delivery.tmux_target()=='%4'
-    monkeypatch.setitem(delivery.api,'process_start',lambda pid:None)
-    assert delivery.tmux_target() is None
-    monkeypatch.setitem(delivery.api,'process_start',lambda pid:'reused-pid-start')
-    assert delivery.tmux_target() is None
-    monkeypatch.setitem(delivery.api,'process_start',lambda pid:'provider-start')
-    live['pid']=456
-    assert delivery.tmux_target() is None
+    monkeypatch.setitem(delivery.api,'process_start',lambda pid,**kw:'provider-start')
+    tmux_api=delivery.api['runtime_tmux_api']()
+    with tempfile.TemporaryDirectory(prefix='r2route-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as directory:
+        path=Path(directory).resolve()/'fixture.sock'
+        with socket.socket(socket.AF_UNIX) as stream:
+            stream.bind(str(path));path.chmod(0o600)
+            def terminal(argv,**kw):
+                text=('$1\torrery-'+row['launch_id']+'\t%4\t123\n' if '#{session_id}' in argv[-1] else 'python')
+                return subprocess.CompletedProcess(argv,0,text,'')
+            transport=tmux_api['Transport'](path,binary='fixture-tmux',run=terminal)
+            monkeypatch.setitem(tmux_api['endpoint_candidates'].__globals__,'endpoint_candidates',lambda *args:[('legacy-default',transport)])
+            actual=delivery.tmux_target()
+            assert actual[0].path==path and actual[1]['pane_id']=='%4' and actual[1]['pid']==123
+            monkeypatch.setitem(delivery.api,'process_start',lambda pid,**kw:None)
+            assert delivery.tmux_target() is None
+            monkeypatch.setitem(delivery.api,'process_start',lambda pid,**kw:'reused-pid-start')
+            assert delivery.tmux_target() is None
+            monkeypatch.setitem(delivery.api,'process_start',lambda pid,**kw:'provider-start')
+            live['pid']=456
+            assert delivery.tmux_target() is None
 
 
 @pytest.mark.parametrize('emit_init',[False,True])
@@ -515,7 +525,8 @@ def test_real_tmux_notification_uses_only_own_socket_and_completes_fact(launch,s
     if not shutil.which('tmux'):
         pytest.skip('tmux is unavailable')
     client,delivery,row=launch
-    socket_name='rainyhopper-4c-'+uuid.uuid4().hex[:12]
+    socket_name='fixture-4c-'+uuid.uuid4().hex[:12]
+    session='orrery-'+row['launch_id']
     worker=client.isolation/'synthetic-terminal-provider.py'
     output=client.isolation/'terminal-notification.txt'
     worker.write_text('import os,sys,termios,tty\n'
@@ -527,14 +538,14 @@ def test_real_tmux_notification_uses_only_own_socket_and_completes_fact(launch,s
         'import time;time.sleep(30)\n')
     def tmux(*args):
         return subprocess.run(['tmux','-L',socket_name,*args],capture_output=True,text=True,timeout=10,check=True)
-    tmux('new-session','-d','-s','fixture',shlex.join([sys.executable,str(worker),str(output)]))
+    tmux('new-session','-d','-s',session,shlex.join([sys.executable,str(worker),str(output)]))
     try:
-        pane,pid,socket_path,server_pid=tmux('display-message','-p','-t','fixture',
+        pane,pid,socket_path,server_pid=tmux('display-message','-p','-t',session,
             '#{pane_id} #{pane_pid} #{socket_path} #{pid}').stdout.strip().split()
         monkeypatch.setenv('TMUX',socket_path+','+server_pid+',0')
         start=api['process_start'](int(pid))
         assert start and start!='absent', 'provider process evidence requires sandbox-external ps'
-        live={'kind':'orrery-global-live-session-v1','launch_id':row['launch_id'],'ended':False,
+        live={'kind':'orrery-global-live-session-v1','launch_id':row['launch_id'],'receipt_nonce':row['receipt_nonce'],'ended':False,
               'pane_id':pane,'pid':int(pid),'process_start':start}
         monkeypatch.setattr(delivery,'live_rows',lambda launch_id:[['session.json',live]])
         deadline=time.monotonic()+5
