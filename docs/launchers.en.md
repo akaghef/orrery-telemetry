@@ -299,6 +299,8 @@ The log is not a transcript. It focuses on Goal, Decisions, Work Performed, Veri
 
 Claude Code hard-blocks `Edit` / `Write` through the `check-file-reservation.sh` PreToolUse hook. Codex has no equivalent hook, so the managed `~/.codex/AGENTS.md` instructs reserve / renew / release discipline. The registry is shared, so Claude and Codex reservations are mutually visible.
 
+Writes through `Bash`, scripts, or other tools are not checked or automatically released by Claude's reservation hooks. Release the reserved files yourself immediately after writing: bound proxy `release_reservations`, raw/direct `release_file_reservations`.
+
 See [Hooks and operational helpers](hooks.en.md) for the trigger timing, caller, block conditions, and cleanup lifecycle of the repository's 11 hooks / helpers.
 
 ## Related documentation

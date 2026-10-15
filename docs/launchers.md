@@ -301,6 +301,8 @@ monitor の danger command 検知は既定では passive です。`AGENTSTACK_MO
 
 Claude Code は `check-file-reservation.sh` の PreToolUse hook で `Edit` / `Write` を hard block します。Codex には同等 hook がないため、managed `~/.codex/AGENTS.md` が reserve / renew / release discipline を指示します。registry は共通なので、Claude と Codex の reservation は相互に見えます。
 
+`Bash`・script・別 tool で書く場合は Claude の予約 hook による確認・自動解放が無いため、書き終えた直後に自分で解放します（bound proxy は `release_reservations`、raw/direct は `release_file_reservations`）。
+
 repository にある11件の hook / helper の発火タイミング、caller、block 条件、cleanup lifecycle は [Hooks と運用 helper](hooks.md)を参照してください。
 
 ## 関連文書

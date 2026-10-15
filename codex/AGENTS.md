@@ -178,6 +178,11 @@ selected above to take a reservation so another agent does not clobber it:
   Nothing releases for you after an edit (unlike Claude's post-edit hook), so
   renew long edits and release the reservation when done. A forgotten
   reservation blocks Claude agents until the TTL runs out.
+- **In Claude Code, use `Edit`/`Write` for reserved files.** Its reservation
+  hooks neither check nor release reservations for writes through `Bash`,
+  scripts, or other tools. If you write that way, release the reserved files
+  yourself immediately after writing: bound proxy `release_reservations`,
+  raw/direct `release_file_reservations`.
 - If a path is already reserved by another agent, coordinate over ORRERY Mail
   instead of editing it.
 

@@ -48,6 +48,13 @@ def test_changelog_fragments_are_valid() -> None:
     read_fragments(ROOT)
 
 
+def test_reservation_docs_cover_manual_release_after_bash_writes() -> None:
+    for name in ("docs/hooks.md", "docs/hooks.en.md", "docs/launchers.md", "docs/launchers.en.md"):
+        text = _read(name)
+        for tool in ("`Bash`", "`release_reservations`", "`release_file_reservations`"):
+            assert tool in text, (name, tool)
+
+
 def _default_mail_port() -> str:
     # explicit > previous env.sh > this default (hooks/project-context.sh).
     match = re.search(

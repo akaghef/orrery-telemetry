@@ -91,7 +91,7 @@ def test_existing_directory_symlink_allows_new_user_file_but_broken_link_refuses
 
 
 @pytest.mark.parametrize('provider', ['claude', 'codex'])
-def test_installed_approval_refusal_report_preserves_personal_metadata(env, provider):
+def test_installed_coordination_rules_preserve_personal_metadata(env, provider):
     e = engine(env, provider)
     e.home.mkdir()
     e.target.write_text('Personal instructions\n')
@@ -108,5 +108,9 @@ def test_installed_approval_refusal_report_preserves_personal_metadata(env, prov
     assert 'report that message then. Do not attempt to report while the call is waiting.' in installed
     assert 'the parent chooses the documented recovery.' in installed
     assert 'agentstack-resume <your-name>' not in installed
+    normalized = ' '.join(installed.split())
+    assert 'hooks neither check nor release reservations for writes through `Bash`, scripts, or other tools.' in normalized
+    assert 'yourself immediately after writing: bound proxy `release_reservations`, raw/direct `release_file_reservations`.' in normalized
+    assert e.receipt()['plan']['target']['template_id'] == m.sha(e.template)
     assert e.target.stat().st_mode & 0o777 == 0o640
     assert m.attrs(e.target) == before

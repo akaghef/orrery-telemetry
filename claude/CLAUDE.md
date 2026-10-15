@@ -170,6 +170,11 @@ hook blocks an unreserved `Edit`/`Write` under a protected root.
   `PostToolUse` hook releases it after a grace period, 90 s by default).
   Editing the same file again means reserving it again first — a second edit
   on a reservation you took once is the most common way to get blocked.
+- **In Claude Code, use `Edit`/`Write` for reserved files.** Its reservation
+  hooks neither check nor release reservations for writes through `Bash`,
+  scripts, or other tools. If you write that way, release the reserved files
+  yourself immediately after writing: bound proxy `release_reservations`,
+  raw/direct `release_file_reservations`.
 - Reserve several paths in one call when a change spans files. Renew long
   edits through the tool for the selected route, and release what you reserved
   but did not edit.
