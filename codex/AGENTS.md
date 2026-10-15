@@ -158,10 +158,14 @@ __ORRERY_IDENTITY_BINDING_UNRESOLVED__
   substitute a built-in child, direct-mode launcher, or other improvised
   workflow.
 
-## File reservations — REQUIRED before editing (Codex is not auto-guarded)
+## File reservations — REQUIRED before editing
 
-Claude agents are hard-blocked by a PreToolUse hook from editing shared files
-without a reservation. **Codex has no such hook, so enforcement is on you.**
+Claude agents have a PreToolUse reservation guard. Codex `apply_patch` has the
+same guard only when the current optional ORRERY plugin is installed, enabled,
+and its hooks have been reviewed and approved by the human in `/hooks`.
+Doctor reports missing, disabled, or unverified protection. Shell writes are
+outside this guard in both CLIs. You must reserve before every shared edit
+regardless of hook availability; never approve your own production hooks.
 Before you Edit/Write any file under the project, use the same connection route
 selected above to take a reservation so another agent does not clobber it:
 

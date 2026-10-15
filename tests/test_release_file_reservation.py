@@ -48,12 +48,24 @@ def _mcp_result(*, renewed: int | None = None, released: int | None = None) -> b
 class _Server:
     def __init__(self, responder: Callable[[int], tuple[int, bytes]] | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.resource_requests: list[dict[str, Any]] = []
         self.responder = responder or (lambda _count: (200, _mcp_result(released=1)))
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                request = json.loads(body)
+                if request.get("method") == "resources/read":
+                    parent.resource_requests.append(request)
+                    response = json.dumps({"jsonrpc": "2.0", "id": request["id"],
+                                           "result": {"contents": [{"text": "[]"}]}}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(response)))
+                    self.end_headers()
+                    self.wfile.write(response)
+                    return
                 parent.requests.append(
                     {
                         "headers": {

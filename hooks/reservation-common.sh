@@ -146,6 +146,12 @@ except Exception:
         FILE_PATH="$(pwd)/$FILE_PATH"
     fi
 
+    # Compare physical paths on both sides: /tmp and a symlinked protected
+    # project must protect the same files as their canonical aliases.
+    FILE_PATH=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$FILE_PATH") || {
+        echo "RESERVATION PATH INVALID: cannot resolve edit target" >&2
+        exit 2
+    }
     MATCHED_ROOT=""
     if [[ -n "$PROTECTED_ROOTS" ]]; then
         local old_ifs="$IFS"
@@ -154,6 +160,10 @@ except Exception:
         for root in $PROTECTED_ROOTS; do
             root="$(expand_path "$root")"
             [[ -z "$root" ]] && continue
+            root=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$root") || {
+                echo "RESERVATION PATH INVALID: cannot resolve protected root" >&2
+                exit 2
+            }
             [[ "$root" != "/" ]] && root="${root%/}"
             case "$FILE_PATH" in
                 "$root"|"$root/"*)

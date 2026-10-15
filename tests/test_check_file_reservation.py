@@ -26,11 +26,23 @@ RESOLVER = ROOT / "hooks" / "resolve-agent-name.sh"
 class _Server:
     def __init__(self, responder: Callable[[int], tuple[int, bytes]]) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.resource_requests: list[dict[str, Any]] = []
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                request = json.loads(body)
+                if request.get("method") == "resources/read":
+                    parent.resource_requests.append(request)
+                    response = json.dumps({"jsonrpc": "2.0", "id": request["id"],
+                                           "result": {"contents": [{"text": "[]"}]}}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(response)))
+                    self.end_headers()
+                    self.wfile.write(response)
+                    return
                 parent.requests.append(
                     {
                         "headers": {key.lower(): value for key, value in self.headers.items()},
@@ -276,6 +288,7 @@ class ReservationHookTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(server.requests), 1)
+        self.assertEqual(len(server.resource_requests), 1)
         request = server.requests[0]
         self.assertEqual(
             request["headers"]["accept"], "application/json, text/event-stream"

@@ -52,7 +52,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 - **発火:** `Edit` / `Write` の直前。対象 path が `AGENTSTACK_PROTECTED_ROOTS`、または未指定時の project root 内にある場合だけ enforcement します。
 - **project key:** `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` の `AGENTSTACK_PROJECT_KEY` → hook input の cwd の順で解決します。installed `env.sh` は shell として source せず、対象の `export AGENTSTACK_PROJECT_KEY=...` だけを literal として読みます。この共通 resolver は registration guard、session reminder、child cleanup、`agentstack-await-reply` も使うため、launcher を経由しない editor session でも install 時と同じ project を参照します。
 - **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。tmux 外の client でも、`register_agent` を呼んで `<runtime>/session_index/` に記録されていれば、hook input の `session_id` から identity を解決します（優先度は env → tmux → session index）。`session_id` は `[a-zA-Z0-9_-]` 以外を含むなら使わず、symlink の index entry は読みません。identity source が1つも無い session の扱いは下記「unmanaged session」に従います。
-- **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
+- **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認し、他者の有効な exclusive 予約との重複も read-only で照会します。重複時は予約者を理由に示します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
 - **判定:** 既存 reservation は exit 0、definitive zero、HTTP rejection、JSON-RPC error、MCP `isError=true`または非boolean、schema違反、malformed response、zero後のretry failureは exit 2 です。`isError` は省略または boolean `false` だけを成功として許します。exact identity と protected scope の確定後、**最初の照会**が transport unreachable の場合だけ運用上の fail-open があります。pathなしと protected root外は enforcement 対象外なので exit 0 です。
 - **deploy順:** strict identity版を既存sessionへ途中適用しません。cutover C5で全clientを`agent-start`経由でrestart/rebindし、exact identityを確認してからrepo版をliveへ同期し、予約あり/なしの両方向testを通します。
 
@@ -179,7 +179,13 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ## Codex との違い
 
-Codex CLI の公式 `SessionStart` hook は上記の履歴 receipt に使いますが、Claude Code の registration `PostToolUse` や reservation `PreToolUse` guard と同じものではなく、`mark-agent-registered.sh` も走りません。`agent-start-codex` は bootstrap で identity 登録、tmux rename、launch expectation を済ませ、予約済み child/resume と reregister は応答名不一致で停止します。一方、direct spawn は警告後に応答名を採用し、raw MCP 登録は自動検出されません。managed `~/.codex/AGENTS.md` は reservation の reserve / renew / release を指示します。mail watcher と ORRERY Mail registry は Claude / Codex 共通なので、通知と reservation conflict は相互に見えます。
+Codex CLI の optional ORRERY plugin に、`PreToolUse` / `^apply_patch$` の予約 guard があります。Codex の `tool_input.command` に入る patch 本文から、Add / Update / Delete の全 path と Move の移動元・移動先を取り出し、payload の絶対 cwd で解決して [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) に渡します。専用 adapter は path の取り出しだけを行い、identity・保護 root・自己予約の renew-only 確認・zero の1回 retry・unmanaged/outage policy は Claude と同じ実装です。legacy mode では自己予約を確認した後、公開 reservation resource の他者 exclusive も確認し、重なれば予約者を理由に示して拒否します。照会拒否・不正応答・競合照会の通信失敗は fail-closed です。global mode は既存の共通 client と server の coverage / 排他制約を使います。
+
+Codex が guard の exit 2 と stderr を編集前の拒否として扱うため、対象のうち1つでも予約が無ければ patch 全体を実行しません。複数 path の照会は25秒で打ち切り、失敗を拒否にします。shell 経由の書き込みは両 CLI ともこの予約 guard の対象外です。Codex での予約 release は従来どおり model が明示的に行い、自動 release は足しません。
+
+保護が有効になるのは plugin が導入・有効で、**現在の hook 定義を人が `/hooks` で review・承認した新しい Codex process**だけです。core 更新後の [plugin-only refresh](codex-app.md#core-更新後の既存-plugin-refresh) と承認を行ってください。起動や更新は hook を自動承認しません。`agentstack-doctor` は guard の未導入・無効・未承認・不明を警告し、`hooks/list` で現在の定義が trusted / enabled と確認できた場合だけその状態を報告します。古い plugin に guard が無い場合も missing と報告します。警告時は `apply_patch` が保護されていると考えず、予約取得を必ず明示的に確認してください。
+
+公式 `SessionStart` hook は引き続き履歴 receipt に使います。Claude Code の registration `PostToolUse` とは別で、`mark-agent-registered.sh` は走りません。`agent-start-codex` は bootstrap で identity 登録、tmux rename、launch expectation を済ませ、予約済み child/resume と reregister は応答名不一致で停止します。direct spawn は警告後に応答名を採用し、raw MCP 登録は自動検出されません。managed `~/.codex/AGENTS.md` の reserve / renew / release 指示は引き続き必要です。mail watcher と ORRERY Mail registry は両 CLI 共通です。
 
 Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います。詳しくは [Codex App 統合](codex-app.md)を参照してください。
 
