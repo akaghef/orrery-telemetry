@@ -79,9 +79,10 @@ class Targets:
         session=None
         if standalone:
             # Saved slots identify the owner/session, never a current PID.
-            # Every other live or unreadable process keeps cleanup unavailable.
+            # Completed slots identify history only, including for operators.
+            # Every unresolved live or unreadable process keeps cleanup unavailable.
             absent=all(self.api['process_start'](x.get('pid'),deadline=self.deadline)=='absent'
-                for x in value['lives'] if not x.get('ended') or x in standalone)
+                for x in value['lives'] if not x.get('ended'))
             session=next((x['session_id'] for x in standalone if not x.get('ended')),standalone[0]['session_id'])
             phase='ended' if all(x.get('ended') for x in standalone) and pending is None else 'cleanup-pending'
             outcome='exited' if absent else 'unknown'
@@ -123,7 +124,7 @@ class Targets:
         metadata=self.api['read_json'](metadata_path) if metadata_path.is_file() else value['context'].get('registration_metadata',{})
         if self.tmux['module_api']('runtime_observation')['unproven_app'](value,metadata):self.fail('TMUX_TARGET_UNAVAILABLE')
         for live in value['lives']:
-            if live.get('ended') and not operator:continue
+            if live.get('ended'):continue
             start=self.api['process_start'](live.get('pid'),deadline=self.deadline)
             if start=='absent':continue
             if not start or start!=live.get('process_start'):uncertain=True;continue

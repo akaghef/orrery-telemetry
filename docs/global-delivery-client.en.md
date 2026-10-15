@@ -290,3 +290,5 @@ CLI `end` shares the existing dashboard exit request: literal `/exit` and Enter 
 A standalone without a launch also recovers through `target --print` and `replay-end` with the same digest. A residual ended launch does not replace its saved standalone session. Cleanup releases only its own ACTIVE leases and does not retire the owner. A lost release response replays the existing pending UUID. Other live or uncertain sessions and other pending operations remain protected; an incorrect pending hash is rejected with `MUTATION_PENDING_CONFLICT`.
 
 Legacy bootstrap continues to reject the dedicated socket. Shared legacy target admission also reads runner PID/start and the live nonce from the existing launch, rejecting that global runner's pane even after the provider exits. No second PID record is added.
+
+Neither owner nor operator treats an ended live slot as current liveness evidence. Only unresolved sessions participate in PID/start checks. Reuse of a completed session's numeric PID cannot block recovery, and an unresolved session's uncertain liveness never counts as absence.

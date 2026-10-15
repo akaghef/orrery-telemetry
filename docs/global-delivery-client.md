@@ -292,3 +292,5 @@ CLI `end` は既存 dashboard と同じ終了要求を共用します。通常�
 launch を持たない standalone の終了回収も `target --print` → 同 digest の `replay-end` を使います。終了済み launch が残っていても standalone の保存済み session を区別し、自分の ACTIVE 予約だけを解放して owner は退役しません。解放の応答喪失は既存 pending を同じ UUID で再送します。別 session の生存・観測不明・別種類の pending は保持し、誤った pending hash は `MUTATION_PENDING_CONFLICT` で拒否します。
 
 専用 socket を legacy bootstrap が拒否する境界は維持します。共通 legacy target admission 自身も、既存 launch の runner PID/start と live の nonce を読み、provider が終了していてもその runner の pane を global と判定して拒否します。PID の写しは増やしません。
+
+終了済みの live slot は owner/operator とも現在の生存証拠に使いません。未終了 session の PID/start の対だけを照合し、古い PID の再利用で今回の回収を止めたり、逆に未終了 session の観測不明を不在扱いしたりしません。
