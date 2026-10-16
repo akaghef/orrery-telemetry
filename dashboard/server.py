@@ -1023,6 +1023,55 @@ class _SingleFlight:
 _HTTP_SINGLE_FLIGHT = _SingleFlight()
 
 
+def _is_live_roster_row(row: dict) -> bool:
+    """The rows a live roster shows: running agents, never warm-up sessions.
+
+    The same test a live-roster client applies to the full answer itself."""
+    return bool(row.get("running") or row.get("category") == "agent") \
+        and row.get("category") != "warmup"
+
+
+class _AgentsAnswer:
+    """One /api/agents computation, written at most once per scope.
+
+    `scope=live` is for a client that shows only the live roster: about 3 %
+    of the rows of the 30-day window. It carries the
+    live rows unchanged plus `retired`, the names the full answer marks retired
+    (a client unpins those). Any other scope, or none, is the full answer,
+    byte for byte as before.
+    """
+
+    def __init__(self, history_days: float | None) -> None:
+        self.payload = {
+            "ts": int(time.time()),
+            "history_days": history_days,
+            "agents": build_agents(history_days),
+        }
+        self._lock = threading.Lock()
+        self._bodies: dict[str, bytes] = {}
+
+    def body(self, scope: str) -> bytes:
+        scope = "live" if scope == "live" else ""
+        with self._lock:
+            body = self._bodies.get(scope)
+            if body is None:
+                body = json.dumps(self._view(scope), ensure_ascii=False).encode()
+                self._bodies[scope] = body
+            return body
+
+    def _view(self, scope: str) -> dict:
+        if scope != "live":
+            return self.payload
+        rows = self.payload["agents"]
+        return {
+            "ts": self.payload["ts"],
+            "history_days": self.payload["history_days"],
+            "scope": "live",
+            "agents": [row for row in rows if _is_live_roster_row(row)],
+            "retired": [row["name"] for row in rows if row.get("category") == "retired"],
+        }
+
+
 def _with_registration_batch(function):
     """Run one display computation over a single registration read."""
 
@@ -8828,16 +8877,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/agents":
             q = parse_qs(urlparse(self.path).query)
             history_days = _parse_history_days((q.get("days") or [""])[0])
-            body = self._single_flight(("agents", history_days), lambda: json.dumps(
-                {
-                    "ts": int(time.time()),
-                    "history_days": history_days,
-                    "agents": build_agents(history_days),
-                },
-                ensure_ascii=False,
-            ).encode())
-            if body is not None:
-                self._send(200, body, "application/json; charset=utf-8")
+            scope = (q.get("scope") or [""])[0]
+            # Every scope shares the one roster computation for this window;
+            # only the answer written from it differs.
+            answer = self._single_flight(("agents", history_days),
+                                         lambda: _AgentsAnswer(history_days))
+            if answer is not None:
+                self._send(200, answer.body(scope), "application/json; charset=utf-8")
         elif path == "/api/spawn-status":
             q = parse_qs(urlparse(self.path).query)
             name = (q.get("name") or [""])[0]
