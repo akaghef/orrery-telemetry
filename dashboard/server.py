@@ -5241,28 +5241,46 @@ def _tail_events(path: str, line_events, limit: int) -> tuple[list[dict], bool]:
     """
     collected: list[list[dict]] = []  # per line, newest first
     count = 0
+
+    def take(raw: bytes) -> bool:
+        """Add one complete line; True once more than `limit` events are known."""
+        nonlocal count
+        try:
+            events = line_events(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return False
+        if events:
+            collected.append(events)
+            count += len(events)
+        return count > limit
+
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
         position = f.tell()
-        carry = b""
-        while position > 0 and count <= limit:
+        # The line that starts before the block just read and continues into
+        # newer bytes, kept as pieces (oldest first): a line of many blocks is
+        # joined once, when its start is found, never re-copied per block.
+        partial: list[bytes] = []
+        done = False
+        while position > 0 and not done:
             start = max(0, position - _HISTORY_TAIL_BLOCK)
             f.seek(start)
-            chunk = f.read(position - start) + carry
+            block = f.read(position - start)
             position = start
-            lines = chunk.split(b"\n")
-            # the first piece may continue in the previous block
-            carry = lines.pop(0) if position > 0 else b""
-            for raw in reversed(lines):
-                try:
-                    events = line_events(raw.decode("utf-8"))
-                except UnicodeDecodeError:
-                    continue
-                if events:
-                    collected.append(events)
-                    count += len(events)
-                    if count > limit:
-                        break
+            pieces = block.split(b"\n")
+            if len(pieces) == 1:  # no line starts inside this block
+                partial.insert(0, block)
+                continue
+            # pieces[-1] begins after the last newline: it completes the line
+            # held in `partial`. pieces[0] may continue in an older block.
+            complete = [pieces[-1] + b"".join(partial), *reversed(pieces[1:-1])]
+            partial = [pieces[0]]
+            for raw in complete:
+                if take(raw):
+                    done = True
+                    break
+        if not done and position == 0 and partial:
+            take(b"".join(partial))  # the file's first line
     ordered = [event for events in reversed(collected) for event in events]
     return ordered[-limit:], count > limit
 

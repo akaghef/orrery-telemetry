@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 
 import pytest
 
@@ -168,3 +169,28 @@ def test_unreadable_claude_transcript_is_an_error(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_transcript_path", lambda name: str(tmp_path / "missing.jsonl"))
     result = server.history_payload("Somebody", 220)
     assert result["ok"] is False and "read" in result["error"]
+
+
+def test_a_line_longer_than_many_blocks_is_read_once(tmp_path, monkeypatch):
+    """A newline-free line of L bytes read in blocks of B must cost about L,
+    not L*L/B: the unfinished line is kept as pieces and joined once."""
+    monkeypatch.setattr(server, "_HISTORY_TAIL_BLOCK", 4096)
+    big = json.dumps({"type": "user", "timestamp": "big", "message": {"role": "user", "content": [
+        {"type": "text", "text": "x" * 24_000_000}]}})
+    small = json.dumps({"type": "assistant", "timestamp": "small", "message": {"role": "assistant",
+                                                                             "content": "after the big line"}})
+    path = write(tmp_path, "long.jsonl", [small, big, small])
+    decoded = []
+    real_events = server._claude_line_events
+
+    def events(line):
+        decoded.append(len(line))
+        return real_events(line)
+
+    started = time.perf_counter()
+    got, has_more = server._tail_events(path, events, 2)
+    elapsed = time.perf_counter() - started
+    assert [e["ts"] for e in got] == ["big", "small"] and has_more is True
+    assert sum(1 for n in decoded if n > 1_000_000) == 1  # the long line is decoded once
+    # quadratic re-copying (24 MB in 4 KiB steps) takes minutes; linear takes well under a second
+    assert elapsed < 5, elapsed
