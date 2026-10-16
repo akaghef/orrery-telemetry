@@ -65,3 +65,5 @@ The authoritative fixture is `packages/agentstack_mail/fixtures/global-client-4b
 The [caller, interruption and acceptance tables](global-child-client-contract.md) are generated from the fixture. A failed debounce worker records `last_error` in its existing fixed release slot; an invalid fence forbids that local write. Resume and expiry purge share the end operation's liveness check. A live or unknown session prevents either action.
 
 The resume intent is saved before unretire. After response loss, management inspect resumes the same ID/token. Expired retention refuses with `CHILD_RETENTION_EXPIRED`; purged material refuses with `CHILD_PURGED`. Explicit `cancel-child-resume --operator` returns a confirmed unexecuted preparation to common retire only after ruling out live/unknown sessions.
+
+New global launches use the dedicated socket, runner/provider evidence and stable-ID target/replay-end recovery in the [delivery guide](global-delivery-client.en.md#dedicated-launch-and-termination-recovery). SessionEnd alone does not prove process exit; unresolved reporting preserves ownership.

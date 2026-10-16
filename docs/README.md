@@ -74,3 +74,5 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [tmux consumer の共有境界](runtime-tmux.md) — transport の固定、対象 admission と修復診断。
 
 - [指示 block の移行](instruction-migration.md) — 利用者単位への移行と復旧。
+
+- [専用 tmux 起動・終了の受け入れ計画](r2-tb-lifecycle-plan-v3.md) — R2-Tb の確定 caller 表・schema・中断点と fixture。

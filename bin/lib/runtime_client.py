@@ -38,6 +38,7 @@ ClientError = _PROCESS_API['ClientError']
 integer = _PROCESS_API['integer']
 remaining = _PROCESS_API['remaining']
 process_start = _PROCESS_API['process_start']
+request_provider_exit = _PROCESS_API['request_provider_exit']
 KIND = 'orrery-runtime-client-s1'
 PROFILE_KIND = 'orrery-global-client-profile-v1'
 METADATA_KIND = 'orrery-global-registration-metadata-v1'
@@ -1276,7 +1277,10 @@ class RuntimeClient:
         except (TypeError, ValueError, KeyError) as exc:
             raise ClientError('RESPONSE_INVALID') from exc
 
-    def resolve_mutation(self, current, expected_digest, *, expected_old, expected_new, old_agent_id, new_agent_id, confirm=False):
+    def resolve_mutation(self,current,expected_digest,**proof):
+        with self.operation_mutex():return self._resolve_mutation(current,expected_digest,**proof)
+
+    def _resolve_mutation(self, current, expected_digest, *, expected_old, expected_new, old_agent_id, new_agent_id, confirm=False, lifecycle_parent=None, operator=False):
         if not confirm:raise ClientError('MUTATION_PENDING_REQUIRES_RESOLUTION')
         path=self.outputs['mutation']
         with self.mutation_mutex(), self.fence():
@@ -1291,7 +1295,28 @@ class RuntimeClient:
                 raise ClientError('MUTATION_PENDING_BINDING_CHANGED')
             if old['server_instance_id']==new['server_instance_id'] and old['candidate_generation']==new['candidate_generation'] and old_agent_id!=new_agent_id:
                 raise ClientError('OUTPUT_OWNER_CONFLICT')
-            current.call('whois')
+            inspected=current.inspect_owner() if lifecycle_parent is not None or operator else {}
+            if inspected.get('retired_at') is not None:
+                # Retired cleanup is local and only for the same pinned identity.
+                # Ordinary resolve/rebind and retired sends keep their old fence.
+                if (self.binding!=current.binding or self.identity['agent_id']!=current.identity['agent_id']
+                        or old!=new or self.identity['credential_generation']!=pending['credential_generation']):
+                    raise ClientError('MUTATION_PENDING_BINDING_CHANGED')
+                child=read_json(self.outputs['child'])
+                if not operator:
+                    if lifecycle_parent is None:raise ClientError('OWNER_REQUIRED')
+                    parent=lifecycle_parent
+                    if (parent.binding!=self.binding or child['parent']!={'client_name':parent.config['client_name'],
+                        'server_instance_id':self.binding['expected_server_instance_id'],'agent_id':parent.identity['agent_id']}):raise ClientError('OWNER_REQUIRED')
+                    parent.call('whois')
+                delivery=runtime_delivery(self);launch=delivery.launch();term=launch.get('termination') or {}
+                if (pending['tool']!='send_message' or term.get('phase') not in ('report-pending','report-required')
+                        or pending['request_id']!=delivery.terminal_uuid(launch,term.get('report_kind'))):raise ClientError('MUTATION_PENDING_CONFLICT')
+                delivery.save(self.outputs['launch'],{**launch,'termination':{**term,'phase':'report-not-required'},
+                    'operator_resolution':{'action':'mutation-abandoned','operator_evidence':'Explicit local acknowledgement of unconfirmed terminal report'}},'launch_intent')
+            else:
+                if lifecycle_parent is not None or operator:raise ClientError('ARGUMENTS_UNSUPPORTED')
+                current.call('whois')
             # Only dispose the old local evidence; never replay/repin/rotate.
             self.validate_output(path,'mutation')
             if read_private(path)!=raw:raise ClientError('MUTATION_PENDING_CONFLICT')
@@ -1482,10 +1507,12 @@ class RuntimeClient:
                     if (isinstance(reply, dict) and reply.get('result', {}).get('isError') is True
                             and wire_contract()['definitive_rejection'](str(exc), existing_pending=existing,
                                 contract=wire_contract()['fixture'])):
+                        if self.outputs['launch'].exists():runtime_delivery(self).terminal_rejection(tool,pending['request_id'],str(exc))
                         self.clear_mutation(planned)
                     raise
                 self.validate_mutation_output(tool, result, values)
                 self.save_mutation(contract['complete_intent'](pending, result, values))
+                if self.outputs['launch'].exists():runtime_delivery(self).terminal_receipt(tool,result)
                 self.clear_mutation(read_private(path))
                 return result
         except ValueError as exc:
@@ -1631,7 +1658,7 @@ class RuntimeClient:
             pid = int(pid) if str(pid).isdigit() else None
             evidence = {'kind': 'orrery-global-live-session-v1', **self.binding,
                 'agent_id': self.identity['agent_id'], 'session_id': session,
-                'pid': pid, 'process_start': process_start(pid), 'pane_id': os.environ.get('TMUX_PANE')}
+                'pid': pid, 'process_start': process_start(pid), 'pane_id': os.environ.get('TMUX_PANE'),'ended':False}
             slot = directory / (session + '.json')
             if slot.exists() or slot.is_symlink():
                 previous = read_json(slot)
@@ -1681,12 +1708,22 @@ class RuntimeClient:
             status = process_start(evidence.get('pid'))
             if status is None or evidence.get('process_start') is None:
                 return 'unknown'
-            if status != 'absent' and status == evidence['process_start']:
-                return 'other-session-live'
+            if status != 'absent':
+                return 'other-session-live' if status == evidence['process_start'] else 'unknown'
         return 'absent'
 
     def end_session(self, payload):
         with self.operation_mutex():
+            if self.outputs['launch'].exists():
+                delivery=runtime_delivery(self)
+                session=payload.get('session_id')
+                slot=self.runtime_dir/'live-sessions'/(session+'.json') if isinstance(session,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',session) else None
+                standalone=slot is not None and slot.exists() and read_json(slot).get('launch_id') is None
+                if not standalone:return delivery.end_launch(payload)
+                # Preserve an old standalone hook, without closing an unrelated
+                # unfinished launch which has not published a live slot yet.
+                if delivery.launch()['phase'] not in ('ended','cancelled'):
+                    return {'ok':True,'end':'unknown','changed':False}
             directory = self.runtime_dir / 'live-sessions'
             current = payload.get('session_id')
             if not isinstance(current,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',current):
@@ -1700,6 +1737,10 @@ class RuntimeClient:
             if self.outputs['child'].exists():
                 self.retain_child(read_json(self.outputs['child']))
             else:
+                pending=self.outputs['mutation']
+                if pending.exists():
+                    if read_json(pending).get('tool')!='release_file_reservations':raise ClientError('MUTATION_PENDING_CONFLICT')
+                    self.replay_pending()
                 for page in self.all_leases():
                     if page:
                         self.call('release_file_reservations', {'file_reservation_ids': [row['id'] for row in page]})
@@ -2074,14 +2115,22 @@ def safe_private_directory(path):
         raise ClientError('PRIVATE_DIRECTORY_REQUIRED')
 
 
-def provider_ancestor():
+def provider_ancestor(*, runner_pid=None):
     pid=os.getppid()
     for _ in range(8):
+        if runner_pid is not None and pid==runner_pid:return None
         try:
             result=subprocess.run(['ps','-p',str(pid),'-o','ppid=','-o','comm='],capture_output=True,text=True,timeout=3)
             if result.returncode or not result.stdout.strip():return None
             parent,command=result.stdout.strip().split(None,1)
             name=Path(command).name.lstrip('-')
+            if runner_pid is not None:
+                # A bound SDK callback identifies its caller, not the
+                # configured launcher shim farther up the same parent chain.
+                if name not in {'bash','sh','zsh','dash','fish','ksh'}:return pid
+                pid=int(parent)
+                if pid<=1:return None
+                continue
             if name in {'claude','codex','node','agy','antigravity'}:
                 return pid
             if name not in {'bash','sh','zsh','dash','fish','ksh','python','python3'} and not name.startswith('python3.'):
@@ -2394,7 +2443,7 @@ def main(argv=None):
                      'tmux-legacy-transport': 'legacy-transport',
                      'tmux-diagnostics': 'diagnostics',
                      'tmux-legacy-target': 'legacy-target'}
-    if argv and argv[0] in ('target','capture','attach','send-compact'):
+    if argv and argv[0] in ('target','capture','attach','send-compact','end','replay-end'):
         return runpy.run_path(str(Path(__file__).with_name('runtime_target.py')))['main'](argv,api=globals())
     if argv and argv[0] in tmux_commands:
         # A legacy consumer's safety admission must not construct an owner or
@@ -2469,12 +2518,15 @@ def main(argv=None):
     parser.add_argument('--context')
     parser.add_argument('--runtime-mode', choices=['legacy','global'])
     parser.add_argument('--server-config')
+    parser.add_argument('--parent-context')
+    parser.add_argument('--operator',action='store_true')
     parser.add_argument('operation', choices=['mode', 'observe', 'reconnect', 'bootstrap', 'launch', 'call',
-                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure', 'watch-service', 'watch-auto'])
+                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'provider-exec', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure', 'watch-service', 'watch-auto'])
     parser.add_argument('args', nargs='*')
     a = parser.parse_args(argv)
     try:
         choice = selected(argv)
+        if (a.parent_context or a.operator) and a.operation!='resolve-mutation':raise ClientError('ARGUMENTS_UNSUPPORTED')
         if a.operation == 'mode':
             print(choice['mode']); return 0
         if a.operation == 'watch-auto':
@@ -2522,9 +2574,11 @@ def main(argv=None):
         if a.operation == 'proxy':
             runtime_delivery(client).proxy()
             return 0
-        if a.operation == 'execute-launch':
-            runtime_delivery(client).execute(*a.args)
+        if a.operation == 'provider-exec':
+            runtime_delivery(client).exec_provider(a.args[0],a.args[1],a.args[2] if len(a.args)>2 else None)
             return 0
+        if a.operation == 'execute-launch':
+            return runtime_delivery(client).execute(*a.args)
         if a.operation == 'operator-json':
             value = runtime_delivery(client).operator(a.args[0], json.load(sys.stdin))
         elif a.operation == 'observe':
@@ -2567,7 +2621,13 @@ def main(argv=None):
         elif a.operation == 'resolve-mutation':
             proof=json.loads(a.args[2])
             current=configured(a.args[1])
-            value=client.resolve_mutation(current,a.args[0],**proof)
+            parent=configured(a.parent_context) if a.parent_context else None
+            if a.operator:
+                if (choice['mode']!='global' or choice['server_config'] is None
+                        or Path(choice['server_config'])!=client.runtime/'server-config.json'
+                        or not sys.stdin.isatty() or input('Acknowledge unknown terminal report locally? Type yes: ').strip()!='yes'):
+                    raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')
+            value=client.resolve_mutation(current,a.args[0],**proof,lifecycle_parent=parent,operator=a.operator)
         elif a.operation == 'request-status':
             value = client.management('request_status', request_id=a.args[0])
         else:

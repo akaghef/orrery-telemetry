@@ -74,3 +74,5 @@ Documents without a translation are labelled with their original language. Image
 - [Shared tmux consumer boundary](runtime-tmux.en.md) — Pinned transports, target admission and repair diagnostics.
 
 - [Instruction block migration](instruction-migration.en.md) — User scope, recovery and backup retention.
+
+- [Dedicated tmux launch and termination acceptance plan (Japanese)](r2-tb-lifecycle-plan-v3.md) — Approved R2-Tb callers, schemas, interruption points and fixtures.

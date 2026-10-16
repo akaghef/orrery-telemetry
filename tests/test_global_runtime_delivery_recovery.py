@@ -1,6 +1,7 @@
 """Interrupted launch resolution and isolated, bounded delivery recovery."""
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import threading
@@ -25,18 +26,52 @@ def relaunch(client,delivery,row,root):
     return replacement
 
 
+@pytest.fixture
+def resolution_provider():
+    # A real owned provider makes the live/dead boundary observable outside
+    # the sandbox. EOF ends it cooperatively; every failing path also reaps it.
+    with subprocess.Popen(
+        [sys.executable,'-c',"import sys; print('ready',flush=True); sys.stdin.read()"],
+        stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,
+    ) as provider:
+        try:
+            assert provider.stdout.readline().strip()=='ready'
+            yield provider
+        finally:
+            if provider.poll() is None:
+                provider.terminate()
+                try:provider.wait(timeout=5)
+                except subprocess.TimeoutExpired:provider.kill();provider.wait(timeout=5)
+
+
 @pytest.mark.parametrize('saved_lives',[0,1])
-def test_ended_resolution_partial_write_requires_same_resolution_before_new_launch(server,launch,monkeypatch,saved_lives):
+def test_ended_resolution_partial_write_requires_same_resolution_before_new_launch(server,launch,monkeypatch,saved_lives,resolution_provider):
     client,delivery,row=launch
     row['phase']='exec-unknown';delivery.save(client.outputs['launch'],row,'launch_intent')
+    provider=resolution_provider
+    birth=delivery.api['process_start'](provider.pid)
+    assert birth not in (None,'absent'), 'requires native process observation; run outside sandbox'
     save=delivery.save
     def fail_running(path,value,schema):
         if path==client.outputs['launch'] and value.get('phase')=='running':raise OSError('fixture running interruption')
         save(path,value,schema)
     monkeypatch.setattr(delivery,'save',fail_running)
     for sid in ('first','second'):
-        with pytest.raises(OSError):delivery.session_start({'session_id':sid,'provider_pid':os.getpid(),'cwd':str(server['root'])},trusted_receipt=(row['launch_id'],row['receipt_nonce']))
+        with pytest.raises(OSError):delivery.session_start({'session_id':sid,'provider_pid':provider.pid,'cwd':str(server['root'])},trusted_receipt=(row['launch_id'],row['receipt_nonce']))
     monkeypatch.setattr(delivery,'save',save)
+    resolution={'action':'confirmed-ended','operator_evidence':'fixture process end independently confirmed'}
+    status=delivery.status(row['launch_id'])
+    live_before={name:live for name,live in delivery.live_rows(row['launch_id'])}
+    assert len(live_before)==2
+    assert all(live['pid']==provider.pid and live['process_start']==birth for live in live_before.values())
+    launch_before=client.outputs['launch'].read_bytes()
+    with pytest.raises(api['ClientError'],match='LAUNCH_OUTCOME_UNKNOWN'):
+        delivery.operator('launch-resolve',{'launch_id':row['launch_id'],'expected_state_sha256':status['state_sha256'],'confirm':True,'resolution':resolution})
+    assert client.outputs['launch'].read_bytes()==launch_before
+    assert dict(delivery.live_rows(row['launch_id']))==live_before
+    provider.stdin.close()
+    assert provider.wait(timeout=5)==0
+    assert delivery.api['process_start'](provider.pid)=='absent'
     atomic=delivery.api['atomic_json'];count=0
     def fail_live(path,value,*args,**kwargs):
         nonlocal count
@@ -46,7 +81,6 @@ def test_ended_resolution_partial_write_requires_same_resolution_before_new_laun
         return atomic(path,value,*args,**kwargs)
     monkeypatch.setitem(delivery.api,'atomic_json',fail_live)
     status=delivery.status(row['launch_id'])
-    resolution={'action':'confirmed-ended','operator_evidence':'fixture process end independently confirmed'}
     with pytest.raises(OSError):delivery.operator('launch-resolve',{'launch_id':row['launch_id'],'expected_state_sha256':status['state_sha256'],'confirm':True,'resolution':resolution})
     monkeypatch.setitem(delivery.api,'atomic_json',atomic)
     fresh=api['runtime_delivery'](api['RuntimeClient'](client.path))
@@ -67,24 +101,40 @@ def test_retry_initial_missing_tmux_server_and_missing_session(server,launch,mon
     import subprocess
     import tempfile
     client,delivery,row=launch
-    socket=Path(tempfile.mkdtemp(prefix='r246tmux-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None))
-    monkeypatch.setenv('TMUX_TMPDIR',str(socket));monkeypatch.delenv('TMUX',raising=False)
-    row['phase']='planned';delivery.save(client.outputs['launch'],row,'launch_intent')
-    run=subprocess.run
-    if server_exists:run(['tmux','new-session','-d','-s','fixture-control','sleep 60'],check=True)
-    calls=[]
-    def fixture_run(args,**kw):
-        if args[:2]==['tmux','new-session']:
-            calls.append(args)
-            args=[*args[:-1],'sleep 60']
-        return run(args,**kw)
-    monkeypatch.setattr(delivery.operator.__globals__['subprocess'],'run',fixture_run)
-    try:
-        status=delivery.status(row['launch_id'])
-        result=delivery.operator('launch-retry',{'launch_id':row['launch_id'],'expected_state_sha256':status['state_sha256']})
-        assert result['phase']=='gated' and len(calls)==1
-        assert run(['tmux','has-session','-t','=orrery-'+row['launch_id']],capture_output=True).returncode==0
-    finally:run(['tmux','kill-server'],capture_output=True)
+    with tempfile.TemporaryDirectory(prefix='r246tmux-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as temporary:
+        monkeypatch.setenv('TMUX_TMPDIR',temporary);monkeypatch.delenv('TMUX',raising=False)
+        row['phase']='planned';delivery.save(client.outputs['launch'],row,'launch_intent')
+        tmux=api['runtime_tmux_api']()
+        dedicated=tmux['global_socket'](Path(client.config['agentstack_home']),client.binding['expected_server_instance_id'],create=True)
+        prefix=['tmux','-S',str(dedicated)]
+        run=subprocess.run;calls=[]
+        def fixture_run(args,**kw):
+            if args[:4]==[*prefix,'new-session']:
+                calls.append(args)
+                args=[*args[:-1],'sleep 60']
+            return run(args,**kw)
+        try:
+            if server_exists:
+                # Both controls belong to this fixture. The new client must
+                # select the dedicated one without disturbing the old one.
+                run(['tmux','new-session','-d','-s','fixture-control','sleep 60'],check=True)
+                run([*prefix,'new-session','-d','-s','fixture-control','sleep 60'],check=True)
+                dedicated.chmod(0o600)
+            monkeypatch.setattr(delivery.operator.__globals__['subprocess'],'run',fixture_run)
+            status=delivery.status(row['launch_id'])
+            result=delivery.operator('launch-retry',{'launch_id':row['launch_id'],'expected_state_sha256':status['state_sha256']})
+            assert result['phase']=='gated' and len(calls)==1
+            assert calls[0][:4]==[*prefix,'new-session']
+            assert calls[0][calls[0].index('-s')+1]==client.identity['name'] and '-A' not in calls[0]
+            assert run([*prefix,'has-session','-t','='+client.identity['name']],capture_output=True).returncode==0
+            if server_exists:
+                assert run(['tmux','has-session','-t','=fixture-control'],capture_output=True).returncode==0
+                assert run([*prefix,'has-session','-t','=fixture-control'],capture_output=True).returncode==0
+        finally:
+            run([*prefix,'kill-session','-t','='+client.identity['name']],capture_output=True)
+            if server_exists:
+                run([*prefix,'kill-session','-t','=fixture-control'],capture_output=True)
+                run(['tmux','kill-session','-t','=fixture-control'],capture_output=True)
 
 
 def test_retry_unknown_socket_failure_does_not_exec(launch,monkeypatch):

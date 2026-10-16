@@ -230,7 +230,7 @@ The ownerless watcher entry is `agentstack-runtime-client watch-service --server
 
 Terminal, service and cron calls to `agentstack-mailctl` and `agentstack-enroll` use the same selection. Global enrollment uses `inspect --agent-id ID`, or `claim/recover --agent-id ID --request-id UUID --expected-generation N`, over the existing management socket. Supply the new credential on stdin, never argv. The legacy enrollment executable runs only after legacy selection. A newly deployed controller missing its common loader stops with `GLOBAL_ENTRY_UNAVAILABLE` and requires redeployment.
 
-Legacy remains the default and activation remains false. Asking the installer to switch a live installation to global returns `GLOBAL_INSTALL_REQUIRES_PR7`. Running isolated server configuration and changing the user default are separate stages. Dedicated tmux sockets and session naming are not implemented in this stage.
+Legacy remains the default and activation remains false. Asking the installer to switch a live installation to global returns `GLOBAL_INSTALL_REQUIRES_PR7`. Running isolated server configuration and changing the user default are separate stages. Isolated launch transport and termination recovery follow the lifecycle contract below.
 
 The installer uses the existing literal settings reader for mode defaults; it does not execute other env.sh assignments or command substitutions. Empty or invalid modes are rejected.
 
@@ -265,10 +265,30 @@ A verified parent uses `send-compact --context /absolute/parent/runtime-client.j
 
 The digest includes normalized context usage. An uncertain result after submission is exit 3 with `effects=unknown`, with no automatic replay or new journal. After target/capture inspection, an explicitly reconfirmed compact is a new operation and may duplicate an earlier submission if the screen and context value are indistinguishable. This differs from pre-effect `effects=none` refusals. The cooperative mutex does not stop human/provider input; a final observation-to-input race remains.
 
-Legacy notification, monitor, OPEN and prune consumers use the same admission. Unproven targets have no effects while healthy targets continue. This stage does not activate dedicated socket launches; new/rename/rollback, end lifecycle and launcher/provider wiring remain later activation gates.
+Legacy notification, monitor, OPEN and prune consumers use the same admission. Unproven targets have no effects while healthy targets continue. New isolated global launches use the dedicated transport described below. Existing sessions are not renamed or adopted; default cutover and provider configuration migration remain later activation gates.
 
 The identity digest binds the socket, pane, PID/start and owner/parent proof for capture, attach and terminal open. Ordinary display updates do not change target identity. The compact target digest additionally binds input-field evidence and context usage, excluding prose, clocks and spinner updates. Human confirmation consumes no observation budget; a fresh short budget rechecks the same digest afterward. Actual ttyd and terminal children use the same helper to re-admit the endpoint and target. Cleanup retains an identity when observation is unknown. A failed terminal open after successful resume returns `TERMINAL_OPEN_FAILED` without undoing resume.
 
 For `send-compact`, confirm the `state_sha256` returned by `target`. The digest returned by `capture` or `attach` proves target identity only and is not a compact confirmation value.
 
 Only ENOENT from a direct `lstat` proves absence; EACCES and other I/O errors stay unknown. The parent directory must also grant owner rwx. The shared legacy consumer treats an absent socket or confirmed `no server running` on a safe socket as an empty inventory. Cleanup may retire when no live lease remains. Unsafe sockets, timeouts and other read failures stay unknown and retain the identity; observation never creates a server.
+
+## Dedicated launch and termination recovery
+
+A new detached isolated-global launch uses the dedicated socket derived from the instance and client HOME, with the exact agent name as its session name. A foreign exact-name or case-only collision returns `TMUX_SESSION_NAME_CONFLICT`; it is never renamed, adopted or overwritten. Existing UUID sessions and standalone evidence remain readable. Legacy defaults and the PR7 cutover gate are unchanged.
+
+The existing launch stores the runner PID/start in `execution.runner`; the existing live slot stores the native provider PID/start. The runner waits, saves the exit outcome, then reports and cleans up. SessionEnd is not proof of process exit: SDK /clear must not retire a running provider. Provider exit, runner exit and unknown liveness remain distinct; unknown evidence preserves identity and reservations.
+
+`target --agent-id ID --print` can return lifecycle evidence and `state_sha256` after exit or a failure before SessionStart. Recovery-only targets use null for unproven current PID/pane fields and cannot authorize capture, attach, compact or signals. A verified parent context or explicit operator continues through `replay-end --agent-id ID --confirm-state-digest HASH --expected-intent-sha256 HASH`; use literal `null` for the latter only when no pending intent exists. Unknown launch execution returns to `launch-resolve` instead of automatically relaunching.
+
+The complete terminal report lives only in the existing mutation pending slot and replays the same UUID and bytes. Its successful receipt and termination phase are durable before that slot is cleared. Unknown results preserve active ownership; only confirmed outcomes permit retire/release and local cleanup. After a retire commit and interrupted local save, a verified parent/operator replay completes only the remaining work.
+
+A retired identity with an unresolved report cannot resume ordinary sends. Existing `resolve-mutation` still checks its digest, old/new binding, IDs and explicit confirm; retired local acknowledgement additionally requires a verified active `--parent-context`, or `--operator` with the same private server config and a human TTY yes. It records local ack/abandon in the existing launch resolution before clearing pending. Read target again, then replay-end to finish cleanup. It never enrolls, revives or resends a retired identity.
+
+CLI `end` shares the existing dashboard exit request: literal `/exit` and Enter to a verified pane, or SIGINT only to the verified headless Gemini provider PID. Submission does not prove termination. A normal provider without a proven pane refuses rather than falling back to SIGTERM.
+
+A standalone without a launch also recovers through `target --print` and `replay-end` with the same digest. A residual ended launch does not replace its saved standalone session. Cleanup releases only its own ACTIVE leases and does not retire the owner. A lost release response replays the existing pending UUID. Other live or uncertain sessions and other pending operations remain protected; an incorrect pending hash is rejected with `MUTATION_PENDING_CONFLICT`.
+
+Legacy bootstrap continues to reject the dedicated socket. Shared legacy target admission also reads runner PID/start and the live nonce from the existing launch, rejecting that global runner's pane even after the provider exits. No second PID record is added.
+
+Neither owner nor operator treats an ended live slot as current liveness evidence. Only unresolved sessions participate in PID/start checks. Reuse of a completed session's numeric PID cannot block recovery, and an unresolved session's uncertain liveness never counts as absence.

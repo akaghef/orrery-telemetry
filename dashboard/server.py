@@ -8383,7 +8383,9 @@ def do_exit(session: str) -> dict:
                 "error": "Antigravity process could not be revalidated; refusing to signal",
             }
         try:
-            os.kill(provider_pid, signal.SIGINT)
+            _MODE_API['request_provider_exit'](send=None,
+                interrupt=lambda signum: os.kill(provider_pid, signum),
+                delegated_antigravity=True)
         except ProcessLookupError:
             return {
                 "ok": False,
@@ -8413,21 +8415,18 @@ def do_exit(session: str) -> dict:
         if agent_proc:
             actions.append(f"wrapper-shell:{pane_cmd}>{agent_proc}")
 
-    if pane_cmd in _SHELL_PROCS and target["category"] == "finished" and not agent_proc:
-        r = _tmux_run(['send-keys', '-t', session, 'exit', 'Enter'], capture_output=True, text=True)
+    shell_exit = pane_cmd in _SHELL_PROCS and target["category"] == "finished" and not agent_proc
+    def send_exit(*keys):
+        r = _tmux_run(['send-keys', '-t', session, *keys], capture_output=True, text=True)
         if r.returncode != 0:
-            return {"ok": False, "error": f"tmux send-keys failed: {r.stderr.strip()}"}
-        actions.append("shell-exit-sent")
+            raise RuntimeError(f"tmux send-keys failed: {r.stderr.strip()}")
+    try:
+        actions.append(_MODE_API['request_provider_exit'](
+            send=send_exit, interrupt=None, shell_exit=shell_exit, pause=time.sleep))
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc)}
+    if shell_exit:
         actions.append(f"zombie-pane:{pane_cmd}")
-    else:
-        r = _tmux_run(['send-keys', '-t', session, '-l', '/exit'], capture_output=True, text=True)
-        if r.returncode != 0:
-            return {"ok": False, "error": f"tmux send-keys failed: {r.stderr.strip()}"}
-        time.sleep(0.3)
-        r = _tmux_run(['send-keys', '-t', session, 'C-m'], capture_output=True, text=True)
-        if r.returncode != 0:
-            return {"ok": False, "error": f"tmux send-keys failed: {r.stderr.strip()}"}
-        actions.append("exit-sent")
 
     return {"ok": True, "session": session, "actions": actions}
 

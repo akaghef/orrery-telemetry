@@ -92,6 +92,7 @@ class FirstTurn:
     def __init__(self, prompt_head: str, parent: str = "") -> None:
         self.head = prompt_head.strip()[:_HEAD_CHARS]
         self.parent = parent
+        self.parent_agent_id = None
         self.matched: bool | None = None  # None until the first human row is seen
         self.ended = False
         self.tools: list[str] = []
@@ -109,9 +110,16 @@ class FirstTurn:
                 self.tools.append(name)
                 if name.endswith(_MAIL_TOOL_SUFFIX):
                     # Only a message addressed to the parent is the report.
-                    recipients = (block.get("input") or {}).get("to")
-                    if isinstance(recipients, list) and (not self.parent or self.parent in recipients):
-                        self.report_ids.add(str(block.get("id", "")))
+                    data=block.get("input") or {}
+                    if self.parent_agent_id is not None:
+                        recipients=data.get("to_agent_ids")
+                        addressed=(type(self.parent_agent_id) is int and self.parent_agent_id>0
+                            and isinstance(recipients,list) and all(type(x) is int and x>0 for x in recipients)
+                            and self.parent_agent_id in recipients)
+                    else:
+                        recipients=data.get("to")
+                        addressed=isinstance(recipients,list) and (not self.parent or self.parent in recipients)
+                    if addressed:self.report_ids.add(str(block.get("id", "")))
         text = _content_text(content)
         if text:
             self.texts.append(text)
@@ -142,7 +150,23 @@ class FirstTurn:
                 if (isinstance(block, dict) and block.get("type") == "tool_result"
                         and str(block.get("tool_use_id", "")) in self.report_ids
                         and not block.get("is_error")):
-                    self.reported = True
+                    if self.parent_agent_id is None:
+                        self.reported=True
+                    else:
+                        try:
+                            import json
+                            value=json.loads(_content_text(block.get('content','')))
+                            # Reuse the same canonical response validator as the client.
+                            from pathlib import Path
+                            import runpy
+                            path=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+                            client=runpy.run_path(str(path))
+                            schema=client['wire_contract']()['fixture']['tool_contracts']['send_message']['output_schema']
+                            client['wire_contract']()['validate_schema'](value,schema)
+                            recipients=value['recipient_agent_ids']
+                            self.reported=(all(type(x) is int and x>0 for x in recipients)
+                                and self.parent_agent_id in recipients)
+                        except (OSError,ValueError,TypeError,KeyError,RuntimeError):pass
             return
         if row.get("type") != "assistant" or not isinstance(message, dict):
             return
