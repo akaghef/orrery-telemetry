@@ -5163,45 +5163,108 @@ def _events_from_codex_jsonl(path: str) -> list[dict]:
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    o = json.loads(line)
-                except ValueError:
-                    continue
-                if o.get("type") != "response_item":
-                    continue
-                payload = o.get("payload") or {}
-                if payload.get("type") != "message":
-                    continue
-                role = payload.get("role")
-                if role not in ("user", "assistant"):
-                    continue
-                ts = o.get("timestamp", "")
-                content = payload.get("content")
-                if isinstance(content, str):
-                    if content.strip():
-                        events.append({"role": role, "kind": "text",
-                                       "text": content, "ts": ts})
-                    continue
-                if not isinstance(content, list):
-                    continue
-                for blk in content:
-                    if not isinstance(blk, dict):
-                        continue
-                    btype = blk.get("type", "text")
-                    txt = blk.get("text", "") or ""
-                    # Codex は input_text / output_text を使う (Claude の text と等価)
-                    if btype in ("text", "input_text", "output_text") and txt.strip():
-                        events.append({"role": role, "kind": "text",
-                                       "text": txt, "ts": ts})
-                    elif btype in ("image", "image_url", "input_image"):
-                        events.append({"role": role, "kind": "image",
-                                       "text": "", "ts": ts})
+                events.extend(_codex_line_events(line))
     except OSError:
         pass
     return events
+
+
+def _codex_line_events(line: str) -> list[dict]:
+    """The history events of one Codex rollout line (see _events_from_codex_jsonl)."""
+    line = line.strip()
+    if not line:
+        return []
+    try:
+        o = json.loads(line)
+    except ValueError:
+        return []
+    if not isinstance(o, dict) or o.get("type") != "response_item":
+        return []
+    payload = o.get("payload") or {}
+    if payload.get("type") != "message":
+        return []
+    role = payload.get("role")
+    if role not in ("user", "assistant"):
+        return []
+    ts = o.get("timestamp", "")
+    content = payload.get("content")
+    if isinstance(content, str):
+        return [{"role": role, "kind": "text", "text": content, "ts": ts}] if content.strip() else []
+    if not isinstance(content, list):
+        return []
+    events = []
+    for blk in content:
+        if not isinstance(blk, dict):
+            continue
+        btype = blk.get("type", "text")
+        txt = blk.get("text", "") or ""
+        # Codex は input_text / output_text を使う (Claude の text と等価)
+        if btype in ("text", "input_text", "output_text") and txt.strip():
+            events.append({"role": role, "kind": "text", "text": txt, "ts": ts})
+        elif btype in ("image", "image_url", "input_image"):
+            events.append({"role": role, "kind": "image", "text": "", "ts": ts})
+    return events
+
+
+def _claude_line_events(line: str) -> list[dict]:
+    """The history events of one Claude Code transcript line."""
+    line = line.strip()
+    if not line:
+        return []
+    try:
+        o = json.loads(line)
+    except ValueError:
+        return []
+    if not isinstance(o, dict):
+        return []
+    typ = o.get("type")
+    if typ not in ("user", "assistant"):
+        return []
+    msg = o.get("message") or {}
+    role = msg.get("role", typ)
+    ts = o.get("timestamp", "")
+    return [{"role": role, "kind": kind, "text": txt, "ts": ts}
+            for kind, txt in _block_text(msg.get("content"))]
+
+
+_HISTORY_TAIL_BLOCK = 1 << 20
+
+
+def _tail_events(path: str, line_events, limit: int) -> tuple[list[dict], bool]:
+    """The last `limit` events of a JSONL transcript, read from the end.
+
+    A transcript can be hundreds of megabytes; reading it whole on every
+    HISTORY open took seconds. This reads backwards a block at a time and
+    stops once more than `limit` events are known (or the file starts), so
+    `has_more` is exact: True only when an older event exists. Events keep
+    their order within a line; a line is decoded only when it is complete.
+    """
+    collected: list[list[dict]] = []  # per line, newest first
+    count = 0
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        position = f.tell()
+        carry = b""
+        while position > 0 and count <= limit:
+            start = max(0, position - _HISTORY_TAIL_BLOCK)
+            f.seek(start)
+            chunk = f.read(position - start) + carry
+            position = start
+            lines = chunk.split(b"\n")
+            # the first piece may continue in the previous block
+            carry = lines.pop(0) if position > 0 else b""
+            for raw in reversed(lines):
+                try:
+                    events = line_events(raw.decode("utf-8"))
+                except UnicodeDecodeError:
+                    continue
+                if events:
+                    collected.append(events)
+                    count += len(events)
+                    if count > limit:
+                        break
+    ordered = [event for events in reversed(collected) for event in events]
+    return ordered[-limit:], count > limit
 
 
 def history_payload(session: str, limit: int) -> dict:
@@ -5244,35 +5307,35 @@ def history_payload(session: str, limit: int) -> dict:
             "error": "transcript が見つかりません"
             "（このエージェント名の会話ログがディスク上に存在しない）",
         }
-    if is_codex:
-        events = _events_from_codex_jsonl(path)
-    else:
-        events = []
+    line_events = _codex_line_events if is_codex else _claude_line_events
+    window = {}
+    if limit > 0:
+        # Only the newest `limit` events are shown: read them from the end.
+        # The total is not counted (that needs the whole file), so `total`
+        # equals `shown` and `has_more` says whether older events exist.
         try:
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        o = json.loads(line)
-                    except ValueError:
-                        continue
-                    typ = o.get("type")
-                    if typ not in ("user", "assistant"):
-                        continue
-                    msg = o.get("message") or {}
-                    role = msg.get("role", typ)
-                    ts = o.get("timestamp", "")
-                    for kind, txt in _block_text(msg.get("content")):
-                        events.append(
-                            {"role": role, "kind": kind, "text": txt, "ts": ts}
-                        )
+            events, has_more = _tail_events(path, line_events, limit)
         except OSError as e:
-            return {"ok": False, "error": f"read 失敗: {e}"}
-    total = len(events)
-    if limit and total > limit:
-        events = events[-limit:]
+            if is_codex:
+                events, has_more = [], False
+            else:
+                return {"ok": False, "error": f"read 失敗: {e}"}
+        total = len(events)
+        window = {"history_window": "tail", "has_more": has_more}
+    else:
+        if is_codex:
+            events = _events_from_codex_jsonl(path)
+        else:
+            events = []
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        events.extend(_claude_line_events(line))
+            except OSError as e:
+                return {"ok": False, "error": f"read 失敗: {e}"}
+        total = len(events)
+        if limit and total > limit:
+            events = events[-limit:]
     result = {
         "ok": True,
         "session": session,
@@ -5281,6 +5344,7 @@ def history_payload(session: str, limit: int) -> dict:
         "total": total,
         "shown": len(events),
         "events": events,
+        **window,
     }
     if is_codex:
         result.update(history_binding="bound", history_binding_reason="")

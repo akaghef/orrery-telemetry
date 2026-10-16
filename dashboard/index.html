@@ -36833,8 +36833,11 @@ async function loadHistory(){
       TM('tm-stat').textContent='— no transcript';return;
     }
     const P=[];
-    if(j.total>j.shown)
-      P.push(`<div class="hnote">${j.total-j.shown} older hidden · `+
+    // A tail answer (history_window "tail") reads only the newest events: it
+    // knows whether older ones exist (has_more), not how many.
+    const tail=j.history_window==='tail';
+    if(tail?j.has_more:j.total>j.shown)
+      P.push(`<div class="hnote">${tail?'older entries hidden':`${j.total-j.shown} older hidden`} · `+
         `last ${j.shown} · ${esc(j.file)}</div>`);
     for(const e of j.events){
       const t=e.ts?new Date(e.ts).toLocaleTimeString('en-US'):'';
@@ -36863,8 +36866,9 @@ async function loadHistory(){
     }
     box.innerHTML=P.join('')||'<div class="hempty">(history empty)</div>';
     box.scrollTop=box.scrollHeight;
-    TM('tm-stat').textContent=
-      `transcript ${j.shown}/${j.total} · ${esc(j.file)}`;
+    TM('tm-stat').textContent=tail
+      ?`transcript last ${j.shown}${j.has_more?' · more earlier':''} · ${esc(j.file)}`
+      :`transcript ${j.shown}/${j.total} · ${esc(j.file)}`;
   }catch(e){ box.innerHTML='<div class="hempty">comm failed</div>'; }
 }
 
