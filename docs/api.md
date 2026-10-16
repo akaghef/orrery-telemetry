@@ -210,7 +210,7 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 
 API 世代19では legacy の稼働中 Codex CLI row と `/api/graph` node に nullable な `provider_stall` を追加します。停止中は `{kind: "model_capacity", since: <UTC epoch秒>, error: <エラー1行>, notification_status: <状態>}`。通知状態は `sent`、`no_parent`、`parent_unverified`、`delivery_unknown`、`failed` です。停止しても `act_state` の既存の意味は変えません。provider での停止は独立した field です。
 
-dashboard の常駐 worker が現在の capacity エラーを別の capture で2回確認し、検証済みの子 identity から `PARENT_AGENT` へ1回だけ通知します。GET に送信の副作用はありません。作業再開を観測するまで再通知しません。送達不明なら再送せず `delivery_unknown` を保持します。global は未対応・後続です。詳しくは [provider 停止](dashboard.md#provider-停止の自動通知legacy) を参照してください。
+dashboard の常駐 worker が現在の capacity エラーを別の capture で2回確認し、検証済みの子 identity から `PARENT_AGENT` へ1回だけ通知します。GET に送信の副作用はありません。作業再開、または同じ pane で「前の停止→提出済みの新入力→新しい容量エラー」の追記を特定して2回確認した場合に、次の停止を通知します。履歴の境界が曖昧なら元の停止を維持します。送達不明なら再送せず `delivery_unknown` を保持します。global は未対応・後続です。詳しくは [provider 停止](dashboard.md#provider-停止の自動通知legacy) を参照してください。
 
 query はありません。DECK が数秒ごとに取得します。
 

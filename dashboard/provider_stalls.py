@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import logging
 import os
@@ -63,6 +64,69 @@ def classify(text: str) -> dict:
     if _WORK.search(tail):
         return {"state": "work"}
     return {"state": "idle" if re.search(r"(?m)^\s*›", tail) else "unknown"}
+
+
+def observe(text: str) -> dict:
+    """Keep bounded, content-free history anchors alongside a current stop.
+
+    Composer/footer text is excluded. Only a standalone submitted user block
+    (including indented hard wraps) is an input anchor. Ambiguous or fenced
+    history may still classify as capacity, but cannot prove a retry.
+    """
+    result = classify(text)
+    if result["state"] != "capacity":
+        return result
+    text = _ANSI.sub("", text).replace("\r", "")
+    errors = list(_ERROR.finditer(text))
+    prefix = text[:errors[-1].end()]
+    history = []
+    # A capture can start inside a code fence: do not guess its quoting state.
+    if len(prefix) <= 100_000 and not re.search(r"(?m)^[ \t]*(?:```|~~~)", prefix):
+        position = 0
+        for error in errors:
+            for block in re.split(r"\n[ \t]*\n+", text[position:error.start()]):
+                if not block.strip():
+                    continue
+                lines = block.strip("\n").splitlines()
+                user = (re.match(r"^›[ \t]+\S", lines[0]) is not None
+                        and all(re.match(r"^[ \t]{2,}\S", line) for line in lines[1:]))
+                normalized = " ".join(block.split())
+                history.append(("u:" if user else "o:") + hashlib.sha256(normalized.encode()).hexdigest())
+            normalized = " ".join(error.group().split())
+            history.append("e:" + hashlib.sha256(normalized.encode()).hexdigest())
+            position = error.end()
+    result["history"] = history[-64:]
+    return result
+
+
+def _history_append(previous, current):
+    """Return a proven append, or None when old history cannot be located.
+
+    An error alone is never an anchor. A repeated longest overlap is ambiguous;
+    selecting its first/last occurrence could turn a redraw into another send.
+    """
+    if previous == current:
+        return []
+    for size in range(min(len(previous), len(current)), 1, -1):
+        suffix = previous[-size:]
+        if not any(not token.startswith("e:") for token in suffix):
+            continue
+        matches = [index for index in range(len(current) - size + 1)
+                   if current[index:index + size] == suffix]
+        if len(matches) > 1:
+            return None
+        if matches:
+            return current[matches[0] + size:]
+    return None
+
+
+def _submitted_retry(appended):
+    # Errors without submitted inputs, output, queued-input chrome and quoted
+    # prompts cannot consume a new boundary. Several fast retries coalesce into
+    # the latest observed pair; only that pair can be confirmed next capture.
+    return (bool(appended) and len(appended) % 2 == 0
+            and all(token.startswith("u:" if index % 2 == 0 else "e:")
+                    for index, token in enumerate(appended)))
 
 
 class Monitor:
@@ -160,15 +224,43 @@ class Monitor:
                             phase="clear", capture_id=capture, last_seen=now)
                     continue
                 if state != "capacity":
+                    if old and "retry_capture" in old:
+                        old.pop("retry_capture")
+                        old.pop("retry_since")
+                        old["capture_id"] = capture
                     if old and old["phase"] == "candidate":
                         old.update(phase="clear", capture_id=capture)
                     continue
+                history = row["evidence"].get("history", [])
                 if old is None or old["phase"] == "clear":
                     self._rows[key] = dict(name=row["name"], generation=row["generation"],
                         phase="candidate", capture_id=capture, first_seen=now,
-                        last_seen=now)
+                        last_seen=now, history=history)
                     continue
-                if old["phase"] != "candidate":
+                if old["phase"] == "stalled":
+                    previous = old.get("history", [])
+                    if history and history == previous and "retry_capture" in old:
+                        old["first_seen"] = old.pop("retry_since")
+                        old.pop("retry_capture")
+                        # Same submitted-input/error boundary, distinct capture:
+                        # proceed to the existing durable claim and single send.
+                    else:
+                        had_pending = old.pop("retry_capture", None) is not None
+                        old.pop("retry_since", None)
+                        if had_pending:
+                            old["capture_id"] = capture
+                        appended = _history_append(previous, history) if previous and history else None
+                        if history and (not previous or appended):
+                            # Old journals bootstrap without announcing a retry.
+                            # A proven append is consumed even if not an input,
+                            # so it cannot become a new boundary after restart.
+                            old.update(history=history, capture_id=capture)
+                        if _submitted_retry(appended):
+                            old.update(retry_capture=capture, retry_since=now)
+                        continue
+                elif history != old.get("history", []):
+                    # A different stop cannot confirm the first candidate.
+                    old.update(history=history, capture_id=capture, first_seen=now)
                     continue
                 old.update(phase="stalled", capture_id=capture, kind="model_capacity", error=CAPACITY,
                            event_id=str(uuid.uuid4()), since=now,

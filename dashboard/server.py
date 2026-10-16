@@ -6208,7 +6208,7 @@ def _agent_runtime(
             if r.returncode == 0:
                 out = _parse_runtime(r.stdout)
                 with _rt_lock:
-                    _provider_captures[session] = (generation, now, provider_stalls.classify(r.stdout))
+                    _provider_captures[session] = (generation, now, provider_stalls.observe(r.stdout))
             else:
                 with _rt_lock:
                     _provider_captures[session] = (generation, now, {"state": "unknown"})

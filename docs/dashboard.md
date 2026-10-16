@@ -33,7 +33,11 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 稼働中の Codex CLI が `Selected model is at capacity. Please try a different model.` で入力待ちになったら、DECK に `MODEL CAPACITY`、NETWORK に `CAPACITY` を表示します。dashboard server はブラウザが閉じていても約5秒ごとに確認し、別の pane capture で2回確認した停止を親の `PARENT_AGENT` へ ORRERY Mail で通知します。差出人は停止した子の既存 identity、本文冒頭は「telemetry の自動検知」で、JST の検知時刻とエラー行を載せます。自動再開・モデル変更・pane へのキー送信はしません。
 
-同じ停止の通知は1回だけです。`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` に状態を保存し、dashboard 再起動後も重複を防ぎます。作業再開を観測した後の次の停止は再び通知します。親無しは印だけ、親や子の credential を検証できない場合も印を残します。Mail の timeout など受理有無が不明な場合は、重複を避けるため再送せず `delivery_unknown` / `MAIL UNCONFIRMED` を表示します。障害時に「重複なし」と「必ず届く」を両方保証するものではありません。
+同じ停止の通知は1回だけです。`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` に状態を保存し、dashboard 再起動後も重複を防ぎます。作業再開を観測した後の次の停止は再び通知します。作業を観測できなくても、同じ pane の前の停止に続いて「提出済みの新しい入力→新しい容量エラー」が追記されたと特定できれば、新しい停止の候補にします。同じ入力とエラーの境界を別の capture でもう1回確認してから1回通知します。入力途中の composer・Mail の配送記録だけ・同じエラーの再描画・footer や幅の変更だけでは再通知しません。
+
+再試行の特定には、直前の停止と一意に重なる履歴が必要です。capture 間に履歴が押し出された場合、同じ並びが繰り返されて境界が曖昧な場合、引用や複雑な入力ブロックを識別できない場合は、推測せず今の停止を維持します。旧状態ファイルに履歴の境界が無い場合も、最初の観測は基準を保存するだけです。これらでは再試行を見逃すことがあります。2回確認する前に続けて再試行された場合は、最新の境界を確認した時点で1回にまとめます。履歴本文は保存せず、正規化した最大64ブロックの hash と順序を保存します。
+
+親無しは印だけ、親や子の credential を検証できない場合も印を残します。Mail の timeout など受理有無が不明な場合は、重複を避けるため再送せず `delivery_unknown` / `MAIL UNCONFIRMED` を表示します。障害時に「重複なし」と「必ず届く」を両方保証するものではありません。
 
 初版は上記 Codex capacity 文言と、remote compact がその前に `Error running remote compact task: ` を付けた形式だけが対象です。未知の前置きや compact 中の他のエラーへは広げません。過去ログに残ったエラー、作業中・承認待ち、未知の provider エラーは判定しません。tmux を使わない Codex App / headless と **global mode は未対応・後続**です。
 
