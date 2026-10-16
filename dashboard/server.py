@@ -2379,6 +2379,12 @@ def _valid(session: str) -> bool:
 
 
 def _has_session(session: str) -> bool:
+    # The tmux consumer refuses has-session on a missing target
+    # (TMUX_TARGET_UNAVAILABLE) instead of answering "no", so read absence
+    # from the session list and ask has-session only for a listed name.
+    listed = _tmux_run(['list-sessions', '-F', '#{session_name}'], capture_output=True, text=True)
+    if listed.returncode == 0 and session not in (listed.stdout or "").splitlines():
+        return False
     return _tmux_run(['has-session', '-t', f'={session}'], capture_output=True).returncode == 0
 
 
@@ -9266,15 +9272,30 @@ def _child_session_live(name: str, boot: float | None) -> bool | None:
     A tmux session of that name, or a live-session lease written since this
     machine booted whose process is alive. A lease from before the boot is
     ignored: its PID may belong to an unrelated process now.
+
+    Absence is read from the session list, not from has-session: the tmux
+    consumer refuses a has-session on a missing target (TMUX_TARGET_UNAVAILABLE)
+    instead of returning tmux's "can't find session", which read as "cannot
+    tell" and left every child a reboot stopped unresumable.
     """
     try:
-        # Under the lease lock: keep it shorter than a lease writer waits (10 s).
-        done = _tmux_run(['has-session', '-t', f'={name}'], capture_output=True, text=True, timeout=2)
+        # Under the lease lock: both calls together stay shorter than a lease
+        # writer waits (10 s).
+        listed = _tmux_run(['list-sessions', '-F', '#{session_name}'],
+                           capture_output=True, text=True, timeout=2)
     except (OSError, RuntimeError, subprocess.SubprocessError):
         return None
-    if done.returncode == 0:
-        return True
-    reason = (done.stderr or "").lower()
+    if listed.returncode == 0:
+        if name not in (listed.stdout or "").splitlines():
+            return _child_resume_module().live_lease(pathlib.Path(RUNTIME_DIR), name, boot=boot)
+        # Listed: a session of that name exists, and only admission can say
+        # whether it is this child's. Any refusal stays "cannot tell".
+        try:
+            done = _tmux_run(['has-session', '-t', f'={name}'], capture_output=True, text=True, timeout=2)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return None
+        return True if done.returncode == 0 else None
+    reason = (listed.stderr or "").lower()
     # Only these mean "no such session". Any other failure, such as a server
     # socket this user cannot open ("error connecting … (permission denied)"),
     # says nothing about the session and must not be read as "gone".
