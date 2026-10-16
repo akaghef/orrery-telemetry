@@ -241,7 +241,7 @@ def test_jump_preserves_finished_antigravity_shell_instead_of_resuming(monkeypat
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     from _legacy_dashboard_transport import install_legacy_transport
-    install_legacy_transport(monkeypatch, None, server, fake_run)
+    install_legacy_transport(monkeypatch, None, server, fake_run, sessions={"$1": "GrayHopper"})
     monkeypatch.setattr(server, "_open_terminal_tmux", fake_open)
 
     result = server.do_jump("GrayHopper")
